@@ -1,0 +1,63 @@
+// This is your Prisma schema file.
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Token Transfers ──────────────────────────────────────────────────────────
+// One row per normalized CAP-67/SEP-41 token event (transfer, mint, burn, clawback).
+// fromAddress is null for mint events. toAddress is null for burn events.
+model TokenTransfer {
+  id             Int       @id @default(autoincrement())
+
+  // The token contract address (C...)
+  contractId     String
+
+  // transfer | mint | burn | clawback
+  eventType      String
+
+  // Sender — null for mint events
+  fromAddress    String?
+
+  // Recipient — null for burn/clawback events
+  toAddress      String?
+
+  // i128 stored as decimal string to avoid JS BigInt precision loss
+  amount         String
+
+  // Ledger sequence number where this event was emitted
+  ledger         Int
+
+  // UTC close time of the ledger
+  ledgerClosedAt DateTime
+
+  // Transaction hash (SHA-256 hex, no 0x prefix)
+  txHash         String
+
+  // Stellar RPC paging token — unique per event, used for deduplication
+  eventId        String    @unique
+
+  createdAt      DateTime  @default(now())
+
+  @@index([toAddress])
+  @@index([fromAddress])
+  @@index([contractId])
+  @@index([ledger])
+  @@index([txHash])
+  @@index([toAddress, contractId])
+  @@index([fromAddress, contractId])
+}
+
+// ─── Indexer State ────────────────────────────────────────────────────────────
+// Persists the last successfully indexed ledger so restarts resume cleanly.
+model IndexerState {
+  id                 Int      @id @default(1)
+  lastIndexedLedger  Int
+  updatedAt          DateTime @updatedAt
+}

@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  # ── Postgres ──────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: wraith_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wraith
+      POSTGRES_PASSWORD: wraith
+      POSTGRES_DB: wraith
+    ports:
+      - "5432:5432"
+    volumes:
+      - wraith_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wraith"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Wraith Indexer + API ───────────────────────────────────
+  wraith:
+    build: .
+    container_name: wraith_indexer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      START_LEDGER: ${START_LEDGER:-}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-6000}
+      CONTRACT_IDS: ${CONTRACT_IDS:-}
+      EVENTS_BATCH_SIZE: ${EVENTS_BATCH_SIZE:-10000}
+      PORT: ${PORT:-3000}
+    ports:
+      - "${PORT:-3000}:3000"
+
+volumes:
+  wraith_pgdata:
