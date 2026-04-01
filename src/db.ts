@@ -74,6 +74,9 @@ export type TransferQueryParams = {
   contractId?: string;
   fromLedger?: number;
   toLedger?: number;
+  fromDate?: Date;
+  toDate?: Date;
+  eventTypes?: string[];
   limit?: number;
   offset?: number;
 };
@@ -85,6 +88,9 @@ export async function queryTransfers(params: TransferQueryParams) {
     contractId,
     fromLedger,
     toLedger,
+    fromDate,
+    toDate,
+    eventTypes,
     limit = 50,
     offset = 0,
   } = params;
@@ -92,11 +98,20 @@ export async function queryTransfers(params: TransferQueryParams) {
   const where: Prisma.TokenTransferWhereInput = {
     ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
+    ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
       ? {
           ledger: {
             ...(fromLedger ? { gte: fromLedger } : {}),
             ...(toLedger ? { lte: toLedger } : {}),
+          },
+        }
+      : {}),
+    ...(fromDate || toDate
+      ? {
+          ledgerClosedAt: {
+            ...(fromDate ? { gte: fromDate } : {}),
+            ...(toDate ? { lte: toDate } : {}),
           },
         }
       : {}),
@@ -120,4 +135,116 @@ export async function queryByTxHash(txHash: string) {
     where: { txHash },
     orderBy: { id: "asc" },
   });
+}
+
+// ─── Summary aggregate query ──────────────────────────────────────────────────
+export type SummaryQueryParams = {
+  address: string;
+  contractId?: string;
+  fromDate?: Date;
+  toDate?: Date;
+};
+
+type SummaryRow = {
+  contractId: string;
+  totalReceived: string; // NUMERIC cast to TEXT
+  totalSent: string;     // NUMERIC cast to TEXT
+  txCount: bigint;       // INT8 — node-postgres returns bigint columns as BigInt
+};
+
+/**
+ * Returns per-token aggregate totals for an address.
+ * Uses a raw SQL query because Prisma cannot SUM string-typed columns.
+ */
+export async function querySummary(params: SummaryQueryParams): Promise<SummaryRow[]> {
+  const { address, contractId, fromDate, toDate } = params;
+
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`("toAddress" = ${address} OR "fromAddress" = ${address})`,
+  ];
+  if (contractId) conditions.push(Prisma.sql`"contractId" = ${contractId}`);
+  if (fromDate)   conditions.push(Prisma.sql`"ledgerClosedAt" >= ${fromDate}`);
+  if (toDate)     conditions.push(Prisma.sql`"ledgerClosedAt" <= ${toDate}`);
+
+  const where = Prisma.join(conditions, " AND ");
+
+  return prisma.$queryRaw<SummaryRow[]>`
+    SELECT
+      "contractId",
+      COALESCE(SUM(CASE WHEN "toAddress"   = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalReceived",
+      COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalSent",
+      COUNT(*)::INT8 AS "txCount"
+    FROM "TokenTransfer"
+    WHERE ${where}
+    GROUP BY "contractId"
+    ORDER BY "contractId"
+  `;
+}
+
+// ─── Combined address query ───────────────────────────────────────────────────
+export type AllTransfersQueryParams = {
+  address: string;
+  contractId?: string;
+  fromLedger?: number;
+  toLedger?: number;
+  fromDate?: Date;
+  toDate?: Date;
+  eventTypes?: string[];
+  limit?: number;
+  offset?: number;
+};
+
+export async function queryAllTransfers(params: AllTransfersQueryParams) {
+  const {
+    address,
+    contractId,
+    fromLedger,
+    toLedger,
+    fromDate,
+    toDate,
+    eventTypes,
+    limit = 50,
+    offset = 0,
+  } = params;
+
+  const where: Prisma.TokenTransferWhereInput = {
+    OR: [{ toAddress: address }, { fromAddress: address }],
+    ...(contractId ? { contractId } : {}),
+    ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
+    ...(fromLedger || toLedger
+      ? {
+          ledger: {
+            ...(fromLedger ? { gte: fromLedger } : {}),
+            ...(toLedger ? { lte: toLedger } : {}),
+          },
+        }
+      : {}),
+    ...(fromDate || toDate
+      ? {
+          ledgerClosedAt: {
+            ...(fromDate ? { gte: fromDate } : {}),
+            ...(toDate ? { lte: toDate } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const cap = Math.min(limit, 200);
+
+  const [total, rows] = await prisma.$transaction([
+    prisma.tokenTransfer.count({ where }),
+    prisma.tokenTransfer.findMany({
+      where,
+      orderBy: [{ ledger: "desc" }, { id: "desc" }],
+      take: cap,
+      skip: offset,
+    }),
+  ]);
+
+  const transfers = rows.map((r: { toAddress: string | null; amount: string; [key: string]: unknown }) => ({
+    ...r,
+    direction: r.toAddress === address ? "incoming" : "outgoing",
+  }));
+
+  return { total, transfers };
 }
