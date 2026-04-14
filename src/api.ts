@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger } from "./db";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 
@@ -83,6 +83,68 @@ export function createApp(): express.Application {
     }
     return d;
   };
+
+  // ── GET /healthz — K8s/Render liveness probe ─────────────────────────────────
+  /**
+   * Returns 200 as long as the process is alive.
+   * Used by orchestrators to decide whether to restart the container.
+   */
+  app.get("/healthz", (_req: Request, res: Response) => {
+    res.json({ ok: true, uptime: process.uptime() });
+  });
+
+  // ── GET /readyz — K8s/Render readiness probe ─────────────────────────────────
+  /**
+   * Returns 200 only when:
+   *   - Database connection is alive
+   *   - Stellar RPC is reachable
+   *   - Indexer lag is within acceptable threshold
+   *
+   * Query params:
+   *   maxLag  — max acceptable ledger lag (default: 100)
+   *
+   * Returns 503 if any check fails.
+   */
+  app.get("/readyz", async (_req: Request, res: Response) => {
+    const maxLag = parseInt(String(_req.query.maxLag), 10) || 100;
+    const checks: Record<string, boolean> = {};
+
+    try {
+      // DB check
+      await prisma.$queryRaw`SELECT 1`;
+      checks.db = true;
+    } catch {
+      checks.db = false;
+    }
+
+    try {
+      // RPC check
+      const latest = await getLatestLedger();
+      checks.rpc = latest > 0;
+    } catch {
+      checks.rpc = false;
+    }
+
+    try {
+      // Indexer lag check
+      const [lastIndexed, latest] = await Promise.all([
+        getLastIndexedLedger(),
+        getLatestLedger(),
+      ]);
+      const lag = lastIndexed !== null ? latest - lastIndexed : Infinity;
+      checks.indexerCaughtUp = lag <= maxLag;
+    } catch {
+      checks.indexerCaughtUp = false;
+    }
+
+    const allHealthy = Object.values(checks).every(Boolean);
+
+    if (!allHealthy) {
+      res.status(503).json({ ok: false, checks });
+    } else {
+      res.json({ ok: true, checks });
+    }
+  });
 
   // ── GET /status ─────────────────────────────────────────────────────────────
   /**
