@@ -1,5 +1,10 @@
 # Wraith 👻
 
+[![CI](https://github.com/Miracle656/wraith/actions/workflows/ci.yml/badge.svg)](https://github.com/Miracle656/wraith/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Stellar](https://img.shields.io/badge/Stellar-Soroban-black)](https://stellar.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 > **Soroban incoming token transfer indexer** — fills the gap that Horizon leaves open.
 
 Horizon indexes Classic Stellar operations (payments, path payments) but does **not** index Soroban `transfer` events by recipient address. Wraith polls Stellar RPC `getEvents`, parses CAP-67/SEP-41 token events (`transfer`, `mint`, `burn`, `clawback`), stores them in Postgres, and exposes a REST API to query by address.
