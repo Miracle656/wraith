@@ -1,8 +1,18 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
+  max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
+  standardHeaders: true,   // Sends `RateLimit-*` headers
+  legacyHeaders: false,    // Disables `X-RateLimit-*` headers
+  message: { error: "Too many requests, please try again later." },
+});
 
 // ── Amount formatting ─────────────────────────────────────────────────────────
 const STROOPS = 10_000_000n;
@@ -33,6 +43,7 @@ export function createApp(): express.Application {
 
   app.use(cors());
   app.use(express.json());
+  app.use(limiter);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
