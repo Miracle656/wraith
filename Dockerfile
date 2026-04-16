@@ -1,3 +1,4 @@
+# ── Stage 1: Install all deps + build TypeScript ─────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -8,13 +9,18 @@ RUN npm run db:generate
 COPY . .
 RUN npm run build
 
+# ── Stage 2: Production-only image ────────────────────────────────────────────
 FROM node:20-alpine AS runner
+
 WORKDIR /app
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/package.json ./
+# Install production dependencies only (excludes typescript, ts-node-dev, @types/*)
+COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Run migrations then start
+# Copy built output + Prisma schema from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+
+# Run migrations then start the app
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
