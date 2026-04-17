@@ -16,9 +16,9 @@ const CONTRACT_IDS = (process.env.CONTRACT_IDS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-// Stellar RPC retains ~7 days = ~1 008 288 ledgers (at ~6s per ledger).
+// Stellar testnet RPC retains ~7 days ≈ 120 000 ledgers (at ~5s per ledger).
 // We cap the back-fill look-back so we never request a ledger that's already pruned.
-const RPC_MAX_LOOKBACK_LEDGERS = 1_000_000;
+const RPC_MAX_LOOKBACK_LEDGERS = 100_000;
 
 // We leave a small buffer of ledgers behind the tip to avoid
 // reading ledgers that haven't fully propagated yet.
