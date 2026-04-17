@@ -5,6 +5,7 @@ import {
   upsertTransfers,
   getLastIndexedLedger,
   setLastIndexedLedger,
+  pruneOldTransfers,
 } from "./db";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -26,6 +27,10 @@ const TIP_LAG = 2;
 // ─── State ────────────────────────────────────────────────────────────────────
 let startedAt = Date.now();
 let totalIndexed = 0;
+
+// Prune old data every ~1 hour (600 poll cycles × 6s = 3600s)
+const PRUNE_EVERY_CYCLES = 600;
+let pollCycleCount = 0;
 
 export function getIndexerStats() {
   return {
@@ -118,6 +123,15 @@ export async function startIndexer(): Promise<void> {
       }
 
       currentLedger = await pollOnce(currentLedger, target);
+
+      // Periodic data retention cleanup
+      pollCycleCount++;
+      if (pollCycleCount >= PRUNE_EVERY_CYCLES) {
+        pollCycleCount = 0;
+        await pruneOldTransfers().catch((e) =>
+          console.error("[indexer] Prune failed:", e)
+        );
+      }
     } catch (err) {
       console.error("[indexer] Unhandled error in poll loop:", err);
       // Back off before retrying to avoid hammering the RPC on persistent errors

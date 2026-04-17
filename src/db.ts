@@ -67,6 +67,30 @@ export async function setLastIndexedLedger(ledger: number): Promise<void> {
   });
 }
 
+// ─── Data retention ──────────────────────────────────────────────────────────
+const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? "30", 10);
+
+/**
+ * Delete transfers older than RETENTION_DAYS to keep the DB within free-tier limits.
+ * Returns the number of rows deleted.
+ */
+export async function pruneOldTransfers(): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
+
+  const result = await prisma.tokenTransfer.deleteMany({
+    where: { ledgerClosedAt: { lt: cutoff } },
+  });
+
+  if (result.count > 0) {
+    console.log(
+      `[prune] Deleted ${result.count} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`
+    );
+  }
+
+  return result.count;
+}
+
 // ─── Query helpers ────────────────────────────────────────────────────────────
 export type TransferQueryParams = {
   address: string;
