@@ -7,6 +7,7 @@ import {
   setLastIndexedLedger,
   pruneOldTransfers,
 } from "./db";
+import { emitTransfer } from "./events";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
@@ -70,6 +71,11 @@ async function pollOnce(
   // Persist
   const inserted = await upsertTransfers(records);
   totalIndexed += inserted;
+
+  // Broadcast each new record to WebSocket subscribers
+  if (inserted > 0) {
+    records.forEach(emitTransfer);
+  }
 
   await setLastIndexedLedger(highestLedger);
 
