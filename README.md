@@ -42,19 +42,32 @@ npx prisma generate
 cp .env.example .env
 ```
 
-Edit `.env`:
+**Testnet setup** (quick start):
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
-STELLAR_RPC_URL="https://soroban-testnet.stellar.org"
+STELLAR_NETWORK="testnet"
+# SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
+SOROBAN_RPC_URL=
 
-# Leave blank to start from the chain tip (recommended for first run)
 START_LEDGER=
-
-# Comma-separated contract IDs to watch, or leave empty for all contracts
 CONTRACT_IDS=
-
 PORT=3000
 ```
+
+**Mainnet setup** (production):
+```env
+DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+STELLAR_NETWORK="mainnet"
+# Required on mainnet — no free public Soroban RPC exists
+SOROBAN_RPC_URL="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
+
+# Strongly recommended on mainnet: filter to specific contracts to reduce load
+CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
+START_LEDGER=
+PORT=3000
+```
+
+> **Tip:** If you omit both `SOROBAN_RPC_URL` and `STELLAR_NETWORK`, Wraith will exit immediately with a clear error explaining what to set.
 
 ### 3. Start Postgres
 
@@ -158,22 +171,35 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | — | Postgres connection string (required) |
-| `STELLAR_RPC_URL` | — | Stellar RPC endpoint (required) |
-| `START_LEDGER` | *(tip)* | Ledger to start indexing from. Leave blank to resume from DB state, or start near the tip. |
-| `POLL_INTERVAL_MS` | `6000` | Polling interval (~1 ledger ≈ 6 s) |
-| `CONTRACT_IDS` | *(all)* | Comma-separated token contract IDs to watch. Empty = watch all (heavy on mainnet) |
-| `EVENTS_BATCH_SIZE` | `10000` | Max events per RPC call (RPC hard-cap is 10 000) |
+| `DIRECT_DATABASE_URL` | — | Direct (non-pooled) Postgres URL — required for Prisma migrations on Supabase |
+| `STELLAR_NETWORK` | — | `testnet` or `mainnet`. Testnet auto-configures the default RPC URL. |
+| `SOROBAN_RPC_URL` | *(see below)* | Soroban RPC endpoint. Overrides any network default. Required when `STELLAR_NETWORK=mainnet`. |
+| `STELLAR_RPC_URL` | — | Backward-compat alias for `SOROBAN_RPC_URL`. Used when `SOROBAN_RPC_URL` is unset. |
+| `START_LEDGER` | *(tip)* | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip. |
+| `POLL_INTERVAL_MS` | `6000` | Polling interval in ms (~1 ledger ≈ 6 s) |
+| `CONTRACT_IDS` | *(all)* | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet) |
+| `EVENTS_BATCH_SIZE` | `10000` | Max events per RPC call (Stellar RPC hard-cap is 10 000) |
+| `RETENTION_DAYS` | `30` | Delete transfers older than N days (keeps DB within free-tier limits) |
 | `PORT` | `3000` | REST API port |
 
----
+### RPC URL Resolution
 
-## RPC Endpoints
+Wraith resolves the RPC endpoint in this order and fails fast at startup if nothing is configured:
 
-| Network | URL |
+1. `SOROBAN_RPC_URL` — explicit; always wins
+2. `STELLAR_RPC_URL` — backward-compat alias
+3. `STELLAR_NETWORK=testnet` → `https://soroban-testnet.stellar.org` (free public endpoint)
+4. `STELLAR_NETWORK=mainnet` → **error**: requires explicit `SOROBAN_RPC_URL`
+5. Nothing set → **error**: clear message explaining what to configure
+
+### Mainnet RPC Providers
+
+| Provider | URL pattern |
 |---|---|
-| Mainnet | `https://mainnet.sorobanrpc.com` |
-| Testnet | `https://soroban-testnet.stellar.org` |
-| Futurenet | `https://rpc-futurenet.stellar.org` |
+| Validation Cloud | `https://mainnet.stellar.validationcloud.io/v1/<API_KEY>` |
+| Ankr | `https://rpc.ankr.com/stellar_soroban/<API_KEY>` |
+| Testnet (public) | `https://soroban-testnet.stellar.org` |
+| Futurenet (public) | `https://rpc-futurenet.stellar.org` |
 
 > **Important:** Stellar RPC retains ~7 days of event history. For longer historical coverage, use [Galexie](https://developers.stellar.org/docs/data/indexers) + the [Token Transfer Processor](https://developers.stellar.org/docs/data/indexers/build-your-own/processors/token-transfer-processor).
 
