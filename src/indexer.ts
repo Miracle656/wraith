@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { fetchEventsSafe, getLatestLedger, withRetry } from "./rpc";
+import { fetchEventsSafe, getLatestLedger, withRetry, validateNetworkConfig } from "./rpc";
 import { parseEvents } from "./parser";
 import {
   upsertTransfers,
@@ -82,6 +82,9 @@ async function pollOnce(
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 export async function startIndexer(): Promise<void> {
+  // Fail fast if RPC is not configured — surfaces env errors before any DB work
+  validateNetworkConfig();
+
   console.log("[indexer] Starting Wraith indexer…");
   console.log(
     `[indexer] Watching contracts: ${CONTRACT_IDS.length > 0 ? CONTRACT_IDS.join(", ") : "ALL"}`

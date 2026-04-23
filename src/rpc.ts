@@ -1,12 +1,57 @@
 import { rpc as RPC, xdr } from "@stellar/stellar-sdk";
 
+// ─── Network config ───────────────────────────────────────────────────────────
+const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
+
+/**
+ * Resolve the Soroban RPC endpoint from environment variables.
+ *
+ * Resolution order:
+ *   1. SOROBAN_RPC_URL  (explicit — takes precedence)
+ *   2. STELLAR_RPC_URL  (backward-compat alias)
+ *   3. STELLAR_NETWORK=testnet  → default testnet URL
+ *   4. STELLAR_NETWORK=mainnet  → requires explicit SOROBAN_RPC_URL; no free
+ *                                  public mainnet RPC exists, so we fail fast
+ *   5. Nothing set → throws with a clear configuration guide
+ */
+function resolveRpcUrl(): string {
+  const explicit = process.env.SOROBAN_RPC_URL ?? process.env.STELLAR_RPC_URL;
+  if (explicit) return explicit;
+
+  const network = (process.env.STELLAR_NETWORK ?? "").toLowerCase();
+
+  if (network === "testnet") return TESTNET_RPC_URL;
+
+  if (network === "mainnet") {
+    throw new Error(
+      "[wraith] SOROBAN_RPC_URL is required when STELLAR_NETWORK=mainnet. " +
+      "There is no free public Soroban RPC for mainnet — set SOROBAN_RPC_URL " +
+      "to your provider's endpoint (e.g. Validation Cloud, Ankr, self-hosted)."
+    );
+  }
+
+  throw new Error(
+    "[wraith] RPC endpoint not configured. " +
+    "Set SOROBAN_RPC_URL to your Soroban RPC endpoint, or set STELLAR_NETWORK=testnet " +
+    "to use the default public testnet endpoint automatically."
+  );
+}
+
+/**
+ * Validate the network configuration at startup.
+ * Call this before opening DB connections so configuration errors surface
+ * immediately instead of on the first RPC call.
+ */
+export function validateNetworkConfig(): void {
+  resolveRpcUrl(); // throws with a human-readable message if misconfigured
+}
+
 // ─── RPC client singleton ─────────────────────────────────────────────────────
 let _rpc: RPC.Server | null = null;
 
 export function getRpc(): RPC.Server {
   if (!_rpc) {
-    const url = process.env.STELLAR_RPC_URL;
-    if (!url) throw new Error("STELLAR_RPC_URL is not set");
+    const url = resolveRpcUrl();
     _rpc = new RPC.Server(url, { allowHttp: url.startsWith("http://") });
   }
   return _rpc;
