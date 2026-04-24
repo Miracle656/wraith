@@ -163,16 +163,19 @@ export async function withRetry<T>(
  *
  * Returns all events that could be decoded, plus the highest ledger reached.
  */
+type FetchFn = typeof fetchEvents
+
 export async function fetchEventsSafe(
   startLedger: number,
   endLedger: number,
   contractIds: string[],
-  limit: number = 10_000
+  limit: number = 10_000,
+  _fetchFn: FetchFn = fetchEvents
 ): Promise<{ events: RawEvent[]; highestLedger: number }> {
   // If the range is a single ledger and it fails, skip it.
   if (startLedger >= endLedger) {
     try {
-      const { events, latestLedger } = await fetchEvents(startLedger, contractIds, limit);
+      const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit);
       return { events, highestLedger: Math.max(startLedger, latestLedger) };
     } catch (err) {
       const msg = (err as Error).message ?? "";
@@ -185,7 +188,7 @@ export async function fetchEventsSafe(
   }
 
   try {
-    const { events, latestLedger } = await fetchEvents(startLedger, contractIds, limit);
+    const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit);
     return { events, highestLedger: latestLedger };
   } catch (err) {
     const msg = (err as Error).message ?? "";
@@ -195,8 +198,8 @@ export async function fetchEventsSafe(
     console.warn(`[rpc] XDR error in ledgers ${startLedger}–${endLedger}, bisecting…`);
     const mid = Math.floor((startLedger + endLedger) / 2);
 
-    const lower = await fetchEventsSafe(startLedger, mid, contractIds, limit);
-    const upper = await fetchEventsSafe(mid + 1, endLedger, contractIds, limit);
+    const lower = await fetchEventsSafe(startLedger, mid, contractIds, limit, _fetchFn);
+    const upper = await fetchEventsSafe(mid + 1, endLedger, contractIds, limit, _fetchFn);
 
     return {
       events: [...lower.events, ...upper.events],
