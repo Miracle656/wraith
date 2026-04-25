@@ -8,6 +8,7 @@ import {
   pruneOldTransfers,
 } from "./db";
 import { emitTransfer } from "./events";
+import { initTokenCache, getTokenMetadata } from "./tokenCache";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
@@ -77,6 +78,17 @@ async function pollOnce(
     records.forEach(emitTransfer);
   }
 
+  // Warm the token metadata cache for any new contracts seen in this batch.
+  // This ensures that metadata is available for API consumers immediately.
+  const uniqueContracts = [...new Set(records.map((r) => r.contractId))];
+  await Promise.all(
+    uniqueContracts.map((id) =>
+      getTokenMetadata(id).catch((e) =>
+        console.warn(`[indexer] Could not resolve metadata for ${id}:`, e.message)
+      )
+    )
+  );
+
   await setLastIndexedLedger(highestLedger);
 
   console.log(
@@ -90,6 +102,9 @@ async function pollOnce(
 export async function startIndexer(): Promise<void> {
   // Fail fast if RPC is not configured — surfaces env errors before any DB work
   validateNetworkConfig();
+
+  // Load existing metadata from DB into memory
+  await initTokenCache();
 
   console.log("[indexer] Starting Wraith indexer…");
   console.log(
