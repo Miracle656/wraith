@@ -506,21 +506,9 @@ export async function getNftOwner(
 
 // ─── Account summary helpers ──────────────────────────────────────────────────
 
-/**
- * Incrementally update materialized aggregates for every address touched by
- * `records`. Called inside the same logical write as upsertTransfers so the
- * two tables never diverge.
- *
- * Strategy:
- *   1. Accumulate per-(address, contractId) deltas in memory.
- *   2. Emit one raw UPSERT per unique pair — O(unique addresses) DB round-trips.
- *
- * Using raw SQL because Prisma cannot do arithmetic on string-typed NUMERIC columns.
- */
 export async function upsertAccountSummaries(records: TransferRecord[]): Promise<void> {
   if (records.length === 0) return;
 
-  // Accumulate deltas keyed by "address|contractId"
   const deltas = new Map<
     string,
     { address: string; contractId: string; sent: bigint; received: bigint; count: number; lastAt: Date }
@@ -567,10 +555,6 @@ export async function upsertAccountSummaries(records: TransferRecord[]): Promise
   }
 }
 
-/**
- * Return all asset rows for a given address, optionally filtered to one contract.
- * O(1) — reads directly from the materialized AccountSummary table.
- */
 export async function getAccountSummary(address: string, contractId?: string) {
   return prisma.accountSummary.findMany({
     where: {
@@ -651,6 +635,36 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
     }),
     nextCursor: page.nextCursor,
   };
+}
+
+// ─── Balance aggregate query ──────────────────────────────────────────────────
+export type BalanceRow = {
+  contractId: string;
+  balance: string;
+};
+
+export async function queryBalances(address: string): Promise<BalanceRow[]> {
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryBalances" });
+
+  const rows = await prisma.$queryRaw<BalanceRow[]>`
+    SELECT
+      "contractId",
+      (
+        COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+      )::TEXT AS "balance"
+    FROM "TokenTransfer"
+    WHERE "toAddress" = ${address} OR "fromAddress" = ${address}
+    GROUP BY "contractId"
+    HAVING (
+      COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+    ) != 0
+    ORDER BY "contractId"
+  `;
+
+  end();
+  return rows;
 }
 
 // ─── Combined address query ───────────────────────────────────────────────────
