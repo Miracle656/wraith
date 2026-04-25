@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from "@prisma/client";
+import { dbQueryDurationSeconds } from "./metrics";
 
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
@@ -36,6 +37,8 @@ export interface TransferRecord {
  */
 export async function upsertTransfers(records: TransferRecord[]): Promise<number> {
   if (records.length === 0) return 0;
+  
+  const end = dbQueryDurationSeconds.startTimer({ operation: "upsertTransfers" });
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
   const result = await prisma.tokenTransfer.createMany({
@@ -43,6 +46,7 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
     skipDuplicates: true,
   });
 
+  end();
   return result.count;
 }
 
@@ -141,6 +145,7 @@ export async function queryTransfers(params: TransferQueryParams) {
       : {}),
   };
 
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryTransfers" });
   const [total, transfers] = await prisma.$transaction([
     prisma.tokenTransfer.count({ where }),
     prisma.tokenTransfer.findMany({
@@ -150,6 +155,7 @@ export async function queryTransfers(params: TransferQueryParams) {
       skip: offset,
     }),
   ]);
+  end();
 
   return { total, transfers };
 }
