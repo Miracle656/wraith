@@ -7,6 +7,7 @@ import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
+import { getAllCachedTokens } from "./tokenCache";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -205,6 +206,15 @@ export function createApp(): express.Application {
     } catch (err) {
       next(err);
     }
+  });
+  
+  // ── GET /tokens ─────────────────────────────────────────────────────────────
+  /**
+   * Returns a list of all tokens encountered and cached by the indexer.
+   */
+  app.get("/tokens", (_req: Request, res: Response) => {
+    const tokens = getAllCachedTokens();
+    res.json({ ok: true, tokens });
   });
 
   // ── GET /transfers/incoming/:address ────────────────────────────────────────

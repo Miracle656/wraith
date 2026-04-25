@@ -16,6 +16,7 @@ import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer
 import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig } from "./indexer/sources";
+import { initTokenCache, getTokenMetadata } from "./tokenCache";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -187,6 +188,16 @@ async function pollOnce(
     }
   }
 
+  // Warm the token metadata cache for any new contracts seen in this batch.
+  const uniqueContracts = [...new Set(records.map((r) => r.contractId))];
+  await Promise.all(
+    uniqueContracts.map((id) =>
+      getTokenMetadata(id).catch((e) =>
+        console.warn(`[indexer] Could not resolve metadata for ${id}:`, e.message)
+      )
+    )
+  );
+
   await setLastIndexedLedger(highestLedger);
 
   console.log(
@@ -200,6 +211,9 @@ async function pollOnce(
 export async function startIndexer(): Promise<void> {
   // Fail fast if RPC is not configured — surfaces env errors before any DB work
   validateNetworkConfig();
+
+  // Load existing metadata from DB into memory
+  await initTokenCache();
 
   console.log("[indexer] Starting Wraith indexer…");
   console.log(
