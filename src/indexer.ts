@@ -17,6 +17,7 @@ import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig } from "./indexer/sources";
 import { initTokenCache, getTokenMetadata } from "./tokenCache";
+import { tradesIngestedTotal, ammSnapshotsTotal, lastTradeTimestamp } from "./metrics";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -149,6 +150,13 @@ async function pollOnce(
       console.error("[indexer] Account summary upsert failed:", e)
     );
   }
+
+  // Metrics
+  ammSnapshotsTotal.inc();
+  records.forEach((r) => {
+    tradesIngestedTotal.inc({ contractId: r.contractId, eventType: r.eventType });
+    lastTradeTimestamp.set({ contractId: r.contractId }, Math.floor(r.ledgerClosedAt.getTime() / 1000));
+  });
 
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {

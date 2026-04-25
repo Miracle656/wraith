@@ -8,6 +8,7 @@ import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 import { getAllCachedTokens } from "./tokenCache";
+import { register, priceRequestsTotal } from "./metrics";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -80,6 +81,19 @@ export function createApp(): express.Application {
 
   // ── Webhook subscription management ──────────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
+
+  // ── Metrics Middleware ───────────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    res.on("finish", () => {
+      if (req.path !== "/metrics") {
+        priceRequestsTotal.inc({ 
+          endpoint: req.route?.path ?? req.path, 
+          status: res.statusCode 
+        });
+      }
+    });
+    next();
+  });
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
@@ -179,6 +193,19 @@ export function createApp(): express.Application {
       res.status(503).json({ ok: false, checks });
     } else {
       res.json({ ok: true, checks });
+    }
+  });
+
+  // ── GET /metrics ────────────────────────────────────────────────────────────
+  /**
+   * Exposes Prometheus metrics for monitoring.
+   */
+  app.get("/metrics", async (_req: Request, res: Response) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end((err as Error).message);
     }
   });
 

@@ -1,6 +1,7 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
+import { dbQueryDurationSeconds } from "./metrics";
 
 const STROOPS = 10_000_000n;
 
@@ -157,6 +158,8 @@ const ACCOUNT_SUMMARY_FIELD_TYPES = {
  */
 export async function upsertTransfers(records: TransferRecord[]): Promise<number> {
   if (records.length === 0) return 0;
+  
+  const end = dbQueryDurationSeconds.startTimer({ operation: "upsertTransfers" });
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
   const result = await prisma.tokenTransfer.createMany({
@@ -164,6 +167,7 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
     skipDuplicates: true,
   });
 
+  end();
   return result.count;
 }
 
@@ -293,6 +297,7 @@ export async function queryTransfers(params: TransferQueryParams) {
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
 
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryTransfers" });
   const [total, transfers] = await prisma.$transaction([
     prisma.tokenTransfer.count({ where }),
     prisma.tokenTransfer.findMany({
@@ -303,6 +308,7 @@ export async function queryTransfers(params: TransferQueryParams) {
       ...(prismaSelect ? { select: prismaSelect } : {}),
     }),
   ]);
+  end();
 
   const page = buildListPage(transfers as Array<{ id: number }>, cap);
 
