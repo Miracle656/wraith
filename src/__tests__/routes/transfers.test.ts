@@ -500,4 +500,252 @@ describe("Transfer route handlers", () => {
       expect(res.body.error).toBe("Not found");
     });
   });
+
+  // ── /transfers/address/:address/export.csv ─────────────────────────────────
+  describe("GET /transfers/address/:address/export.csv", () => {
+    it("returns valid CSV with correct headers", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: BOB,
+          toAddress: ALICE,
+          contractId: CONTRACT_A,
+          amount: "10000000",
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "transfer",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      expect(res.get("Content-Type")).toBe("text/csv");
+      expect(res.text).toContain("date,type,from,to,amount,token,ledger");
+    });
+
+    it("includes all transfers as CSV rows", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: BOB,
+          toAddress: ALICE,
+          contractId: CONTRACT_A,
+          amount: "10000000",
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "transfer",
+        }),
+        makeTransfer({
+          id: 2,
+          fromAddress: null,
+          toAddress: ALICE,
+          contractId: CONTRACT_B,
+          amount: "20000000",
+          ledgerClosedAt: new Date("2025-01-16T11:30:45Z"),
+          ledger: 1002,
+          eventType: "mint",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      const lines = res.text.split("\n");
+      expect(lines).toHaveLength(3); // header + 2 rows
+      expect(lines[1]).toContain("1.0000000"); // displayAmount for 10000000 stroops
+      expect(lines[1]).toContain(BOB);
+      expect(lines[1]).toContain(CONTRACT_A);
+      expect(lines[1]).toContain("1001");
+    });
+
+    it("converts amount to displayAmount in CSV output", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: ALICE,
+          toAddress: BOB,
+          contractId: CONTRACT_A,
+          amount: "100000000", // 10.0000000
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "transfer",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain("10.0000000");
+    });
+
+    it("handles null fromAddress by using empty string in CSV", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: null,
+          toAddress: ALICE,
+          contractId: CONTRACT_A,
+          amount: "10000000",
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "mint",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      // After "mint" there should be an empty field (,,) for the empty fromAddress
+      expect(res.text).toContain("mint,,"); // type,empty-from,to
+    });
+
+    it("handles null toAddress by using empty string in CSV", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: ALICE,
+          toAddress: null,
+          contractId: CONTRACT_A,
+          amount: "10000000",
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "burn",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain(ALICE); // fromAddress
+      expect(res.text).toContain(",burn,"); // contains burn event
+    });
+
+    it("sets Content-Disposition header with filename", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [] });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      const disposition = res.get("Content-Disposition");
+      expect(disposition).toContain("attachment");
+      expect(disposition).toContain(`filename="transfers-${ALICE}.csv"`);
+    });
+
+    it("respects contractId filter", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [] });
+
+      await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ contractId: CONTRACT_A });
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ contractId: CONTRACT_A })
+      );
+    });
+
+    it("respects fromDate and toDate filters", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [] });
+
+      await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({
+          fromDate: "2025-01-01T00:00:00Z",
+          toDate: "2025-01-31T23:59:59Z",
+        });
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromDate: expect.any(Date),
+          toDate: expect.any(Date),
+        })
+      );
+    });
+
+    it("respects eventType filter", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [] });
+
+      await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ eventType: "transfer,mint" });
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ eventTypes: ["transfer", "mint"] })
+      );
+    });
+
+    it("enforces a 10,000 row cap for export", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 50000, transfers: [] });
+
+      await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 10000, offset: 0 })
+      );
+    });
+
+    it("always uses offset=0 for CSV export", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 100, transfers: [] });
+
+      await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 0 })
+      );
+    });
+
+    it("returns 400 for invalid fromDate", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ fromDate: "invalid-date" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid date/i);
+    });
+
+    it("returns 400 for invalid eventType", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ eventType: "badtype" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid eventType/i);
+    });
+
+    it("returns empty CSV (header only) for address with no transfers", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [] });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toBe("date,type,from,to,amount,token,ledger");
+    });
+
+    it("properly escapes CSV values with commas", async () => {
+      const transfers = [
+        makeTransfer({
+          id: 1,
+          fromAddress: BOB,
+          toAddress: ALICE,
+          contractId: "CONTRACT,WITH,COMMAS",
+          amount: "10000000",
+          ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
+          ledger: 1001,
+          eventType: "transfer",
+        }),
+      ];
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('"CONTRACT,WITH,COMMAS"');
+    });
+  });
 });
+

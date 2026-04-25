@@ -38,6 +38,27 @@ const withDisplay = <T extends { amount: string }>(t: T) => ({
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 
+// ── CSV utilities ─────────────────────────────────────────────────────────────
+/**
+ * Escape a value for CSV output.
+ * If the value contains comma, quote, or newline, wrap in quotes and escape inner quotes.
+ */
+function escapeCSVValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/**
+ * Format a row of values as a CSV line.
+ */
+function formatCSVRow(values: unknown[]): string {
+  return values.map(escapeCSVValue).join(",");
+}
+
 export function createApp(): express.Application {
   const app = express();
 
@@ -311,6 +332,83 @@ export function createApp(): express.Application {
         });
 
         res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ── GET /transfers/address/:address/export.csv ──────────────────────────────
+  /**
+   * Export all token transfers for `address` as a downloadable CSV file.
+   * Re-uses the same filtering logic as /transfers/address/:address but returns
+   * a CSV file instead of JSON. Caps at 10,000 rows to avoid memory issues.
+   *
+   * Query params (same as /transfers/address/:address):
+   *   contractId  — filter to a specific token contract
+   *   fromLedger  — inclusive lower bound
+   *   toLedger    — inclusive upper bound
+   *   fromDate    — ISO 8601 inclusive lower bound on ledgerClosedAt
+   *   toDate      — ISO 8601 inclusive upper bound on ledgerClosedAt
+   *   eventType   — comma-separated event types (transfer, mint, burn, clawback)
+   *
+   * Response: CSV file with columns: date, type, from, to, amount, token, ledger
+   */
+  app.get(
+    "/transfers/address/:address/export.csv",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { address } = req.params;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType } = req.query;
+
+        const fromDateVal = parseDateParam(fromDate, res);
+        if (fromDateVal === null) return;
+        const toDateVal = parseDateParam(toDate, res);
+        if (toDateVal === null) return;
+        const eventTypes = parseEventTypes(eventType, res);
+        if (eventTypes === null) return;
+
+        // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
+        const result = await queryAllTransfers({
+          address,
+          contractId: contractId as string | undefined,
+          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
+          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
+          fromDate: fromDateVal,
+          toDate: toDateVal,
+          eventTypes,
+          limit: 10000,
+          offset: 0,
+        });
+
+        // Build CSV content
+        const csvLines: string[] = [];
+
+        // Add CSV header
+        csvLines.push(formatCSVRow(["date", "type", "from", "to", "amount", "token", "ledger"]));
+
+        // Add data rows
+        for (const transfer of result.transfers) {
+          const displayAmount = toDisplayAmount(transfer.amount);
+          csvLines.push(
+            formatCSVRow([
+              transfer.ledgerClosedAt.toISOString(),
+              transfer.eventType,
+              transfer.fromAddress || "",
+              transfer.toAddress || "",
+              displayAmount,
+              transfer.contractId,
+              transfer.ledger,
+            ])
+          );
+        }
+
+        const csvContent = csvLines.join("\n");
+
+        // Set response headers for CSV download
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="transfers-${address}.csv"`);
+        res.send(csvContent);
       } catch (err) {
         next(err);
       }
