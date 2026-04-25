@@ -211,6 +211,41 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
   `;
 }
 
+// ─── Balance aggregate query ──────────────────────────────────────────────────
+export type BalanceRow = {
+  contractId: string;
+  balance: string; // NUMERIC cast to TEXT
+};
+
+/**
+ * Returns per-token derived balances for an address.
+ * Balance = Sum(Incoming) - Sum(Outgoing).
+ */
+export async function queryBalances(address: string): Promise<BalanceRow[]> {
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryBalances" });
+
+  // SQL aggregation: sum amount where to = address, minus sum where from = address, grouped by contractId
+  const rows = await prisma.$queryRaw<BalanceRow[]>`
+    SELECT
+      "contractId",
+      (
+        COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+      )::TEXT AS "balance"
+    FROM "TokenTransfer"
+    WHERE "toAddress" = ${address} OR "fromAddress" = ${address}
+    GROUP BY "contractId"
+    HAVING (
+      COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+    ) != 0
+    ORDER BY "contractId"
+  `;
+
+  end();
+  return rows;
+}
+
 // ─── Combined address query ───────────────────────────────────────────────────
 export type AllTransfersQueryParams = {
   address: string;

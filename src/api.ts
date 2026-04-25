@@ -6,6 +6,7 @@ import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { getAllCachedTokens } from "./tokenCache";
 import { register, priceRequestsTotal } from "./metrics";
+import accountsRouter from "./routes/accounts";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -108,6 +109,9 @@ export function createApp(): express.Application {
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({ ok: true, uptime: process.uptime() });
   });
+
+  // ── GET /accounts/:address/balance ──────────────────────────────────────────
+  app.use("/accounts", accountsRouter);
 
   // ── GET /readyz — K8s/Render readiness probe ─────────────────────────────────
   /**
