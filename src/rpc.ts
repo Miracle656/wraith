@@ -1,4 +1,4 @@
-import { rpc as RPC, xdr } from "@stellar/stellar-sdk";
+import { rpc as RPC, xdr, scValToNative, Contract, TransactionBuilder, Account, Networks } from "@stellar/stellar-sdk";
 
 // ─── Network config ───────────────────────────────────────────────────────────
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
@@ -206,4 +206,52 @@ export async function fetchEventsSafe(
       highestLedger: Math.max(lower.highestLedger, upper.highestLedger),
     };
   }
+}
+
+// ─── Token Metadata ──────────────────────────────────────────────────────────
+/**
+ * Fetch token metadata (symbol, decimals, name) from a Soroban token contract.
+ * Uses simulateTransaction to call the read-only getter methods.
+ */
+export async function fetchTokenMetadata(contractId: string): Promise<{
+  symbol: string;
+  decimals: number;
+  name: string;
+}> {
+  const rpc = getRpc();
+  const contract = new Contract(contractId);
+  const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
+  const networkPassphrase = network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+
+  // Helper to call a zero-arg method and decode the result
+  const callMethod = async (method: string): Promise<any> => {
+    // Build a dummy transaction for simulation. Source account and sequence 
+    // don't matter for read-only simulation.
+    const tx = new TransactionBuilder(
+      new Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
+      { fee: "100", networkPassphrase }
+    )
+      .addOperation(contract.call(method))
+      .setTimeout(0)
+      .build();
+
+    const resp = await rpc.simulateTransaction(tx);
+    if (RPC.Api.isSimulationSuccess(resp)) {
+      const scVal = resp.result!.retval;
+      return scValToNative(scVal);
+    }
+    throw new Error(`RPC simulation failed for ${method}: ${JSON.stringify(resp)}`);
+  };
+
+  const [symbol, decimals, name] = await Promise.all([
+    callMethod("symbol"),
+    callMethod("decimals"),
+    callMethod("name"),
+  ]);
+
+  return {
+    symbol: String(symbol),
+    decimals: Number(decimals),
+    name: String(name),
+  };
 }
