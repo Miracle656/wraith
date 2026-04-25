@@ -9,6 +9,7 @@ import {
 } from "./db";
 import { emitTransfer } from "./events";
 import { initTokenCache, getTokenMetadata } from "./tokenCache";
+import { tradesIngestedTotal, ammSnapshotsTotal, lastTradeTimestamp } from "./metrics";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
@@ -72,6 +73,13 @@ async function pollOnce(
   // Persist
   const inserted = await upsertTransfers(records);
   totalIndexed += inserted;
+
+  // Metrics
+  ammSnapshotsTotal.inc();
+  records.forEach((r) => {
+    tradesIngestedTotal.inc({ contractId: r.contractId, eventType: r.eventType });
+    lastTradeTimestamp.set({ contractId: r.contractId }, Math.floor(r.ledgerClosedAt.getTime() / 1000));
+  });
 
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {

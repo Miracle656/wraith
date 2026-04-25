@@ -5,6 +5,7 @@ import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLast
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { getAllCachedTokens } from "./tokenCache";
+import { register, priceRequestsTotal } from "./metrics";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -45,6 +46,20 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json());
   app.use(limiter);
+
+  // ── Metrics Middleware ───────────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    res.on("finish", () => {
+      // Exclude /metrics from its own counter to avoid noise
+      if (req.path !== "/metrics") {
+        priceRequestsTotal.inc({ 
+          endpoint: req.route?.path ?? req.path, 
+          status: res.statusCode 
+        });
+      }
+    });
+    next();
+  });
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
@@ -144,6 +159,19 @@ export function createApp(): express.Application {
       res.status(503).json({ ok: false, checks });
     } else {
       res.json({ ok: true, checks });
+    }
+  });
+
+  // ── GET /metrics ────────────────────────────────────────────────────────────
+  /**
+   * Exposes Prometheus metrics for monitoring.
+   */
+  app.get("/metrics", async (_req: Request, res: Response) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end((err as Error).message);
     }
   });
 
