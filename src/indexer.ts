@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { fetchEventsSafe, getLatestLedger, withRetry, validateNetworkConfig } from "./rpc";
-import { parseEvents } from "./parser";
+import { parseEvents } from "./decoder";
 import {
   upsertTransfers,
   getLastIndexedLedger,

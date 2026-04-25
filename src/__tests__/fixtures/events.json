@@ -1,0 +1,39 @@
+{
+  "transfer": {
+    "topic": [
+      "AAAADwAAAAh0cmFuc2Zlcg==",
+      "AAAAEgAAAAAAAAAA7CdvsKYgszvP+5duBzZrGGNSzXrjV6xBqb+G1HlVBos=",
+      "AAAAEgAAAAAAAAAArud9yE50cjsuGtxESbV3hBerj0SikWcRLPfz/uY41h0="
+    ],
+    "value": "AAAACgAAAAAAAAAAAAAAADuaygA="
+  },
+  "mint": {
+    "topic": [
+      "AAAADwAAAARtaW50",
+      "AAAAEgAAAAAAAAAA7CdvsKYgszvP+5duBzZrGGNSzXrjV6xBqb+G1HlVBos=",
+      "AAAAEgAAAAAAAAAArud9yE50cjsuGtxESbV3hBerj0SikWcRLPfz/uY41h0="
+    ],
+    "value": "AAAACgAAAAAAAAAAAAAAASoF8gA="
+  },
+  "burn": {
+    "topic": [
+      "AAAADwAAAARidXJu",
+      "AAAAEgAAAAAAAAAA7CdvsKYgszvP+5duBzZrGGNSzXrjV6xBqb+G1HlVBos="
+    ],
+    "value": "AAAACgAAAAAAAAAAAAAAAAAAAGQ="
+  },
+  "clawback": {
+    "topic": [
+      "AAAADwAAAAhjbGF3YmFjaw==",
+      "AAAAEgAAAAAAAAAA7CdvsKYgszvP+5duBzZrGGNSzXrjV6xBqb+G1HlVBos="
+    ],
+    "value": "AAAACgAAAAAAAAAAAAAAAAAAAMg="
+  },
+  "malformed": {
+    "topic": ["invalid_base64"],
+    "value": "invalid_base64"
+  },
+  "alice": "GDWCO35QUYQLGO6P7OLW4BZWNMMGGUWNPLRVPLCBVG7YNVDZKUDIW4KN",
+  "bob": "GCXOO7OIJZ2HEOZODLOEISNVO6CBPK4PISRJCZYRFT37H7XGHDLB3C7O",
+  "contractId": "CBC42KFZO33TYVFDOUXFRWXYYXHFGH7W5GM4IJQSXKGFINKL2XPP4XTE"
+}
