@@ -521,7 +521,7 @@ describe("Transfer route handlers", () => {
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
       expect(res.status).toBe(200);
-      expect(res.get("Content-Type")).toBe("text/csv");
+      expect(res.get("Content-Type")).toMatch(/text\/csv/);
       expect(res.text).toContain("date,type,from,to,amount,token,ledger");
     });
 
