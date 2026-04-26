@@ -13,11 +13,7 @@ const KNOWN_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
  * Returns null if decoding fails so we can skip malformed events gracefully.
  */
 function decode(scVal: StellarSdk.xdr.ScVal): unknown {
-  try {
-    return StellarSdk.scValToNative(scVal);
-  } catch {
-    return null;
-  }
+  return StellarSdk.scValToNative(scVal);
 }
 
 /**
@@ -25,30 +21,22 @@ function decode(scVal: StellarSdk.xdr.ScVal): unknown {
  * Returns null if the ScVal is not an address type.
  */
 function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
-  try {
-    if (scVal.switch() !== StellarSdk.xdr.ScValType.scvAddress()) return null;
-    const addr = StellarSdk.Address.fromScVal(scVal);
-    return addr.toString();
-  } catch {
-    return null;
-  }
+  if (scVal.switch() !== StellarSdk.xdr.ScValType.scvAddress()) return null;
+  const addr = StellarSdk.Address.fromScVal(scVal);
+  return addr.toString();
 }
 
 /**
  * Decode an i128 ScVal to a decimal string.
  * i128 values are two i64s: hi (signed) and lo (unsigned).
  */
-function decodeI128(scVal: StellarSdk.xdr.ScVal): string | null {
-  try {
-    const native = StellarSdk.scValToNative(scVal);
-    // scValToNative converts i128 to BigInt in newer stellar-sdk versions.
-    if (typeof native === "bigint") return native.toString();
-    // Fallback: handle as number (may lose precision for very large amounts).
-    if (typeof native === "number") return native.toString();
-    return String(native);
-  } catch {
-    return null;
-  }
+function decodeI128(scVal: StellarSdk.xdr.ScVal): string {
+  const native = StellarSdk.scValToNative(scVal);
+  // scValToNative converts i128 to BigInt in newer stellar-sdk versions.
+  if (typeof native === "bigint") return native.toString();
+  // Fallback: handle as number (may lose precision for very large amounts).
+  if (typeof native === "number") return native.toString();
+  return String(native);
 }
 
 // ─── Main parser ──────────────────────────────────────────────────────────────
@@ -106,23 +94,35 @@ export function parseEvent(
 
   if (eventType === "transfer") {
     // topics[1] = from, topics[2] = to
-    if (topic.length < 3) return null;
+    if (topic.length < 3) {
+      throw new Error(`Malformed transfer event: expected at least 3 topics, got ${topic.length}`);
+    }
     fromAddress = decodeAddress(topic[1]);
     toAddress = decodeAddress(topic[2]);
-    if (!fromAddress || !toAddress) return null;
+    if (!fromAddress || !toAddress) {
+      throw new Error("Malformed transfer event: invalid from/to address");
+    }
 
   } else if (eventType === "mint") {
     // topics[1] = admin (ignored as "from"), topics[2] = to recipient
-    if (topic.length < 3) return null;
+    if (topic.length < 3) {
+      throw new Error(`Malformed mint event: expected at least 3 topics, got ${topic.length}`);
+    }
     toAddress = decodeAddress(topic[2]);
-    if (!toAddress) return null;
+    if (!toAddress) {
+      throw new Error("Malformed mint event: invalid to address");
+    }
     // fromAddress stays null — it's a mint, no sender
 
   } else if (eventType === "burn" || eventType === "clawback") {
     // topics[1] = from (the holder being burned/clawed)
-    if (topic.length < 2) return null;
+    if (topic.length < 2) {
+      throw new Error(`Malformed ${eventType} event: expected at least 2 topics, got ${topic.length}`);
+    }
     fromAddress = decodeAddress(topic[1]);
-    if (!fromAddress) return null;
+    if (!fromAddress) {
+      throw new Error(`Malformed ${eventType} event: invalid from address`);
+    }
     // toAddress stays null
   }
 
