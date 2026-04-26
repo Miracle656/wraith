@@ -162,3 +162,5 @@ export function parseEvents(rawEvents: RawEvent[]): TransferRecord[] {
 
   return records;
 }
+  /* Bounty contribution */
+}
