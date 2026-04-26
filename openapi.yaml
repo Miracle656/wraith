@@ -1,0 +1,604 @@
+openapi: 3.0.3
+info:
+  title: Wraith API
+  version: 1.0.0
+  description: REST API documentation for the Wraith token transfer indexer.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: "http://127.0.0.1:3000"
+    description: Local development server
+security: []
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness probe
+      description: Returns 200 as long as the process is alive. Used by orchestrators to decide whether to restart the container.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, uptime]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  uptime:
+                    type: number
+                    format: float
+                    example: 3600.5
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness probe
+      description: Returns 200 only when database connection is alive, Stellar RPC is reachable, and indexer lag is within acceptable threshold. Returns 503 if any check fails.
+      parameters:
+        - name: maxLag
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Max acceptable ledger lag
+          example: 100
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, checks]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  checks:
+                    type: object
+                    required: [db, rpc, indexerCaughtUp]
+                    properties:
+                      db:
+                        type: boolean
+                        example: true
+                      rpc:
+                        type: boolean
+                        example: true
+                      indexerCaughtUp:
+                        type: boolean
+                        example: true
+        "503":
+          description: Service Unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, checks]
+                properties:
+                  ok:
+                    type: boolean
+                    example: false
+                  checks:
+                    type: object
+                    required: [db, rpc, indexerCaughtUp]
+                    properties:
+                      db:
+                        type: boolean
+                        example: false
+                      rpc:
+                        type: boolean
+                        example: true
+                      indexerCaughtUp:
+                        type: boolean
+                        example: false
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /status:
+    get:
+      operationId: getStatus
+      summary: Indexer status
+      description: Returns the indexer health status.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /transfers/incoming/{address}:
+    get:
+      operationId: getIncomingTransfers
+      summary: Incoming transfers
+      description: All token transfers received by the specified address.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/FromLedgerParam'
+        - $ref: '#/components/parameters/ToLedgerParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+        - $ref: '#/components/parameters/EventTypeParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferListResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /transfers/outgoing/{address}:
+    get:
+      operationId: getOutgoingTransfers
+      summary: Outgoing transfers
+      description: All token transfers sent by the specified address.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/FromLedgerParam'
+        - $ref: '#/components/parameters/ToLedgerParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+        - $ref: '#/components/parameters/EventTypeParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferListResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /transfers/address/{address}:
+    get:
+      operationId: getAddressTransfers
+      summary: All transfers for address
+      description: All token transfers sent or received by the specified address, merged and sorted by ledger descending.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/FromLedgerParam'
+        - $ref: '#/components/parameters/ToLedgerParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+        - $ref: '#/components/parameters/EventTypeParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferListResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /transfers/address/{address}/export.csv:
+    get:
+      operationId: exportAddressTransfers
+      summary: Export transfers to CSV
+      description: Export all token transfers for the specified address as a downloadable CSV file. Caps at 10,000 rows.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/FromLedgerParam'
+        - $ref: '#/components/parameters/ToLedgerParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+        - $ref: '#/components/parameters/EventTypeParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /transfers/tx/{txHash}:
+    get:
+      operationId: getTxTransfers
+      summary: Transfers by transaction
+      description: All token events emitted within a given transaction.
+      parameters:
+        - $ref: '#/components/parameters/TxHashParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transfers]
+                properties:
+                  transfers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transfer'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /summary/{address}:
+    get:
+      operationId: getSummary
+      summary: Token summary
+      description: Aggregate token stats for the specified address, grouped by contractId.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryResponse'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  parameters:
+    AddressParam:
+      name: address
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Stellar address
+      example: "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    TxHashParam:
+      name: txHash
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Transaction hash
+      example: "0000000000000000000000000000000000000000000000000000000000000000"
+    ContractIdParam:
+      name: contractId
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Token contract ID to filter by
+      example: "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+    FromLedgerParam:
+      name: fromLedger
+      in: query
+      required: false
+      schema:
+        type: integer
+      description: Inclusive lower bound for ledger sequence
+      example: 50000000
+    ToLedgerParam:
+      name: toLedger
+      in: query
+      required: false
+      schema:
+        type: integer
+      description: Inclusive upper bound for ledger sequence
+      example: 50000100
+    FromDateParam:
+      name: fromDate
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+      description: Inclusive lower bound for ledger closed time (ISO 8601)
+      example: "2025-01-01T00:00:00Z"
+    ToDateParam:
+      name: toDate
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+      description: Inclusive upper bound for ledger closed time (ISO 8601)
+      example: "2025-01-02T00:00:00Z"
+    EventTypeParam:
+      name: eventType
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Comma-separated list of event types (transfer, mint, burn, clawback)
+      example: "transfer,mint"
+    LimitParam:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+      description: Page size
+      example: 50
+    OffsetParam:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 0
+      description: Pagination offset
+      example: 0
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Invalid date: 'abc'. Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z)."
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Not found"
+    InternalServerError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Internal server error"
+
+  schemas:
+    Transfer:
+      type: object
+      required:
+        - id
+        - contractId
+        - eventType
+        - fromAddress
+        - toAddress
+        - amount
+        - displayAmount
+        - ledger
+        - ledgerClosedAt
+        - txHash
+        - eventId
+      properties:
+        id:
+          type: integer
+          example: 12345
+        contractId:
+          type: string
+          example: "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+        eventType:
+          type: string
+          enum: [transfer, mint, burn, clawback]
+          example: "transfer"
+        fromAddress:
+          type: string
+          nullable: true
+          example: "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        toAddress:
+          type: string
+          nullable: true
+          example: "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        amount:
+          type: string
+          example: "10000000000"
+        displayAmount:
+          type: string
+          example: "1000.0000000"
+        ledger:
+          type: integer
+          example: 51234567
+        ledgerClosedAt:
+          type: string
+          format: date-time
+          example: "2025-01-01T12:00:00Z"
+        txHash:
+          type: string
+          example: "0000000000000000000000000000000000000000000000000000000000000000"
+        eventId:
+          type: string
+          example: "12345-1"
+        direction:
+          type: string
+          enum: [incoming, outgoing]
+          example: "incoming"
+          description: Present only in merged address queries
+
+    TransferListResponse:
+      type: object
+      required:
+        - total
+        - limit
+        - offset
+        - transfers
+      properties:
+        total:
+          type: integer
+          example: 100
+        limit:
+          type: integer
+          example: 50
+        offset:
+          type: integer
+          example: 0
+        transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transfer"
+
+    TokenSummary:
+      type: object
+      required:
+        - contractId
+        - totalReceived
+        - totalSent
+        - netFlow
+        - displayTotalReceived
+        - displayTotalSent
+        - displayNetFlow
+        - txCount
+      properties:
+        contractId:
+          type: string
+          example: "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+        totalReceived:
+          type: string
+          example: "50000000000"
+        totalSent:
+          type: string
+          example: "10000000000"
+        netFlow:
+          type: string
+          example: "40000000000"
+        displayTotalReceived:
+          type: string
+          example: "5000.0000000"
+        displayTotalSent:
+          type: string
+          example: "1000.0000000"
+        displayNetFlow:
+          type: string
+          example: "4000.0000000"
+        txCount:
+          type: integer
+          example: 42
+
+    SummaryResponse:
+      type: object
+      required:
+        - address
+        - window
+        - tokens
+      properties:
+        address:
+          type: string
+          example: "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        window:
+          type: object
+          required:
+            - fromDate
+            - toDate
+          properties:
+            fromDate:
+              type: string
+              format: date-time
+              nullable: true
+              example: "2025-01-01T00:00:00Z"
+            toDate:
+              type: string
+              format: date-time
+              nullable: true
+              example: "2025-01-31T23:59:59Z"
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenSummary"
+
+    StatusResponse:
+      type: object
+      required:
+        - ok
+        - lastIndexedLedger
+        - latestLedger
+        - lagLedgers
+        - startedAt
+        - uptimeSeconds
+        - totalIndexed
+      properties:
+        ok:
+          type: boolean
+          example: true
+        lastIndexedLedger:
+          type: integer
+          nullable: true
+          example: 51234567
+        latestLedger:
+          type: integer
+          example: 51234568
+        lagLedgers:
+          type: integer
+          example: 1
+        startedAt:
+          type: string
+          format: date-time
+          example: "2025-01-01T00:00:00Z"
+        uptimeSeconds:
+          type: integer
+          example: 3600
+        totalIndexed:
+          type: integer
+          example: 15000
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: "Invalid date: 'abc'. Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z)."
+ 
