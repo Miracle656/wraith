@@ -505,7 +505,7 @@ describe("Transfer route handlers", () => {
   describe("GET /transfers/address/:address/export.csv", () => {
     it("returns valid CSV with correct headers", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: BOB,
           toAddress: ALICE,
@@ -514,7 +514,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "transfer",
-        }),
+        }), direction: "incoming" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
 
@@ -527,7 +527,7 @@ describe("Transfer route handlers", () => {
 
     it("includes all transfers as CSV rows", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: BOB,
           toAddress: ALICE,
@@ -536,8 +536,8 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "transfer",
-        }),
-        makeTransfer({
+        }), direction: "incoming" as const },
+        { ...makeTransfer({
           id: 2,
           fromAddress: null,
           toAddress: ALICE,
@@ -546,7 +546,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-16T11:30:45Z"),
           ledger: 1002,
           eventType: "mint",
-        }),
+        }), direction: "incoming" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers });
 
@@ -563,7 +563,7 @@ describe("Transfer route handlers", () => {
 
     it("converts amount to displayAmount in CSV output", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: ALICE,
           toAddress: BOB,
@@ -572,7 +572,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "transfer",
-        }),
+        }), direction: "outgoing" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
 
@@ -584,7 +584,7 @@ describe("Transfer route handlers", () => {
 
     it("handles null fromAddress by using empty string in CSV", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: null,
           toAddress: ALICE,
@@ -593,7 +593,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "mint",
-        }),
+        }), direction: "incoming" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
 
@@ -606,7 +606,7 @@ describe("Transfer route handlers", () => {
 
     it("handles null toAddress by using empty string in CSV", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: ALICE,
           toAddress: null,
@@ -615,7 +615,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "burn",
-        }),
+        }), direction: "outgoing" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
 
@@ -728,7 +728,7 @@ describe("Transfer route handlers", () => {
 
     it("properly escapes CSV values with commas", async () => {
       const transfers = [
-        makeTransfer({
+        { ...makeTransfer({
           id: 1,
           fromAddress: BOB,
           toAddress: ALICE,
@@ -737,7 +737,7 @@ describe("Transfer route handlers", () => {
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "transfer",
-        }),
+        }), direction: "incoming" as const },
       ];
       mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers });
 

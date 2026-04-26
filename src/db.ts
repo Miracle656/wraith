@@ -265,7 +265,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
     }),
   ]);
 
-  const transfers = rows.map((r: { toAddress: string | null; amount: string; [key: string]: unknown }) => ({
+  const transfers = rows.map((r) => ({
     ...r,
     direction: r.toAddress === address ? "incoming" : "outgoing",
   }));
