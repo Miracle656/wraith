@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
+import { getAllCachedTokens } from "./tokenCache";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -191,6 +192,15 @@ export function createApp(): express.Application {
     } catch (err) {
       next(err);
     }
+  });
+  
+  // ── GET /tokens ─────────────────────────────────────────────────────────────
+  /**
+   * Returns a list of all tokens encountered and cached by the indexer.
+   */
+  app.get("/tokens", (_req: Request, res: Response) => {
+    const tokens = getAllCachedTokens();
+    res.json({ ok: true, tokens });
   });
 
   // ── GET /transfers/incoming/:address ────────────────────────────────────────
