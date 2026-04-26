@@ -99,6 +99,19 @@ docker-compose up --build
 
 ---
 
+## API Documentation
+
+A complete, production-grade OpenAPI 3.0 specification is available for all Wraith REST endpoints.
+
+- **[openapi.yaml](./openapi.yaml)**
+
+You can use this file to explore the API, generate client SDKs, or import it into tools like:
+- [Swagger UI](https://swagger.io/tools/swagger-ui/) or [Swagger Editor](https://editor.swagger.io/)
+- [Postman](https://www.postman.com/)
+- [Redoc](https://redocly.com/redoc/)
+
+---
+
 ## API Reference
 
 Base URL: `http://localhost:3000`
