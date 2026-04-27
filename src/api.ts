@@ -4,6 +4,9 @@ import rateLimit from "express-rate-limit";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
+import { getAllCachedTokens } from "./tokenCache";
+import { register, priceRequestsTotal } from "./metrics";
+import accountsRouter from "./routes/accounts";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -66,6 +69,20 @@ export function createApp(): express.Application {
   app.use(express.json());
   app.use(limiter);
 
+  // ── Metrics Middleware ───────────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    res.on("finish", () => {
+      // Exclude /metrics from its own counter to avoid noise
+      if (req.path !== "/metrics") {
+        priceRequestsTotal.inc({ 
+          endpoint: req.route?.path ?? req.path, 
+          status: res.statusCode 
+        });
+      }
+    });
+    next();
+  });
+
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
     const n = parseInt(String(val), 10);
@@ -113,6 +130,9 @@ export function createApp(): express.Application {
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({ ok: true, uptime: process.uptime() });
   });
+
+  // ── GET /accounts/:address/balance ──────────────────────────────────────────
+  app.use("/accounts", accountsRouter);
 
   // ── GET /readyz — K8s/Render readiness probe ─────────────────────────────────
   /**
@@ -167,6 +187,19 @@ export function createApp(): express.Application {
     }
   });
 
+  // ── GET /metrics ────────────────────────────────────────────────────────────
+  /**
+   * Exposes Prometheus metrics for monitoring.
+   */
+  app.get("/metrics", async (_req: Request, res: Response) => {
+    try {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    } catch (err) {
+      res.status(500).end((err as Error).message);
+    }
+  });
+
   // ── GET /status ─────────────────────────────────────────────────────────────
   /**
    * Returns the indexer health status.
@@ -191,6 +224,15 @@ export function createApp(): express.Application {
     } catch (err) {
       next(err);
     }
+  });
+  
+  // ── GET /tokens ─────────────────────────────────────────────────────────────
+  /**
+   * Returns a list of all tokens encountered and cached by the indexer.
+   */
+  app.get("/tokens", (_req: Request, res: Response) => {
+    const tokens = getAllCachedTokens();
+    res.json({ ok: true, tokens });
   });
 
   // ── GET /transfers/incoming/:address ────────────────────────────────────────

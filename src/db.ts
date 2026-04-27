@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from "@prisma/client";
+import { dbQueryDurationSeconds } from "./metrics";
 
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
@@ -36,6 +37,8 @@ export interface TransferRecord {
  */
 export async function upsertTransfers(records: TransferRecord[]): Promise<number> {
   if (records.length === 0) return 0;
+  
+  const end = dbQueryDurationSeconds.startTimer({ operation: "upsertTransfers" });
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
   const result = await prisma.tokenTransfer.createMany({
@@ -43,6 +46,7 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
     skipDuplicates: true,
   });
 
+  end();
   return result.count;
 }
 
@@ -141,6 +145,7 @@ export async function queryTransfers(params: TransferQueryParams) {
       : {}),
   };
 
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryTransfers" });
   const [total, transfers] = await prisma.$transaction([
     prisma.tokenTransfer.count({ where }),
     prisma.tokenTransfer.findMany({
@@ -150,6 +155,7 @@ export async function queryTransfers(params: TransferQueryParams) {
       skip: offset,
     }),
   ]);
+  end();
 
   return { total, transfers };
 }
@@ -203,6 +209,41 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
     GROUP BY "contractId"
     ORDER BY "contractId"
   `;
+}
+
+// ─── Balance aggregate query ──────────────────────────────────────────────────
+export type BalanceRow = {
+  contractId: string;
+  balance: string; // NUMERIC cast to TEXT
+};
+
+/**
+ * Returns per-token derived balances for an address.
+ * Balance = Sum(Incoming) - Sum(Outgoing).
+ */
+export async function queryBalances(address: string): Promise<BalanceRow[]> {
+  const end = dbQueryDurationSeconds.startTimer({ operation: "queryBalances" });
+
+  // SQL aggregation: sum amount where to = address, minus sum where from = address, grouped by contractId
+  const rows = await prisma.$queryRaw<BalanceRow[]>`
+    SELECT
+      "contractId",
+      (
+        COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+      )::TEXT AS "balance"
+    FROM "TokenTransfer"
+    WHERE "toAddress" = ${address} OR "fromAddress" = ${address}
+    GROUP BY "contractId"
+    HAVING (
+      COALESCE(SUM(CASE WHEN "toAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+    ) != 0
+    ORDER BY "contractId"
+  `;
+
+  end();
+  return rows;
 }
 
 // ─── Combined address query ───────────────────────────────────────────────────

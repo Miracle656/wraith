@@ -68,3 +68,16 @@ model IndexerState {
 
   @@schema("wraith")
 }
+
+// ─── Token Metadata ───────────────────────────────────────────────────────────
+// Caches token symbol, name, and decimals to avoid redundant RPC calls.
+model TokenMetadata {
+  contractId String   @id
+  symbol     String
+  name       String
+  decimals   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@schema("wraith")
+}

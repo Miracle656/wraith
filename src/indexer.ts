@@ -8,6 +8,8 @@ import {
   pruneOldTransfers,
 } from "./db";
 import { emitTransfer } from "./events";
+import { initTokenCache, getTokenMetadata } from "./tokenCache";
+import { tradesIngestedTotal, ammSnapshotsTotal, lastTradeTimestamp } from "./metrics";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
@@ -72,10 +74,28 @@ async function pollOnce(
   const inserted = await upsertTransfers(records);
   totalIndexed += inserted;
 
+  // Metrics
+  ammSnapshotsTotal.inc();
+  records.forEach((r) => {
+    tradesIngestedTotal.inc({ contractId: r.contractId, eventType: r.eventType });
+    lastTradeTimestamp.set({ contractId: r.contractId }, Math.floor(r.ledgerClosedAt.getTime() / 1000));
+  });
+
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {
     records.forEach(emitTransfer);
   }
+
+  // Warm the token metadata cache for any new contracts seen in this batch.
+  // This ensures that metadata is available for API consumers immediately.
+  const uniqueContracts = [...new Set(records.map((r) => r.contractId))];
+  await Promise.all(
+    uniqueContracts.map((id) =>
+      getTokenMetadata(id).catch((e) =>
+        console.warn(`[indexer] Could not resolve metadata for ${id}:`, e.message)
+      )
+    )
+  );
 
   await setLastIndexedLedger(highestLedger);
 
@@ -90,6 +110,9 @@ async function pollOnce(
 export async function startIndexer(): Promise<void> {
   // Fail fast if RPC is not configured — surfaces env errors before any DB work
   validateNetworkConfig();
+
+  // Load existing metadata from DB into memory
+  await initTokenCache();
 
   console.log("[indexer] Starting Wraith indexer…");
   console.log(
