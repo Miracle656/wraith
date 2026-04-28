@@ -103,7 +103,6 @@ describe("Transfer route handlers", () => {
   const app = createApp();
 
   beforeEach(() => {
-    // Default mocks for status/readyz side-effects
     mockGetLastIndexedLedger.mockResolvedValue(1020);
     mockGetLatestLedger.mockResolvedValue(1022);
   });
@@ -373,6 +372,64 @@ describe("Transfer route handlers", () => {
 
       expect(res.status).toBe(400);
     });
+
+    // ── token filter tests (issue #35) ────────────────────────────────────────
+
+    it("filters transfers by token contract address when ?token= is provided", async () => {
+      const tokenFiltered = SEED_TRANSFERS
+        .filter((t) => t.toAddress === ALICE || t.fromAddress === ALICE)
+        .filter((t) => t.contractId === CONTRACT_A)
+        .map((t) => ({ ...t, direction: t.toAddress === ALICE ? "incoming" : "outgoing" }));
+
+      mockQueryAllTransfers.mockResolvedValue({
+        total: tokenFiltered.length,
+        transfers: tokenFiltered,
+      });
+
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}`)
+        .query({ token: CONTRACT_A });
+
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(tokenFiltered.length);
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ token: CONTRACT_A })
+      );
+    });
+
+    it("returns 400 when ?token= is not a valid Stellar contract address (wrong prefix)", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}`)
+        .query({ token: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid token address/i);
+      expect(res.body.error).toMatch(/56-character Stellar contract address starting with "C"/i);
+    });
+
+    it("returns 400 when ?token= is a C-address but the wrong length", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}`)
+        .query({ token: "CSHORT" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid token address/i);
+    });
+
+    it("behaves identically to the unfiltered request when ?token= is absent", async () => {
+      const combined = SEED_TRANSFERS
+        .filter((t) => t.toAddress === ALICE || t.fromAddress === ALICE)
+        .map((t) => ({ ...t, direction: t.toAddress === ALICE ? "incoming" : "outgoing" }));
+
+      mockQueryAllTransfers.mockResolvedValue({ total: combined.length, transfers: combined });
+
+      const res = await request(app).get(`/transfers/address/${ALICE}`);
+
+      expect(res.status).toBe(200);
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ token: undefined })
+      );
+    });
   });
 
   // ── /transfers/tx/:txHash ──────────────────────────────────────────────────
@@ -554,8 +611,8 @@ describe("Transfer route handlers", () => {
 
       expect(res.status).toBe(200);
       const lines = res.text.split("\n");
-      expect(lines).toHaveLength(3); // header + 2 rows
-      expect(lines[1]).toContain("1.0000000"); // displayAmount for 10000000 stroops
+      expect(lines).toHaveLength(3);
+      expect(lines[1]).toContain("1.0000000");
       expect(lines[1]).toContain(BOB);
       expect(lines[1]).toContain(CONTRACT_A);
       expect(lines[1]).toContain("1001");
@@ -568,7 +625,7 @@ describe("Transfer route handlers", () => {
           fromAddress: ALICE,
           toAddress: BOB,
           contractId: CONTRACT_A,
-          amount: "100000000", // 10.0000000
+          amount: "100000000",
           ledgerClosedAt: new Date("2025-01-15T10:30:45Z"),
           ledger: 1001,
           eventType: "transfer",
@@ -600,8 +657,7 @@ describe("Transfer route handlers", () => {
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
       expect(res.status).toBe(200);
-      // After "mint" there should be an empty field (,,) for the empty fromAddress
-      expect(res.text).toContain("mint,,"); // type,empty-from,to
+      expect(res.text).toContain("mint,,");
     });
 
     it("handles null toAddress by using empty string in CSV", async () => {
@@ -622,8 +678,8 @@ describe("Transfer route handlers", () => {
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
       expect(res.status).toBe(200);
-      expect(res.text).toContain(ALICE); // fromAddress
-      expect(res.text).toContain(",burn,"); // contains burn event
+      expect(res.text).toContain(ALICE);
+      expect(res.text).toContain(",burn,");
     });
 
     it("sets Content-Disposition header with filename", async () => {
@@ -748,4 +804,3 @@ describe("Transfer route handlers", () => {
     });
   });
 });
-
