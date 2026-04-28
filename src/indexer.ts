@@ -9,13 +9,52 @@ import {
 } from "./db";
 import { emitTransfer } from "./events";
 
+// ─── SAC Contract IDs ─────────────────────────────────────────────────────────
+// The native XLM SAC address on mainnet and testnet respectively.
+// These are derived from Asset.native().contractId(Networks.PUBLIC / Networks.TESTNET)
+// and serve as the backwards-compatible default when SAC_CONTRACT_IDS is unset.
+export const DEFAULT_XLM_SAC_MAINNET =
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+export const DEFAULT_XLM_SAC_TESTNET =
+  "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
+
+/**
+ * Resolve the list of SAC contract IDs to watch.
+ *
+ * Priority order:
+ *  1. SAC_CONTRACT_IDS env var (comma-separated, new canonical name)
+ *  2. CONTRACT_IDS env var (legacy alias — retained for backwards-compatibility)
+ *  3. Default: native XLM SAC for the configured network
+ *
+ * The native XLM SAC default depends on STELLAR_NETWORK ("mainnet" | "testnet").
+ * Any unset / empty value falls through to the next tier.
+ */
+export function resolveSacContractIds(): string[] {
+  const raw =
+    process.env.SAC_CONTRACT_IDS ||
+    process.env.CONTRACT_IDS ||
+    "";
+
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (ids.length > 0) {
+    return ids;
+  }
+
+  // Fall back to the native XLM SAC for the configured network.
+  const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
+  return [
+    network === "mainnet" ? DEFAULT_XLM_SAC_MAINNET : DEFAULT_XLM_SAC_TESTNET,
+  ];
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
 const BATCH_SIZE = parseInt(process.env.EVENTS_BATCH_SIZE ?? "10000", 10);
-const CONTRACT_IDS = (process.env.CONTRACT_IDS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const SAC_CONTRACT_IDS = resolveSacContractIds();
 
 // Stellar testnet RPC retains ~7 days ≈ 120 000 ledgers (at ~5s per ledger).
 // We cap the back-fill look-back so we never request a ledger that's already pruned.
@@ -57,7 +96,7 @@ async function pollOnce(
   // fetchEventsSafe bisects on XDR decode errors so newer protocol ledgers
   // don't crash the whole indexer — they're skipped with a warning instead.
   const { events, highestLedger } = await fetchEventsSafe(
-    fromLedger, latestLedger, CONTRACT_IDS, BATCH_SIZE
+    fromLedger, latestLedger, SAC_CONTRACT_IDS, BATCH_SIZE
   );
 
   if (events.length === 0) {
@@ -93,7 +132,7 @@ export async function startIndexer(): Promise<void> {
 
   console.log("[indexer] Starting Wraith indexer…");
   console.log(
-    `[indexer] Watching contracts: ${CONTRACT_IDS.length > 0 ? CONTRACT_IDS.join(", ") : "ALL"}`
+    `[indexer] Watching SAC contracts (${SAC_CONTRACT_IDS.length}): ${SAC_CONTRACT_IDS.join(", ")}`
   );
 
   startedAt = Date.now();
