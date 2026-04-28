@@ -11,17 +11,41 @@ Horizon indexes Classic Stellar operations (payments, path payments) but does **
 
 ***
 
-## Architecture
+## How It Works
 
+```mermaid
+flowchart TD
+    SN["☆ Stellar Network\n(Soroban ledgers, ~5 s each)"]
+    RPC["Soroban RPC\ngetEvents"]
+    SAFE["fetchEventsSafe\nrpc.ts"]
+    BISECT{{"XDR decode\nerror?"}}
+    SKIP["Skip bad ledger\nlog warning & advance"]
+    DECODE["parseEvents\nSEP-41 / CAP-67 normalisation\nScVal → JS native\ndecoder.ts"]
+    DB[("Postgres\nTokenTransfer table\nupsert on eventId\nPrisma — db.ts")]
+    STATE["IndexerState row\nlastIndexedLedger"]
+    HTTP["Express REST API\napi.ts"]
+    WS["WebSocket stream\n/subscribe/:address\nws.ts"]
+    C1["REST Clients\ncurl · SDK · dApp"]
+    C2["Real-time Clients\nbrowser · bot"]
+
+    SN -->|ledger stream| RPC
+    RPC -->|raw contract events| SAFE
+    SAFE --> BISECT
+    BISECT -- yes --> SKIP
+    BISECT -- no --> DECODE
+    SKIP -->|advance cursor| STATE
+    DECODE -->|TransferRecord batch| DB
+    DB --> STATE
+    DB --> HTTP
+    DB --> WS
+    HTTP --> C1
+    WS --> C2
 ```
-Stellar RPC getEvents (polling loop)
-    ↓
-Parser (ScVal decoding, CAP-67 normalisation)
-    ↓
-Postgres (Prisma ORM — indexed by toAddress, fromAddress, contractId, ledger)
-    ↓
-Express REST API (GET /transfers/incoming/:address, etc.)
-```
+
+`startIndexer()` runs an infinite loop, calling `getLatestLedger()` every `POLL_INTERVAL_MS` (default 6 s, ≈ 1 ledger). Each cycle calls `fetchEventsSafe`, which requests a batch of Soroban contract events from the RPC via `getEvents`. `parseEvents` then decodes each raw `ScVal` topic/value pair into a typed `TransferRecord` covering `transfer`, `mint`, `burn`, and `clawback` event types as defined by SEP-41 / CAP-67. `upsertTransfers` bulk-inserts the records via Prisma using `skipDuplicates: true` on `eventId`, making re-indexing overlapping ledger ranges idempotent. The Express REST API and WebSocket server both read exclusively from Postgres, keeping the ingestion and query paths fully independent.
+
+> [!NOTE]
+> **Bisection strategy for Protocol 22 XDR errors** — Stellar protocol upgrades occasionally introduce new XDR types that older SDK versions cannot decode (e.g. `ScAddressType` value 3 added in Protocol 22). When `fetchEventsSafe` encounters an XDR decode error on a multi-ledger batch, it **bisects** the ledger range recursively — splitting it into two halves and retrying each — until it isolates the single problematic ledger. That ledger is then skipped with a warning log, and indexing continues from the next ledger. This ensures one bad ledger cannot stall the entire indexer.
 
 ***
 
