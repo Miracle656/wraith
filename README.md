@@ -115,6 +115,181 @@ You can use this file to explore the API, generate client SDKs, or import it int
 
 ***
 
+## Usage Examples
+
+Replace `GABC…WXYZ` with a real Stellar address and `http://localhost:3000` with your server's base URL.
+
+### `GET /status` — Health check
+
+```bash
+# curl
+curl http://localhost:3000/status
+```
+
+```js
+// fetch
+const res = await fetch("http://localhost:3000/status");
+const data = await res.json();
+console.log(data);
+
+// Expected response
+// {
+//   "ok": true,
+//   "lastIndexedLedger": 51234567,
+//   "latestLedger": 51234568,
+//   "lagLedgers": 1,
+//   "startedAt": "2025-01-01T00:00:00.000Z",
+//   "uptimeSeconds": 3600,
+//   "totalIndexed": 15000
+// }
+```
+
+***
+
+### `GET /transfers/incoming/:address` — Incoming transfers
+
+```bash
+# curl — all incoming transfers
+curl "http://localhost:3000/transfers/incoming/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# curl — filter by date window and page size
+curl "http://localhost:3000/transfers/incoming/GABCDEFGHIJKLMNOPQRSTUVWXYZ?fromDate=2025-01-01T00:00:00Z&limit=10"
+```
+
+```js
+// fetch
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const res = await fetch(
+  `http://localhost:3000/transfers/incoming/${ADDRESS}?fromDate=2025-01-01T00:00:00Z&limit=10`
+);
+const data = await res.json();
+console.log(data);
+```
+
+```js
+// axios
+import axios from "axios";
+
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const { data } = await axios.get(
+  `http://localhost:3000/transfers/incoming/${ADDRESS}`,
+  {
+    params: {
+      fromDate: "2025-01-01T00:00:00Z",
+      limit: 10,
+    },
+  }
+);
+console.log(data);
+
+// Expected response
+// {
+//   "total": 42,
+//   "limit": 10,
+//   "offset": 0,
+//   "transfers": [
+//     {
+//       "id": 12345,
+//       "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "eventType": "transfer",
+//       "fromAddress": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "toAddress":   "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "amount":        "10000000000",
+//       "displayAmount": "1000.0000000",
+//       "ledger": 51234567,
+//       "ledgerClosedAt": "2025-01-01T12:00:00Z",
+//       "txHash": "0000000000000000000000000000000000000000000000000000000000000000",
+//       "eventId": "12345-1"
+//     }
+//   ]
+// }
+```
+
+***
+
+### `GET /transfers/address/:address` — All transfers (sent & received, merged)
+
+```bash
+# curl
+curl "http://localhost:3000/transfers/address/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+```
+
+```js
+// fetch — with optional token-contract filter
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const CONTRACT = "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B";
+const res = await fetch(
+  `http://localhost:3000/transfers/address/${ADDRESS}?contractId=${CONTRACT}&limit=20`
+);
+const data = await res.json();
+console.log(data);
+
+// Expected response  (same shape as /transfers/incoming — adds "direction" per row)
+// {
+//   "total": 85,
+//   "limit": 20,
+//   "offset": 0,
+//   "transfers": [
+//     {
+//       "id": 12345,
+//       "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "eventType": "transfer",
+//       "fromAddress": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "toAddress":   "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "amount":        "10000000000",
+//       "displayAmount": "1000.0000000",
+//       "ledger": 51234567,
+//       "ledgerClosedAt": "2025-01-01T12:00:00Z",
+//       "txHash": "0000000000000000000000000000000000000000000000000000000000000000",
+//       "eventId": "12345-1",
+//       "direction": "incoming"
+//     }
+//   ]
+// }
+```
+
+***
+
+### `GET /summary/:address` — Token summary
+
+```bash
+# curl
+curl "http://localhost:3000/summary/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+```
+
+```js
+// fetch — narrow to a date window
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const res = await fetch(
+  `http://localhost:3000/summary/${ADDRESS}?fromDate=2025-01-01T00:00:00Z&toDate=2025-01-31T23:59:59Z`
+);
+const data = await res.json();
+console.log(data);
+
+// Expected response
+// {
+//   "address": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//   "window": {
+//     "fromDate": "2025-01-01T00:00:00Z",
+//     "toDate":   "2025-01-31T23:59:59Z"
+//   },
+//   "tokens": [
+//     {
+//       "contractId":          "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "totalReceived":       "50000000000",
+//       "totalSent":           "10000000000",
+//       "netFlow":             "40000000000",
+//       "displayTotalReceived": "5000.0000000",
+//       "displayTotalSent":     "1000.0000000",
+//       "displayNetFlow":       "4000.0000000",
+//       "txCount": 42
+//     }
+//   ]
+// }
+```
+
+***
+
 ## API Reference
 
 Base URL: `http://localhost:3000`
