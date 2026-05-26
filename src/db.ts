@@ -198,7 +198,7 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
       COALESCE(SUM(CASE WHEN "toAddress"   = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalReceived",
       COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalSent",
       COUNT(*)::INT8 AS "txCount"
-    FROM "TokenTransfer"
+    FROM "wraith"."TokenTransfer"
     WHERE ${where}
     GROUP BY "contractId"
     ORDER BY "contractId"

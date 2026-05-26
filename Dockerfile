@@ -14,13 +14,13 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Install production dependencies only (excludes typescript, ts-node-dev, @types/*)
+# The app runs Prisma schema sync on startup, so the runtime image needs the
+# Prisma CLI available without downloading it via npx at container boot.
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # Copy built output + Prisma schema from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 
-# Run migrations then start the app
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+CMD ["node", "dist/index.js"]
