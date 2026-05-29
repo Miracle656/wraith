@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from "@prisma/client";
+import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
@@ -203,6 +204,103 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
     GROUP BY "contractId"
     ORDER BY "contractId"
   `;
+}
+
+// ─── NFT helpers ─────────────────────────────────────────────────────────────
+
+export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<number> {
+  if (records.length === 0) return 0;
+  const result = await prisma.nftTransfer.createMany({
+    data: records,
+    skipDuplicates: true,
+  });
+  return result.count;
+}
+
+export async function getNftMetadata(
+  contractId: string,
+  tokenId: string
+): Promise<{ name: string | null; tokenUri: string | null } | null> {
+  return prisma.nftMetadata.findUnique({
+    where: { contractId_tokenId: { contractId, tokenId } },
+    select: { name: true, tokenUri: true },
+  });
+}
+
+export async function upsertNftMetadata(
+  contractId: string,
+  tokenId: string,
+  data: NftMetadataPayload
+): Promise<void> {
+  await prisma.nftMetadata.upsert({
+    where: { contractId_tokenId: { contractId, tokenId } },
+    create: { contractId, tokenId, name: data.name ?? null, tokenUri: data.tokenUri ?? null },
+    update: { name: data.name ?? null, tokenUri: data.tokenUri ?? null, fetchedAt: new Date() },
+  });
+}
+
+export type NftTransferQueryParams = {
+  contractId?: string;
+  tokenId?: string;
+  address?: string;
+  fromLedger?: number;
+  toLedger?: number;
+  limit?: number;
+  offset?: number;
+};
+
+export async function queryNftTransfers(params: NftTransferQueryParams) {
+  const {
+    contractId,
+    tokenId,
+    address,
+    fromLedger,
+    toLedger,
+    limit = 50,
+    offset = 0,
+  } = params;
+
+  const where: Prisma.NftTransferWhereInput = {
+    ...(contractId ? { contractId } : {}),
+    ...(tokenId ? { tokenId } : {}),
+    ...(address ? { OR: [{ fromAddress: address }, { toAddress: address }] } : {}),
+    ...(fromLedger || toLedger
+      ? {
+          ledger: {
+            ...(fromLedger ? { gte: fromLedger } : {}),
+            ...(toLedger ? { lte: toLedger } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const cap = Math.min(limit, 200);
+  const [total, transfers] = await prisma.$transaction([
+    prisma.nftTransfer.count({ where }),
+    prisma.nftTransfer.findMany({
+      where,
+      orderBy: [{ ledger: "desc" }, { id: "desc" }],
+      take: cap,
+      skip: offset,
+    }),
+  ]);
+
+  return { total, transfers };
+}
+
+/**
+ * Return the current owner of a token: the toAddress of its most recent transfer.
+ */
+export async function getNftOwner(
+  contractId: string,
+  tokenId: string
+): Promise<string | null> {
+  const latest = await prisma.nftTransfer.findFirst({
+    where: { contractId, tokenId, toAddress: { not: null } },
+    orderBy: [{ ledger: "desc" }, { id: "desc" }],
+    select: { toAddress: true },
+  });
+  return latest?.toAddress ?? null;
 }
 
 // ─── Combined address query ───────────────────────────────────────────────────

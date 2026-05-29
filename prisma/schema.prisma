@@ -59,6 +59,55 @@ model TokenTransfer {
   @@schema("wraith")
 }
 
+// ─── NFT Transfers ────────────────────────────────────────────────────────────
+// One row per CAP-46 NFT transfer event (transfer(from, to, token_id)).
+model NftTransfer {
+  id             Int      @id @default(autoincrement())
+
+  // The NFT contract address (C...)
+  contractId     String
+
+  // Opaque token identifier decoded from topic[3] (u128 → decimal string,
+  // bytes → hex, string → as-is)
+  tokenId        String
+
+  // Sender — null if zero address (mint)
+  fromAddress    String?
+
+  // Recipient — null if zero address (burn)
+  toAddress      String?
+
+  ledger         Int
+  ledgerClosedAt DateTime
+  txHash         String
+
+  // Stellar RPC paging token — unique per event, used for deduplication
+  eventId        String   @unique
+
+  createdAt      DateTime @default(now())
+
+  @@index([contractId])
+  @@index([tokenId])
+  @@index([toAddress])
+  @@index([fromAddress])
+  @@index([contractId, tokenId])
+  @@schema("wraith")
+}
+
+// ─── NFT Metadata Cache ───────────────────────────────────────────────────────
+// Lazily-fetched per-token metadata; populated on first transfer seen.
+model NftMetadata {
+  id         Int      @id @default(autoincrement())
+  contractId String
+  tokenId    String
+  name       String?
+  tokenUri   String?
+  fetchedAt  DateTime @default(now())
+
+  @@unique([contractId, tokenId])
+  @@schema("wraith")
+}
+
 // ─── Indexer State ────────────────────────────────────────────────────────────
 // Persists the last successfully indexed ledger so restarts resume cleanly.
 model IndexerState {
