@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
-    "test:chaos": "jest --runInBand --testPathPattern=tests/chaos --testTimeout=300000 --config=jest.chaos.config.js",
+    "test:chaos": "jest --runInBand --testPathPatterns=tests/chaos --testTimeout=300000 --config=jest.chaos.config.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
