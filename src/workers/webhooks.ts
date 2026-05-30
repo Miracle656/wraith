@@ -98,7 +98,7 @@ async function attemptDelivery(deliveryId: number): Promise<void> {
       where: { id: deliveryId },
       data: {
         status:         "success",
-        attempts,
+        attempts:       attempt,
         lastStatusCode: statusCode,
         lastError:      null,
         nextRetryAt:    null,
@@ -117,7 +117,7 @@ async function attemptDelivery(deliveryId: number): Promise<void> {
     where: { id: deliveryId },
     data: {
       status:         canRetry ? "pending" : "failed",
-      attempts,
+      attempts:       attempt,
       lastStatusCode: statusCode,
       lastError:      error ?? `HTTP ${statusCode}`,
       nextRetryAt,
