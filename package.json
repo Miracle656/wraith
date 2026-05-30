@@ -13,7 +13,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts"
   },
   "jest": {
     "preset": "ts-jest",

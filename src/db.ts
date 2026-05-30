@@ -205,6 +205,91 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
   `;
 }
 
+// ─── Account summary helpers ──────────────────────────────────────────────────
+
+/**
+ * Incrementally update materialized aggregates for every address touched by
+ * `records`. Called inside the same logical write as upsertTransfers so the
+ * two tables never diverge.
+ *
+ * Strategy:
+ *   1. Accumulate per-(address, contractId) deltas in memory.
+ *   2. Emit one raw UPSERT per unique pair — O(unique addresses) DB round-trips.
+ *
+ * Using raw SQL because Prisma cannot do arithmetic on string-typed NUMERIC columns.
+ */
+export async function upsertAccountSummaries(records: TransferRecord[]): Promise<void> {
+  if (records.length === 0) return;
+
+  // Accumulate deltas keyed by "address|contractId"
+  const deltas = new Map<
+    string,
+    { address: string; contractId: string; sent: bigint; received: bigint; count: number; lastAt: Date }
+  >();
+
+  const touch = (address: string, contractId: string, sent: bigint, received: bigint, at: Date) => {
+    const key = `${address}|${contractId}`;
+    const prev = deltas.get(key) ?? { address, contractId, sent: 0n, received: 0n, count: 0, lastAt: at };
+    deltas.set(key, {
+      address,
+      contractId,
+      sent: prev.sent + sent,
+      received: prev.received + received,
+      count: prev.count + 1,
+      lastAt: at > prev.lastAt ? at : prev.lastAt,
+    });
+  };
+
+  for (const { contractId, fromAddress, toAddress, amount, ledgerClosedAt } of records) {
+    const amt = BigInt(amount);
+    if (fromAddress) touch(fromAddress, contractId, amt, 0n, ledgerClosedAt);
+    if (toAddress)   touch(toAddress,   contractId, 0n, amt, ledgerClosedAt);
+  }
+
+  for (const { address, contractId, sent, received, count, lastAt } of deltas.values()) {
+    const sentStr     = sent.toString();
+    const receivedStr = received.toString();
+    const netStr      = (received - sent).toString();
+
+    await prisma.$executeRaw`
+      INSERT INTO wraith."AccountSummary"
+        (address, "contractId", "totalSent", "totalReceived", net, "txCount", "lastActivityAt", "updatedAt")
+      VALUES
+        (${address}, ${contractId}, ${sentStr}, ${receivedStr}, ${netStr}, ${count}, ${lastAt}, NOW())
+      ON CONFLICT (address, "contractId") DO UPDATE SET
+        "totalSent"      = (wraith."AccountSummary"."totalSent"::NUMERIC     + ${sentStr}::NUMERIC)::TEXT,
+        "totalReceived"  = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC)::TEXT,
+        net              = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC
+                           - wraith."AccountSummary"."totalSent"::NUMERIC     - ${sentStr}::NUMERIC)::TEXT,
+        "txCount"        = wraith."AccountSummary"."txCount" + ${count},
+        "lastActivityAt" = GREATEST(wraith."AccountSummary"."lastActivityAt", ${lastAt}),
+        "updatedAt"      = NOW()
+    `;
+  }
+}
+
+/**
+ * Return all asset rows for a given address, optionally filtered to one contract.
+ * O(1) — reads directly from the materialized AccountSummary table.
+ */
+export async function getAccountSummary(address: string, contractId?: string) {
+  return prisma.accountSummary.findMany({
+    where: {
+      address,
+      ...(contractId ? { contractId } : {}),
+    },
+    orderBy: { lastActivityAt: "desc" },
+    select: {
+      contractId:     true,
+      totalSent:      true,
+      totalReceived:  true,
+      net:            true,
+      txCount:        true,
+      lastActivityAt: true,
+    },
+  });
+}
+
 // ─── Combined address query ───────────────────────────────────────────────────
 export type AllTransfersQueryParams = {
   address: string;

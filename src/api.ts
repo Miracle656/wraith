@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
+import { createAccountsRouter } from "./api/accounts";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -65,6 +66,9 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json());
   app.use(limiter);
+
+  // ── Accounts routes ───────────────────────────────────────────────────────────
+  app.use("/accounts", createAccountsRouter());
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {

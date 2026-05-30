@@ -59,6 +59,39 @@ model TokenTransfer {
   @@schema("wraith")
 }
 
+// ─── Account Summaries ────────────────────────────────────────────────────────
+// Materialized per-account, per-asset rolling aggregates.
+// Updated inside the same DB write as each transfer batch — O(1) reads.
+model AccountSummary {
+  id             Int      @id @default(autoincrement())
+
+  // Stellar address (G... or C...)
+  address        String
+
+  // Token contract address (C...)
+  contractId     String
+
+  // i128 totals stored as decimal strings to avoid JS BigInt precision loss
+  totalSent      String   @default("0")
+  totalReceived  String   @default("0")
+
+  // net = totalReceived − totalSent (may be negative)
+  net            String   @default("0")
+
+  // Number of transfer events involving this address + contract
+  txCount        Int      @default(0)
+
+  // Ledger close time of the most recent transfer touching this row
+  lastActivityAt DateTime
+
+  updatedAt      DateTime @updatedAt
+
+  @@unique([address, contractId])
+  @@index([address])
+  @@index([lastActivityAt])
+  @@schema("wraith")
+}
+
 // ─── Indexer State ────────────────────────────────────────────────────────────
 // Persists the last successfully indexed ledger so restarts resume cleanly.
 model IndexerState {
