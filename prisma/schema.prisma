@@ -15,38 +15,17 @@ datasource db {
 }
 
 // ─── Token Transfers ──────────────────────────────────────────────────────────
-// One row per normalized CAP-67/SEP-41 token event (transfer, mint, burn, clawback).
-// fromAddress is null for mint events. toAddress is null for burn events.
 model TokenTransfer {
   id             Int       @id @default(autoincrement())
-
-  // The token contract address (C...)
   contractId     String
-
-  // transfer | mint | burn | clawback
   eventType      String
-
-  // Sender — null for mint events
   fromAddress    String?
-
-  // Recipient — null for burn/clawback events
   toAddress      String?
-
-  // i128 stored as decimal string to avoid JS BigInt precision loss
   amount         String
-
-  // Ledger sequence number where this event was emitted
   ledger         Int
-
-  // UTC close time of the ledger
   ledgerClosedAt DateTime
-
-  // Transaction hash (SHA-256 hex, no 0x prefix)
   txHash         String
-
-  // Stellar RPC paging token — unique per event, used for deduplication
   eventId        String    @unique
-
   createdAt      DateTime  @default(now())
 
   @@index([toAddress])
@@ -60,30 +39,16 @@ model TokenTransfer {
 }
 
 // ─── NFT Transfers ────────────────────────────────────────────────────────────
-// One row per CAP-46 NFT transfer event (transfer(from, to, token_id)).
 model NftTransfer {
   id             Int      @id @default(autoincrement())
-
-  // The NFT contract address (C...)
   contractId     String
-
-  // Opaque token identifier decoded from topic[3] (u128 → decimal string,
-  // bytes → hex, string → as-is)
   tokenId        String
-
-  // Sender — null if zero address (mint)
   fromAddress    String?
-
-  // Recipient — null if zero address (burn)
   toAddress      String?
-
   ledger         Int
   ledgerClosedAt DateTime
   txHash         String
-
-  // Stellar RPC paging token — unique per event, used for deduplication
   eventId        String   @unique
-
   createdAt      DateTime @default(now())
 
   @@index([contractId])
@@ -95,7 +60,6 @@ model NftTransfer {
 }
 
 // ─── NFT Metadata Cache ───────────────────────────────────────────────────────
-// Lazily-fetched per-token metadata; populated on first transfer seen.
 model NftMetadata {
   id         Int      @id @default(autoincrement())
   contractId String
@@ -109,30 +73,15 @@ model NftMetadata {
 }
 
 // ─── Account Summaries ────────────────────────────────────────────────────────
-// Materialized per-account, per-asset rolling aggregates.
-// Updated inside the same DB write as each transfer batch — O(1) reads.
 model AccountSummary {
   id             Int      @id @default(autoincrement())
-
-  // Stellar address (G... or C...)
   address        String
-
-  // Token contract address (C...)
   contractId     String
-
-  // i128 totals stored as decimal strings to avoid JS BigInt precision loss
   totalSent      String   @default("0")
   totalReceived  String   @default("0")
-
-  // net = totalReceived − totalSent (may be negative)
   net            String   @default("0")
-
-  // Number of transfer events involving this address + contract
   txCount        Int      @default(0)
-
-  // Ledger close time of the most recent transfer touching this row
   lastActivityAt DateTime
-
   updatedAt      DateTime @updatedAt
 
   @@unique([address, contractId])
@@ -141,8 +90,46 @@ model AccountSummary {
   @@schema("wraith")
 }
 
+// ─── Webhook Subscriptions ────────────────────────────────────────────────────
+// Each row is one subscriber endpoint. The secret is used to HMAC-sign payloads.
+model WebhookSubscription {
+  id        Int       @id @default(autoincrement())
+  url       String
+  secret    String
+  filter    Json?
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([active])
+  @@schema("wraith")
+}
+
+// ─── Webhook Deliveries ───────────────────────────────────────────────────────
+model WebhookDelivery {
+  id             Int                  @id @default(autoincrement())
+  subscriptionId Int
+  subscription   WebhookSubscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  eventId        String
+  payload        Json
+  status         String               @default("pending")
+  attempts       Int                  @default(0)
+  nextRetryAt    DateTime?
+  lastStatusCode Int?
+  lastError      String?
+  deliveredAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([subscriptionId])
+  @@index([status, nextRetryAt])
+  @@index([eventId])
+  @@schema("wraith")
+}
+
 // ─── Indexer State ────────────────────────────────────────────────────────────
-// Persists the last successfully indexed ledger so restarts resume cleanly.
 model IndexerState {
   id                 Int      @id @default(1)
   lastIndexedLedger  Int

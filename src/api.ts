@@ -5,6 +5,7 @@ import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNf
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
+import { createWebhooksRouter } from "./api/webhooks";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -67,8 +68,13 @@ export function createApp(): express.Application {
   app.use(express.json());
   app.use(limiter);
 
+<<<<<<< HEAD
   // ── Accounts routes ───────────────────────────────────────────────────────────
   app.use("/accounts", createAccountsRouter());
+=======
+  // ── Webhook subscription management ──────────────────────────────────────────
+  app.use("/webhooks", createWebhooksRouter());
+>>>>>>> 1945992 (feat(api): add HMAC-signed webhook delivery system with retries)
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
