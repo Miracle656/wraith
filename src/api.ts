@@ -68,13 +68,11 @@ export function createApp(): express.Application {
   app.use(express.json());
   app.use(limiter);
 
-<<<<<<< HEAD
   // ── Accounts routes ───────────────────────────────────────────────────────────
   app.use("/accounts", createAccountsRouter());
-=======
+
   // ── Webhook subscription management ──────────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
->>>>>>> 1945992 (feat(api): add HMAC-signed webhook delivery system with retries)
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
