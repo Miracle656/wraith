@@ -258,6 +258,9 @@ const res = await fetch(
 const data = await res.json();
 console.log(data);
 
+// OData-style filters and projections are also supported:
+// `http://localhost:3000/transfers/address/${ADDRESS}?$filter=ledger gt 1000 and contains(contractId,'CB64')&$select=contractId,amount&cursor=...`
+
 // Expected response  (same shape as /transfers/incoming — adds "direction" per row)
 // {
 //   "total": 85,
@@ -401,6 +404,8 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `STELLAR_NETWORK`     | —             | `testnet` or `mainnet`. Testnet auto-configures the default RPC URL.                          |
 | `SOROBAN_RPC_URL`     | *(see below)* | Soroban RPC endpoint. Overrides any network default. Required when `STELLAR_NETWORK=mainnet`. |
 | `STELLAR_RPC_URL`     | —             | Backward-compat alias for `SOROBAN_RPC_URL`. Used when `SOROBAN_RPC_URL` is unset.            |
+| `HORIZON_URL`         | —             | Optional Horizon endpoint used as a fallback source when RPC is unhealthy.                    |
+| `HORIZON_EVENTS_PATH`  | `/events`     | Horizon contract-events path used by the fallback source.                                      |
 | `START_LEDGER`        | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
 | `POLL_INTERVAL_MS`    | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
@@ -417,6 +422,10 @@ Wraith resolves the RPC endpoint in this order and fails fast at startup if noth
 3. `STELLAR_NETWORK=testnet` → `https://soroban-testnet.stellar.org` (free public endpoint)
 4. `STELLAR_NETWORK=mainnet` → **error**: requires explicit `SOROBAN_RPC_URL`
 5. Nothing set → **error**: clear message explaining what to configure
+
+### Indexer Source Fallback
+
+If `HORIZON_URL` is set, the indexer checks the RPC source first and switches to Horizon when the RPC health check fails. It switches back automatically once RPC becomes healthy again.
 
 ### Mainnet RPC Providers
 

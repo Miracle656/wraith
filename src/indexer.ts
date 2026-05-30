@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { fetchEventsSafe, getLatestLedger, withRetry, validateNetworkConfig } from "./rpc";
+import { validateNetworkConfig, withRetry } from "./rpc";
 import { parseEvents } from "./decoder";
 import {
   upsertTransfers,
@@ -13,6 +13,7 @@ import {
 } from "./db";
 import { emitTransfer } from "./events";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
+import { createSourceSwitcherWithConfig } from "./indexer/sources";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -73,6 +74,14 @@ const SAC_CONTRACT_IDS = resolveSacContractIds();
 const NFT_CONTRACT_IDS = resolveNftContractIds();
 // Combined watch list — deduplicated so we don't request the same contract twice
 const ALL_CONTRACT_IDS = [...new Set([...SAC_CONTRACT_IDS, ...NFT_CONTRACT_IDS])];
+const sourceSwitcher = createSourceSwitcherWithConfig({
+  horizonUrl: process.env.HORIZON_URL,
+  horizonEventsPath: process.env.HORIZON_EVENTS_PATH,
+  fetchImpl: (globalThis as { fetch?: (input: string, init?: unknown) => Promise<unknown> }).fetch as unknown as (
+    input: string,
+    init?: { headers?: Record<string, string> }
+  ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>,
+});
 
 // Stellar testnet RPC retains ~7 days ≈ 120 000 ledgers (at ~5s per ledger).
 // We cap the back-fill look-back so we never request a ledger that's already pruned.
@@ -111,9 +120,7 @@ async function pollOnce(
     `[indexer] Polling ledgers ${fromLedger} → ${latestLedger} (lag: ${latestLedger - fromLedger})`
   );
 
-  // fetchEventsSafe bisects on XDR decode errors so newer protocol ledgers
-  // don't crash the whole indexer — they're skipped with a warning instead.
-  const { events, highestLedger } = await fetchEventsSafe(
+  const { events, highestLedger } = await sourceSwitcher.fetchEvents(
     fromLedger, latestLedger, ALL_CONTRACT_IDS, BATCH_SIZE
   );
 
@@ -195,7 +202,7 @@ export async function startIndexer(): Promise<void> {
   startedAt = Date.now();
 
   // ── Determine start ledger ──────────────────────────────────────────────────
-  const latestLedger = await withRetry(getLatestLedger);
+  const latestLedger = await withRetry(() => sourceSwitcher.getLatestLedger());
   const minSafeLedger = latestLedger - RPC_MAX_LOOKBACK_LEDGERS;
 
   let currentLedger: number;
@@ -218,7 +225,7 @@ export async function startIndexer(): Promise<void> {
   // ── Polling loop ────────────────────────────────────────────────────────────
   while (true) {
     try {
-      const tip    = await withRetry(getLatestLedger);
+      const tip = await withRetry(() => sourceSwitcher.getLatestLedger());
       const target = tip - TIP_LAG;
 
       if (currentLedger >= target) {
