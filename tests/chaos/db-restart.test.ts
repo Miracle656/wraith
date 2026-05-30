@@ -115,8 +115,30 @@ describe("Chaos: DB restart mid-ingest", () => {
     // Timeout is set via the healthcheck retries in docker-compose.chaos.yml
     // (60 × 5s = 5 min max).
     console.log("[chaos] Building and starting containers (waiting for healthy)…");
-    exec(`${COMPOSE_CMD} up -d --build --wait`);
-    composeStarted = true;
+    try {
+      exec(`${COMPOSE_CMD} up -d --build --wait`);
+      composeStarted = true;
+    } catch (err) {
+      // If --wait fails (container exited or unhealthy), dump container logs
+      // so we can see why the app crashed instead of just "exit code 1".
+      composeStarted = true; // ensure afterAll cleanup still runs
+      console.error("[chaos] docker compose up --wait failed.");
+      try {
+        const wraithLogs = execSync(`${COMPOSE_CMD} logs wraith`, { encoding: "utf8" });
+        console.error("─── wraith container logs ───");
+        console.error(wraithLogs);
+      } catch (logErr) {
+        console.error("[chaos] Could not retrieve wraith logs:", (logErr as Error).message);
+      }
+      try {
+        const dbLogs = execSync(`${COMPOSE_CMD} logs db --tail 30`, { encoding: "utf8" });
+        console.error("─── db container logs (last 30 lines) ───");
+        console.error(dbLogs);
+      } catch (logErr) {
+        console.error("[chaos] Could not retrieve db logs:", (logErr as Error).message);
+      }
+      throw err;
+    }
     console.log("[chaos] All services healthy.");
 
     // ── 2a. Phase 1: quick sanity-check that /healthz is reachable ───────────
