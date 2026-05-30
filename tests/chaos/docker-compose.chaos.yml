@@ -1,8 +1,7 @@
-version: "3.9"
-
 # Dedicated compose stack for the DB-restart chaos test.
 # Uses a separate container name and port (5433 / 3001) so it never
 # collides with a local development stack running on the default ports.
+# Note: no top-level 'version' key — obsolete in Compose v2+.
 
 services:
   # ── Postgres ──────────────────────────────────────────────────────────────────

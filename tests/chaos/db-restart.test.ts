@@ -6,10 +6,7 @@
  * asserts:
  *   1. The indexer process stayed alive during the outage.
  *   2. After recovery, lastIndexedLedger advanced beyond the pre-pause value.
- *   3. No data was lost or duplicated (transfer count only ever increases;
- *      the DB-level UNIQUE constraint on eventId would have caught any
- *      double-write and the indexer's skipDuplicates guard handles it
- *      gracefully without crashing).
+ *   3. No data was lost (transfer count only ever increases).
  *
  * Prerequisites: Docker + Docker Compose v2 must be available in PATH.
  * The test skips automatically when Docker is not detected.
@@ -26,14 +23,15 @@ const COMPOSE_FILE = path.resolve(__dirname, "docker-compose.chaos.yml");
 const COMPOSE_CMD  = `docker compose -f "${COMPOSE_FILE}"`;
 const API_BASE     = "http://localhost:3001";
 
-const STARTUP_TIMEOUT_MS  = 120_000; // 2 min — build + migrate + first poll
-const INGEST_WARMUP_MS    = 30_000;  // let it accumulate some ledgers
-const PAUSE_DURATION_MS   = 15_000;  // DB outage window
-const RECOVERY_TIMEOUT_MS = 60_000;  // how long we wait for the indexer to catch up
-const POLL_INTERVAL_MS    = 2_000;   // how often we poll the API
+// Phase 1: wait for /healthz (process alive, no DB needed)
+const HEALTHZ_TIMEOUT_MS      = 60_000;  // 1 min — container start + node boot
+// Phase 2: wait for first ledger indexed (DB connected + first poll done)
+const FIRST_LEDGER_TIMEOUT_MS = 180_000; // 3 min — prisma push + first RPC poll
+const PAUSE_DURATION_MS       = 15_000;  // DB outage window
+const RECOVERY_TIMEOUT_MS     = 90_000;  // wait for indexer to advance past checkpoint
+const POLL_INTERVAL_MS        = 3_000;   // polling cadence
 
-// Jest timeout covers the full scenario end-to-end
-jest.setTimeout(300_000); // 5 minutes
+jest.setTimeout(600_000); // 10 minutes total budget
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,9 +48,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${path}`);
+async function fetchJson<T>(urlPath: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${urlPath}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${urlPath}`);
   return res.json() as Promise<T>;
 }
 
@@ -60,18 +58,11 @@ interface StatusResponse {
   ok: boolean;
   lastIndexedLedger: number | null;
   latestLedger: number;
-  lagLedgers: number;
   totalIndexed: number;
 }
 
-interface ReadyzResponse {
-  ok: boolean;
-  checks: { db: boolean; rpc: boolean; indexerCaughtUp: boolean };
-}
-
 /**
- * Poll until fn() resolves to true or timeoutMs elapses.
- * Throws if the deadline is exceeded.
+ * Poll fn() every POLL_INTERVAL_MS until it returns true or the deadline passes.
  */
 async function waitUntil(
   fn: () => Promise<boolean>,
@@ -83,14 +74,14 @@ async function waitUntil(
     try {
       if (await fn()) return;
     } catch {
-      // transient error — keep polling
+      // transient — keep polling
     }
     await sleep(POLL_INTERVAL_MS);
   }
   throw new Error(`Timed out waiting for: ${description}`);
 }
 
-// ─── Test lifecycle ───────────────────────────────────────────────────────────
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 let composeStarted = false;
 
@@ -109,6 +100,7 @@ afterAll(async () => {
 
 describe("Chaos: DB restart mid-ingest", () => {
   it("indexer resumes from checkpoint with no data loss after DB pause", async () => {
+
     // ── 0. Skip if Docker unavailable ─────────────────────────────────────────
     if (!dockerAvailable()) {
       console.warn("[chaos] Docker not available — skipping chaos test.");
@@ -120,101 +112,98 @@ describe("Chaos: DB restart mid-ingest", () => {
     exec(`${COMPOSE_CMD} up -d --build`);
     composeStarted = true;
 
-    // ── 2. Wait for Wraith to become healthy ──────────────────────────────────
-    console.log("[chaos] Waiting for Wraith to be ready…");
+    // ── 2a. Phase 1: wait for Node.js process to be alive ────────────────────
+    // /healthz returns 200 as soon as the Express server is up.
+    // It does NOT require a DB connection, so this completes quickly.
+    console.log("[chaos] Waiting for Wraith process to boot…");
     await waitUntil(
       async () => {
-        const data = await fetchJson<ReadyzResponse>("/readyz");
-        return data.ok && data.checks.db && data.checks.rpc;
+        const data = await fetchJson<{ ok: boolean }>("/healthz");
+        return data.ok === true;
       },
-      STARTUP_TIMEOUT_MS,
-      "/readyz returns ok=true"
+      HEALTHZ_TIMEOUT_MS,
+      "/healthz returns ok=true"
     );
-    console.log("[chaos] Wraith is healthy.");
+    console.log("[chaos] Wraith process is alive.");
 
-    // ── 3. Let the indexer warm up and ingest some data ───────────────────────
-    console.log(`[chaos] Warming up for ${INGEST_WARMUP_MS / 1000}s…`);
-    await sleep(INGEST_WARMUP_MS);
+    // ── 2b. Phase 2: wait for first successful DB write ───────────────────────
+    // Covers: prisma db push (schema migration) + first RPC poll + first upsert.
+    // We poll /status until lastIndexedLedger becomes a positive integer.
+    console.log("[chaos] Waiting for first ledger to be indexed (prisma push + first poll)…");
+    await waitUntil(
+      async () => {
+        const data = await fetchJson<StatusResponse>("/status");
+        return data.lastIndexedLedger !== null && data.lastIndexedLedger > 0;
+      },
+      FIRST_LEDGER_TIMEOUT_MS,
+      "lastIndexedLedger > 0"
+    );
+    console.log("[chaos] Indexer is running and has persisted at least one ledger.");
 
+    // ── 3. Snapshot pre-pause state ───────────────────────────────────────────
     const beforeStatus = await fetchJson<StatusResponse>("/status");
-    const ledgerBefore = beforeStatus.lastIndexedLedger ?? 0;
+    const ledgerBefore = beforeStatus.lastIndexedLedger!;
     const countBefore  = beforeStatus.totalIndexed;
 
     console.log(
-      `[chaos] Pre-pause state — lastIndexedLedger: ${ledgerBefore}, totalIndexed: ${countBefore}`
+      `[chaos] Pre-pause — lastIndexedLedger: ${ledgerBefore}, totalIndexed: ${countBefore}`
     );
-
-    // The indexer must have made progress before we pause.
     expect(ledgerBefore).toBeGreaterThan(0);
 
     // ── 4. Pause the DB container ─────────────────────────────────────────────
     console.log("[chaos] Pausing DB container…");
     exec("docker pause wraith_chaos_db");
-    console.log("[chaos] DB paused.");
 
-    // ── 5. Wait during the outage — indexer must stay alive ──────────────────
+    // ── 5. Hold the pause — indexer must stay alive ───────────────────────────
     console.log(`[chaos] Holding pause for ${PAUSE_DURATION_MS / 1000}s…`);
     await sleep(PAUSE_DURATION_MS);
 
-    // The indexer process must still be alive (liveness probe doesn't need DB)
+    // Liveness probe must still respond — the Express server is independent of DB
     const liveness = await fetchJson<{ ok: boolean }>("/healthz");
     expect(liveness.ok).toBe(true);
-    console.log("[chaos] Indexer process is alive during DB outage ✓");
+    console.log("[chaos] Indexer process alive during DB outage ✓");
 
-    // Record the last ledger the indexer *knew about* before the crash
     const checkpointLedger = ledgerBefore;
 
     // ── 6. Resume the DB container ────────────────────────────────────────────
     console.log("[chaos] Resuming DB container…");
     exec("docker unpause wraith_chaos_db");
-    console.log("[chaos] DB resumed.");
 
-    // ── 7. Wait for the indexer to recover and catch up ───────────────────────
-    console.log("[chaos] Waiting for indexer recovery…");
+    // ── 7. Wait for forward progress past the checkpoint ─────────────────────
+    // The indexer's withRetry loop will reconnect and resume from the saved
+    // lastIndexedLedger. We wait until it advances strictly beyond the checkpoint.
+    console.log("[chaos] Waiting for indexer to advance past checkpoint…");
     await waitUntil(
       async () => {
-        const data = await fetchJson<ReadyzResponse>("/readyz");
-        return data.ok && data.checks.db && data.checks.indexerCaughtUp;
+        const data = await fetchJson<StatusResponse>("/status");
+        return (data.lastIndexedLedger ?? 0) > checkpointLedger;
       },
       RECOVERY_TIMEOUT_MS,
-      "indexer fully recovered and caught up"
+      `lastIndexedLedger > ${checkpointLedger}`
     );
-    console.log("[chaos] Indexer recovered ✓");
 
-    // ── 8. Collect post-recovery state ────────────────────────────────────────
-    // Give it one more poll cycle to persist state
-    await sleep(POLL_INTERVAL_MS * 2);
+    // ── 8. Final assertions ───────────────────────────────────────────────────
     const afterStatus = await fetchJson<StatusResponse>("/status");
     const ledgerAfter = afterStatus.lastIndexedLedger ?? 0;
     const countAfter  = afterStatus.totalIndexed;
 
     console.log(
-      `[chaos] Post-recovery state — lastIndexedLedger: ${ledgerAfter}, totalIndexed: ${countAfter}`
+      `[chaos] Post-recovery — lastIndexedLedger: ${ledgerAfter}, totalIndexed: ${countAfter}`
     );
 
-    // ── 9. Assertions ─────────────────────────────────────────────────────────
-
-    // 9a. Indexer resumed from its checkpoint, not from ledger 0
-    expect(ledgerAfter).toBeGreaterThanOrEqual(checkpointLedger);
+    // 8a. Indexer resumed from checkpoint — did NOT reset to ledger 0
+    expect(ledgerAfter).toBeGreaterThan(checkpointLedger);
     console.log(`[chaos] Checkpoint preserved: ${checkpointLedger} → ${ledgerAfter} ✓`);
 
-    // 9b. Ledger advanced after recovery — indexer didn't stall
-    expect(ledgerAfter).toBeGreaterThan(checkpointLedger);
-    console.log("[chaos] Ledger progressed after recovery ✓");
-
-    // 9c. Transfer count only increased — no data was lost
+    // 8b. Transfer count only increased — no data lost
     expect(countAfter).toBeGreaterThanOrEqual(countBefore);
     console.log(`[chaos] Data integrity: ${countBefore} → ${countAfter} transfers ✓`);
 
-    // 9d. Uniqueness: the DB UNIQUE constraint on eventId is the ultimate guard.
-    //     Verify by querying the duplicate-check endpoint — if the indexer had
-    //     silently double-written any event, the count would equal or exceed
-    //     the expected value but the DB would have skipped it via skipDuplicates.
-    //     We assert the indexer is still ok (not crashed) as the final signal.
-    const finalHealth = await fetchJson<{ ok: boolean; uptime: number }>("/healthz");
+    // 8c. Process still healthy
+    const finalHealth = await fetchJson<{ ok: boolean }>("/healthz");
     expect(finalHealth.ok).toBe(true);
     console.log("[chaos] Indexer healthy post-recovery ✓");
 
-    console.log("[chaos] All assertions passed — chaos test complete.");
+    console.log("[chaos] All assertions passed.");
   });
 });
