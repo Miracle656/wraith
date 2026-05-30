@@ -20,17 +20,22 @@
     "preset": "ts-jest",
     "testEnvironment": "node",
     "roots": [
-      "<rootDir>/src"
+      "<rootDir>/src",
+      "<rootDir>/tests"
     ],
     "testMatch": [
-      "**/__tests__/**/*.test.ts"
+      "**/__tests__/**/*.test.ts",
+      "**/tests/**/*.test.ts"
     ],
     "moduleFileExtensions": [
       "ts",
       "js",
       "json"
     ],
-    "clearMocks": true
+    "clearMocks": true,
+    "transform": {
+      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+    }
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",

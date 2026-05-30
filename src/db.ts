@@ -2,6 +2,17 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
 
+const STROOPS = 10_000_000n;
+
+function toDisplayAmount(amount: string): string {
+  const raw = BigInt(amount);
+  const abs = raw < 0n ? -raw : raw;
+  const integer = abs / STROOPS;
+  const remainder = abs % STROOPS;
+  const sign = raw < 0n ? "-" : "";
+  return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
+}
+
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };

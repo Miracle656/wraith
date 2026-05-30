@@ -441,16 +441,20 @@ export function createApp(): express.Application {
 
         // Add data rows
         for (const transfer of result.transfers) {
-          const displayAmount = toDisplayAmount(transfer.amount);
+          const t = transfer as Record<string, unknown>;
+          const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
+          const closedAt = t.ledgerClosedAt instanceof Date
+            ? t.ledgerClosedAt
+            : new Date(String(t.ledgerClosedAt ?? 0));
           csvLines.push(
             formatCSVRow([
-              transfer.ledgerClosedAt.toISOString(),
-              transfer.eventType,
-              transfer.fromAddress || "",
-              transfer.toAddress || "",
+              closedAt.toISOString(),
+              t.eventType,
+              t.fromAddress || "",
+              t.toAddress || "",
               displayAmount,
-              transfer.contractId,
-              transfer.ledger,
+              t.contractId,
+              t.ledger,
             ])
           );
         }
