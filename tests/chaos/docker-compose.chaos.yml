@@ -23,15 +23,13 @@ services:
   wraith:
     build:
       context: ../..
-      dockerfile: Dockerfile
-      # Use the builder stage (npm ci without --omit=dev) so the prisma CLI
-      # is available. The production stage drops dev deps and the CMD runs
-      # `prisma migrate deploy` which fails when there are no migration files.
-      # The builder stage has all deps; we override the command below.
-      target: builder
-    # Override the Dockerfile CMD: the app's index.ts already runs
-    # `npx prisma db push` internally, so we just start the compiled app.
-    command: node dist/index.js
+      # Use the chaos-specific Debian-based Dockerfile to avoid the Prisma +
+      # alpine musl OpenSSL detection bug that crashes `prisma db push` on
+      # startup. The project's prisma/schema.prisma declares
+      # binaryTargets = ["native", "debian-openssl-3.0.x"] which works natively
+      # on Debian. The chaos Dockerfile keeps all dev deps (prisma CLI) so the
+      # app's runtime `npx prisma db push` works.
+      dockerfile: tests/chaos/Dockerfile.chaos
     container_name: wraith_chaos_indexer
     depends_on:
       db:
