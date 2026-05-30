@@ -4,11 +4,25 @@ import { parseEvents } from "./decoder";
 import {
   upsertTransfers,
   upsertAccountSummaries,
+  upsertNftTransfers,
+  getNftMetadata,
+  upsertNftMetadata,
   getLastIndexedLedger,
   setLastIndexedLedger,
   pruneOldTransfers,
 } from "./db";
 import { emitTransfer } from "./events";
+import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
+
+// ─── NFT Contract IDs ─────────────────────────────────────────────────────────
+/**
+ * Resolve the list of NFT contract IDs to watch.
+ * Falls back to empty — NFT events can still be auto-detected by topic structure.
+ */
+export function resolveNftContractIds(): string[] {
+  const raw = process.env.NFT_CONTRACT_IDS ?? "";
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
 
 // ─── SAC Contract IDs ─────────────────────────────────────────────────────────
 // The native XLM SAC address on mainnet and testnet respectively.
@@ -56,6 +70,9 @@ export function resolveSacContractIds(): string[] {
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
 const BATCH_SIZE = parseInt(process.env.EVENTS_BATCH_SIZE ?? "10000", 10);
 const SAC_CONTRACT_IDS = resolveSacContractIds();
+const NFT_CONTRACT_IDS = resolveNftContractIds();
+// Combined watch list — deduplicated so we don't request the same contract twice
+const ALL_CONTRACT_IDS = [...new Set([...SAC_CONTRACT_IDS, ...NFT_CONTRACT_IDS])];
 
 // Stellar testnet RPC retains ~7 days ≈ 120 000 ledgers (at ~5s per ledger).
 // We cap the back-fill look-back so we never request a ledger that's already pruned.
@@ -97,7 +114,7 @@ async function pollOnce(
   // fetchEventsSafe bisects on XDR decode errors so newer protocol ledgers
   // don't crash the whole indexer — they're skipped with a warning instead.
   const { events, highestLedger } = await fetchEventsSafe(
-    fromLedger, latestLedger, SAC_CONTRACT_IDS, BATCH_SIZE
+    fromLedger, latestLedger, ALL_CONTRACT_IDS, BATCH_SIZE
   );
 
   if (events.length === 0) {
@@ -105,20 +122,16 @@ async function pollOnce(
     return highestLedger;
   }
 
-  // Parse
-  const records = parseEvents(events);
+  // Split events by type: NFT (4 topics) vs fungible (3 topics)
+  const fungibleEvents = events.filter((e) => !isNftTransferEvent(e));
+  const nftRawEvents   = events.filter((e) => isNftTransferEvent(e));
 
-  // Persist transfers and update materialized account summaries atomically
+  // ── Fungible path ────────────────────────────────────────────────────────────
+  const records  = parseEvents(fungibleEvents);
   const inserted = await upsertTransfers(records);
-  totalIndexed += inserted;
+  totalIndexed  += inserted;
 
-  // Only update aggregates for genuinely new records to avoid double-counting
-  // on re-indexed ledger ranges. We pass the same records; upsertAccountSummaries
-  // uses INSERT … ON CONFLICT so it is idempotent only if we guard on insertion count.
-  // Since upsertTransfers uses skipDuplicates we can't know exactly which were new,
-  // so we update summaries for all records — the ON CONFLICT arithmetic is additive
-  // and the transfer table's eventId uniqueness ensures we never process duplicates
-  // across restarts (the indexer resumes from lastIndexedLedger).
+  // Update materialized account summaries alongside transfer inserts
   if (inserted > 0) {
     await upsertAccountSummaries(records).catch((e) =>
       console.error("[indexer] Account summary upsert failed:", e)
@@ -130,10 +143,33 @@ async function pollOnce(
     records.forEach(emitTransfer);
   }
 
+  // ── NFT path ─────────────────────────────────────────────────────────────────
+  const nftParsed   = parseNftEvents(nftRawEvents);
+  const nftRecords  = nftParsed.map((p) => p.record);
+  const nftInserted = await upsertNftTransfers(nftRecords);
+  totalIndexed     += nftInserted;
+
+  // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached
+  if (nftParsed.length > 0) {
+    const seen = new Set<string>();
+    for (const { record, tokenIdScVal } of nftParsed) {
+      const key = `${record.contractId}:${record.tokenId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const cached = await getNftMetadata(record.contractId, record.tokenId);
+      if (!cached) {
+        const meta = await fetchNftMetadata(record.contractId, tokenIdScVal).catch(() => ({}));
+        await upsertNftMetadata(record.contractId, record.tokenId, meta).catch((e) =>
+          console.error("[indexer] NFT metadata upsert failed:", e)
+        );
+      }
+    }
+  }
+
   await setLastIndexedLedger(highestLedger);
 
   console.log(
-    `[indexer] Processed ${events.length} events → ${inserted} new records saved (ledger ${highestLedger})`
+    `[indexer] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT records saved (ledger ${highestLedger})`
   );
 
   return highestLedger;
@@ -148,6 +184,13 @@ export async function startIndexer(): Promise<void> {
   console.log(
     `[indexer] Watching SAC contracts (${SAC_CONTRACT_IDS.length}): ${SAC_CONTRACT_IDS.join(", ")}`
   );
+  if (NFT_CONTRACT_IDS.length > 0) {
+    console.log(
+      `[indexer] Watching NFT contracts (${NFT_CONTRACT_IDS.length}): ${NFT_CONTRACT_IDS.join(", ")}`
+    );
+  } else {
+    console.log("[indexer] NFT auto-detection enabled (set NFT_CONTRACT_IDS for explicit watch)");
+  }
 
   startedAt = Date.now();
 
@@ -175,7 +218,7 @@ export async function startIndexer(): Promise<void> {
   // ── Polling loop ────────────────────────────────────────────────────────────
   while (true) {
     try {
-      const tip = await withRetry(getLatestLedger);
+      const tip    = await withRetry(getLatestLedger);
       const target = tip - TIP_LAG;
 
       if (currentLedger >= target) {
