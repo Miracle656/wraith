@@ -8,6 +8,8 @@ import {
   pruneOldTransfers,
 } from "./db";
 import { emitTransfer } from "./events";
+import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
+import { pollParallel } from "./indexer/parallel";
 
 // ─── SAC Contract IDs ─────────────────────────────────────────────────────────
 // The native XLM SAC address on mainnet and testnet respectively.
@@ -52,9 +54,10 @@ export function resolveSacContractIds(): string[] {
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
-const BATCH_SIZE = parseInt(process.env.EVENTS_BATCH_SIZE ?? "10000", 10);
-const SAC_CONTRACT_IDS = resolveSacContractIds();
+const POLL_INTERVAL_MS  = parseInt(process.env.POLL_INTERVAL_MS    ?? "6000",  10);
+const BATCH_SIZE        = parseInt(process.env.EVENTS_BATCH_SIZE   ?? "10000", 10);
+const INGEST_WORKERS    = parseInt(process.env.INGEST_WORKERS      ?? "1",     10);
+const SAC_CONTRACT_IDS  = resolveSacContractIds();
 
 // Stellar testnet RPC retains ~7 days ≈ 120 000 ledgers (at ~5s per ledger).
 // We cap the back-fill look-back so we never request a ledger that's already pruned.
@@ -104,16 +107,26 @@ async function pollOnce(
     return highestLedger;
   }
 
-  // Parse
+  // Parse token transfer events
   const records = parseEvents(events);
 
-  // Persist
+  // Persist token transfers
   const inserted = await upsertTransfers(records);
   totalIndexed += inserted;
 
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {
     records.forEach(emitTransfer);
+  }
+
+  // Log every event as a raw host-fn invocation for downstream consumers (#84)
+  const hostFnRecords = events
+    .map(raw => { try { return parseHostFnEvent(raw); } catch { return null; } })
+    .filter((r): r is HostFnRecord => r !== null);
+  if (hostFnRecords.length > 0) {
+    await upsertHostFnLogs(hostFnRecords).catch(err =>
+      console.error("[indexer] host-fn log error:", err),
+    );
   }
 
   await setLastIndexedLedger(highestLedger);
@@ -170,7 +183,20 @@ export async function startIndexer(): Promise<void> {
         continue;
       }
 
-      currentLedger = await pollOnce(currentLedger, target);
+      if (INGEST_WORKERS > 1 && SAC_CONTRACT_IDS.length > 1) {
+        // Parallel path: shard contracts across N workers for higher throughput (#83)
+        const { totalInserted, highestLedger } = await pollParallel(
+          SAC_CONTRACT_IDS,
+          currentLedger,
+          target,
+          BATCH_SIZE,
+          INGEST_WORKERS,
+        );
+        totalIndexed += totalInserted;
+        currentLedger = highestLedger;
+      } else {
+        currentLedger = await pollOnce(currentLedger, target);
+      }
 
       // Periodic data retention cleanup
       pollCycleCount++;

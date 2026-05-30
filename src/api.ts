@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
+import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 
@@ -495,6 +496,47 @@ export function createApp(): express.Application {
         next(err);
       }
     }
+  );
+
+  // ── GET /host-fn/:contractId ─────────────────────────────────────────────────
+  /**
+   * Query raw host-function invocation logs for a contract.
+   *
+   * Every contract event indexed by Wraith is stored here — not just SEP-41
+   * token events — so downstream consumers can interpret arbitrary contracts.
+   *
+   * Query params:
+   *   functionName  — filter by function name (e.g. "swap")
+   *   limit         — max rows (default 50, hard cap 200)
+   *   offset        — pagination offset (default 0)
+   */
+  app.get(
+    "/host-fn/:contractId",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { contractId } = req.params;
+        const functionName = req.query.functionName as string | undefined;
+        const limit  = parseIntParam(req.query.limit,  50);
+        const offset = parseIntParam(req.query.offset, 0);
+
+        const { total, logs } = await queryHostFnLogs({
+          contractId,
+          functionName,
+          limit,
+          offset,
+        });
+
+        res.json({
+          contractId,
+          total,
+          limit: Math.min(limit, 200),
+          offset,
+          logs,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
   );
 
   // ── 404 handler ──────────────────────────────────────────────────────────────

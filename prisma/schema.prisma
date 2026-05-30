@@ -59,6 +59,49 @@ model TokenTransfer {
   @@schema("wraith")
 }
 
+// ─── Host-function invocation log ────────────────────────────────────────────
+// One row per contract event — includes token events and all other contracts.
+// Allows downstream consumers to interpret events from arbitrary contracts.
+model HostFnLog {
+  id           Int      @id @default(autoincrement())
+
+  // The contract that emitted the event (C...)
+  contractId   String
+
+  // topics[0] decoded as a symbol string (e.g. "transfer", "swap", "deposit")
+  functionName String
+
+  // topics[1..n] serialised via scValToNative — BigInt values become strings
+  args         Json
+
+  // Event value serialised via scValToNative; null if the value is scvVoid
+  result       Json?
+
+  // Gas consumed by the invocation — populated externally when tx metadata is
+  // available; null otherwise
+  gasUsed      BigInt?
+
+  // Ledger sequence number where the event was emitted
+  ledger       Int
+
+  // UTC close time of the ledger
+  ledgerClosedAt DateTime
+
+  // Transaction hash (SHA-256 hex, no 0x prefix)
+  txHash       String
+
+  // Stellar RPC paging token — unique per event, used for deduplication
+  eventId      String   @unique
+
+  createdAt    DateTime @default(now())
+
+  @@index([contractId])
+  @@index([contractId, functionName])
+  @@index([ledger])
+  @@index([txHash])
+  @@schema("wraith")
+}
+
 // ─── Indexer State ────────────────────────────────────────────────────────────
 // Persists the last successfully indexed ledger so restarts resume cleanly.
 model IndexerState {
