@@ -159,6 +159,33 @@ describe("Transfer route handlers", () => {
       );
     });
 
+    it("forwards OData filter, select, and cursor params", async () => {
+      mockQueryTransfers.mockResolvedValue({
+        total: 1,
+        transfers: [makeTransfer({ amount: "10000000" })],
+        nextCursor: "cursor-1",
+      });
+
+      const res = await request(app)
+        .get(`/transfers/incoming/${ALICE}`)
+        .query({
+          $filter: "ledger gt 1000 and contains(contractId,'C')",
+          $select: "contractId,amount",
+          cursor: "cursor-0",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.nextCursor).toBe("cursor-1");
+      expect(mockQueryTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filter: "ledger gt 1000 and contains(contractId,'C')",
+          select: ["contractId", "amount"],
+          cursor: "cursor-0",
+        })
+      );
+      expect(res.body.transfers[0].displayAmount).toBe("1.0000000");
+    });
+
     it("passes fromDate and toDate to queryTransfers", async () => {
       mockQueryTransfers.mockResolvedValue({ total: 2, transfers: SEED_TRANSFERS.slice(14, 16) });
 
@@ -343,14 +370,14 @@ describe("Transfer route handlers", () => {
     });
 
     it("honours pagination params", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 20, transfers: [] });
+      mockQueryAllTransfers.mockResolvedValue({ total: 20, transfers: [], nextCursor: "cursor-2" });
 
       await request(app)
         .get(`/transfers/address/${ALICE}`)
-        .query({ limit: "10", offset: "5" });
+        .query({ limit: "10", offset: "5", cursor: "cursor-1", $select: "contractId,direction" });
 
       expect(mockQueryAllTransfers).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 10, offset: 5 })
+        expect.objectContaining({ limit: 10, offset: 5, cursor: "cursor-1", select: ["contractId", "direction"] })
       );
     });
 
