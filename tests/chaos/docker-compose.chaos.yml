@@ -24,6 +24,14 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      # Use the builder stage (npm ci without --omit=dev) so the prisma CLI
+      # is available. The production stage drops dev deps and the CMD runs
+      # `prisma migrate deploy` which fails when there are no migration files.
+      # The builder stage has all deps; we override the command below.
+      target: builder
+    # Override the Dockerfile CMD: the app's index.ts already runs
+    # `npx prisma db push` internally, so we just start the compiled app.
+    command: node dist/index.js
     container_name: wraith_chaos_indexer
     depends_on:
       db:
@@ -38,10 +46,10 @@ services:
     ports:
       - "3001:3001"
     # Healthcheck lets `docker compose up --wait` block until the HTTP server
-    # is accepting connections (after prisma db push completes).
+    # is accepting connections (covers prisma db push + Express listen).
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/healthz || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 60       # 60 × 5s = 5 min max (covers slow prisma push in CI)
-      start_period: 10s
+      retries: 60       # 60 × 5s = 5 min max
+      start_period: 15s
