@@ -1,7 +1,6 @@
 # Dedicated compose stack for the DB-restart chaos test.
 # Uses a separate container name and port (5433 / 3001) so it never
 # collides with a local development stack running on the default ports.
-# Note: no top-level 'version' key — obsolete in Compose v2+.
 
 services:
   # ── Postgres ──────────────────────────────────────────────────────────────────
@@ -33,9 +32,16 @@ services:
       DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
       DIRECT_DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
       STELLAR_NETWORK: testnet
-      # Fast poll cycle so the test completes in reasonable time
       POLL_INTERVAL_MS: "3000"
       EVENTS_BATCH_SIZE: "500"
       PORT: "3001"
     ports:
       - "3001:3001"
+    # Healthcheck lets `docker compose up --wait` block until the HTTP server
+    # is accepting connections (after prisma db push completes).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60       # 60 × 5s = 5 min max (covers slow prisma push in CI)
+      start_period: 10s

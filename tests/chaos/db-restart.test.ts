@@ -23,10 +23,11 @@ const COMPOSE_FILE = path.resolve(__dirname, "docker-compose.chaos.yml");
 const COMPOSE_CMD  = `docker compose -f "${COMPOSE_FILE}"`;
 const API_BASE     = "http://localhost:3001";
 
-// Phase 1: wait for /healthz (process alive, no DB needed)
-const HEALTHZ_TIMEOUT_MS      = 60_000;  // 1 min — container start + node boot
-// Phase 2: wait for first ledger indexed (DB connected + first poll done)
-const FIRST_LEDGER_TIMEOUT_MS = 180_000; // 3 min — prisma push + first RPC poll
+// docker compose up --wait already blocks until the wraith healthcheck passes,
+// so this is just a short fallback for the fetch-level check.
+const HEALTHZ_TIMEOUT_MS      = 30_000;  // 30s — should be instant after --wait
+// Phase 2: wait for first ledger indexed (first successful RPC poll + DB write)
+const FIRST_LEDGER_TIMEOUT_MS = 120_000; // 2 min — first poll after server is up
 const PAUSE_DURATION_MS       = 15_000;  // DB outage window
 const RECOVERY_TIMEOUT_MS     = 90_000;  // wait for indexer to advance past checkpoint
 const POLL_INTERVAL_MS        = 3_000;   // polling cadence
@@ -108,14 +109,18 @@ describe("Chaos: DB restart mid-ingest", () => {
     }
 
     // ── 1. Start the chaos stack ───────────────────────────────────────────────
-    console.log("[chaos] Building and starting containers…");
-    exec(`${COMPOSE_CMD} up -d --build`);
+    // --wait blocks until every service with a healthcheck reports healthy.
+    // The wraith service healthcheck polls /healthz, so this covers the full
+    // startup sequence: container boot → prisma db push → Express listen.
+    // Timeout is set via the healthcheck retries in docker-compose.chaos.yml
+    // (60 × 5s = 5 min max).
+    console.log("[chaos] Building and starting containers (waiting for healthy)…");
+    exec(`${COMPOSE_CMD} up -d --build --wait`);
     composeStarted = true;
+    console.log("[chaos] All services healthy.");
 
-    // ── 2a. Phase 1: wait for Node.js process to be alive ────────────────────
-    // /healthz returns 200 as soon as the Express server is up.
-    // It does NOT require a DB connection, so this completes quickly.
-    console.log("[chaos] Waiting for Wraith process to boot…");
+    // ── 2a. Phase 1: quick sanity-check that /healthz is reachable ───────────
+    console.log("[chaos] Confirming /healthz is reachable…");
     await waitUntil(
       async () => {
         const data = await fetchJson<{ ok: boolean }>("/healthz");
