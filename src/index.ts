@@ -5,6 +5,7 @@ import { createApp } from "./api";
 import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
+import { startWebhookWorker } from "./workers/webhooks";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -35,6 +36,9 @@ async function main() {
     console.log(`[wraith] API listening on http://localhost:${PORT}`);
     console.log(`[wraith] WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`);
   });
+
+  // ── Start webhook worker ───────────────────────────────────────────────────
+  startWebhookWorker();
 
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
