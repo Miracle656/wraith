@@ -209,6 +209,7 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
 export type AllTransfersQueryParams = {
   address: string;
   contractId?: string;
+  token?: string;
   fromLedger?: number;
   toLedger?: number;
   fromDate?: Date;
@@ -222,6 +223,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const {
     address,
     contractId,
+    token,
     fromLedger,
     toLedger,
     fromDate,
@@ -234,6 +236,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const where: Prisma.TokenTransferWhereInput = {
     OR: [{ toAddress: address }, { fromAddress: address }],
     ...(contractId ? { contractId } : {}),
+    ...(token ? { contractId: token } : {}),
     ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
       ? {

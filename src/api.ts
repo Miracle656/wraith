@@ -302,8 +302,6 @@ export function createApp(): express.Application {
    * Response:
    *   { total, limit, offset, transfers: [{ ...fields, direction }] }
    */
-  // ── PASTE THIS to replace the GET /transfers/address/:address handler in src/api.ts ──
-
   app.get(
     "/transfers/address/:address",
     async (req: Request, res: Response, next: NextFunction) => {
