@@ -1,9 +1,12 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
+import { queryHostFnLogs } from "./indexer/host-fn-log";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
+import { createAccountsRouter } from "./api/accounts";
+import { createWebhooksRouter } from "./api/webhooks";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -36,6 +39,11 @@ const withDisplay = <T extends { amount: string }>(t: T) => ({
   displayAmount: toDisplayAmount(t.amount),
 });
 
+function parseSelectQuery(value: unknown): string[] | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 
 // ── CSV utilities ─────────────────────────────────────────────────────────────
@@ -65,6 +73,12 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json());
   app.use(limiter);
+
+  // ── Accounts routes ───────────────────────────────────────────────────────────
+  app.use("/accounts", createAccountsRouter());
+
+  // ── Webhook subscription management ──────────────────────────────────────────
+  app.use("/webhooks", createWebhooksRouter());
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
@@ -212,7 +226,7 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset } = req.query;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -228,6 +242,9 @@ export function createApp(): express.Application {
           address,
           direction: "incoming",
           contractId: contractId as string | undefined,
+          filter: $filter as string | undefined,
+          select: parseSelectQuery($select),
+          cursor: cursor as string | undefined,
           fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
           toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
           fromDate: fromDateVal,
@@ -237,7 +254,17 @@ export function createApp(): express.Application {
           offset: off,
         });
 
-        res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+        res.json({
+          ...result,
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
+          limit: lim,
+          offset: off,
+        });
       } catch (err) {
         next(err);
       }
@@ -254,7 +281,7 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset } = req.query;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -270,6 +297,9 @@ export function createApp(): express.Application {
           address,
           direction: "outgoing",
           contractId: contractId as string | undefined,
+          filter: $filter as string | undefined,
+          select: parseSelectQuery($select),
+          cursor: cursor as string | undefined,
           fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
           toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
           fromDate: fromDateVal,
@@ -279,7 +309,17 @@ export function createApp(): express.Application {
           offset: off,
         });
 
-        res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+        res.json({
+          ...result,
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
+          limit: lim,
+          offset: off,
+        });
       } catch (err) {
         next(err);
       }
@@ -317,6 +357,9 @@ export function createApp(): express.Application {
           limit,
           offset,
           token,
+          cursor,
+          $filter,
+          $select,
         } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
@@ -345,6 +388,9 @@ export function createApp(): express.Application {
           address,
           contractId: contractId as string | undefined,
           token: token !== undefined ? String(token).trim() : undefined,
+          filter: $filter as string | undefined,
+          select: parseSelectQuery($select),
+          cursor: cursor as string | undefined,
           fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
           toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
           fromDate: fromDateVal,
@@ -356,7 +402,12 @@ export function createApp(): express.Application {
 
         res.json({
           ...result,
-          transfers: result.transfers.map(withDisplay),
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
           limit: lim,
           offset: off,
         });
@@ -417,16 +468,20 @@ export function createApp(): express.Application {
 
         // Add data rows
         for (const transfer of result.transfers) {
-          const displayAmount = toDisplayAmount(transfer.amount);
+          const t = transfer as Record<string, unknown>;
+          const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
+          const closedAt = t.ledgerClosedAt instanceof Date
+            ? t.ledgerClosedAt
+            : new Date(String(t.ledgerClosedAt ?? 0));
           csvLines.push(
             formatCSVRow([
-              transfer.ledgerClosedAt.toISOString(),
-              transfer.eventType,
-              transfer.fromAddress || "",
-              transfer.toAddress || "",
+              closedAt.toISOString(),
+              t.eventType,
+              t.fromAddress || "",
+              t.toAddress || "",
               displayAmount,
-              transfer.contractId,
-              transfer.ledger,
+              t.contractId,
+              t.ledger,
             ])
           );
         }
@@ -518,6 +573,135 @@ export function createApp(): express.Application {
             toDate: toDateVal?.toISOString() ?? null,
           },
           tokens,
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ── GET /host-fn/:contractId ─────────────────────────────────────────────────
+  /**
+   * Query raw host-function invocation logs for a contract.
+   *
+   * Every contract event indexed by Wraith is stored here — not just SEP-41
+   * token events — so downstream consumers can interpret arbitrary contracts.
+   *
+   * Query params:
+   *   functionName  — filter by function name (e.g. "swap")
+   *   limit         — max rows (default 50, hard cap 200)
+   *   offset        — pagination offset (default 0)
+   */
+  app.get(
+    "/host-fn/:contractId",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { contractId } = req.params;
+        const functionName = req.query.functionName as string | undefined;
+        const limit  = parseIntParam(req.query.limit,  50);
+        const offset = parseIntParam(req.query.offset, 0);
+
+        const { total, logs } = await queryHostFnLogs({
+          contractId,
+          functionName,
+          limit,
+          offset,
+        });
+
+        res.json({
+          contractId,
+          total,
+          limit: Math.min(limit, 200),
+          offset,
+          logs,
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ── GET /nfts/transfers ──────────────────────────────────────────────────────
+  /**
+   * Query CAP-46 NFT transfer events.
+   *
+   * Query params:
+   *   contract    — filter to a specific NFT contract (C...)
+   *   token_id    — filter to a specific token identifier
+   *   address     — filter to transfers where from OR to equals this address
+   *   fromLedger  — inclusive lower ledger bound
+   *   toLedger    — inclusive upper ledger bound
+   *   limit       — page size (max 200, default 50)
+   *   offset      — pagination offset (default 0)
+   *
+   * Response:
+   *   { total, limit, offset, transfers: [...] }
+   */
+  app.get(
+    "/nfts/transfers",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { contract, token_id, address, fromLedger, toLedger, limit, offset, cursor, $filter, $select } = req.query;
+        const lim = parseIntParam(limit, 50);
+        const off = parseIntParam(offset, 0);
+
+        const result = await queryNftTransfers({
+          contractId: contract as string | undefined,
+          tokenId: token_id as string | undefined,
+          address: address as string | undefined,
+          filter: $filter as string | undefined,
+          select: parseSelectQuery($select),
+          cursor: cursor as string | undefined,
+          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
+          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
+          limit: lim,
+          offset: off,
+        });
+
+        res.json({ ...result, limit: lim, offset: off });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ── GET /nfts/owners/:contract/:token_id ─────────────────────────────────────
+  /**
+   * Return the current owner of an NFT (the toAddress of its most recent transfer).
+   * Also includes any cached metadata for the token.
+   *
+   * Path params:
+   *   contract  — NFT contract address (C...)
+   *   token_id  — Token identifier
+   *
+   * Response:
+   *   { contract, token_id, owner, metadata: { name, tokenUri } | null }
+   */
+  app.get(
+    "/nfts/owners/:contract/:token_id",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { contract, token_id } = req.params;
+
+        const [owner, metadata] = await Promise.all([
+          getNftOwner(contract, token_id),
+          getNftMetadata(contract, token_id),
+        ]);
+
+        if (owner === null) {
+          res.status(404).json({
+            error: "Token not found. No transfers indexed for this contract/token_id.",
+          });
+          return;
+        }
+
+        res.json({
+          contract,
+          token_id,
+          owner,
+          metadata: metadata
+            ? { name: metadata.name, tokenUri: metadata.tokenUri }
+            : null,
         });
       } catch (err) {
         next(err);

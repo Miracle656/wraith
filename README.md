@@ -11,17 +11,41 @@ Horizon indexes Classic Stellar operations (payments, path payments) but does **
 
 ***
 
-## Architecture
+## How It Works
 
+```mermaid
+flowchart TD
+    SN["☆ Stellar Network\n(Soroban ledgers, ~5 s each)"]
+    RPC["Soroban RPC\ngetEvents"]
+    SAFE["fetchEventsSafe\nrpc.ts"]
+    BISECT{{"XDR decode\nerror?"}}
+    SKIP["Skip bad ledger\nlog warning & advance"]
+    DECODE["parseEvents\nSEP-41 / CAP-67 normalisation\nScVal → JS native\ndecoder.ts"]
+    DB[("Postgres\nTokenTransfer table\nupsert on eventId\nPrisma — db.ts")]
+    STATE["IndexerState row\nlastIndexedLedger"]
+    HTTP["Express REST API\napi.ts"]
+    WS["WebSocket stream\n/subscribe/:address\nws.ts"]
+    C1["REST Clients\ncurl · SDK · dApp"]
+    C2["Real-time Clients\nbrowser · bot"]
+
+    SN -->|ledger stream| RPC
+    RPC -->|raw contract events| SAFE
+    SAFE --> BISECT
+    BISECT -- yes --> SKIP
+    BISECT -- no --> DECODE
+    SKIP -->|advance cursor| STATE
+    DECODE -->|TransferRecord batch| DB
+    DB --> STATE
+    DB --> HTTP
+    DB --> WS
+    HTTP --> C1
+    WS --> C2
 ```
-Stellar RPC getEvents (polling loop)
-    ↓
-Parser (ScVal decoding, CAP-67 normalisation)
-    ↓
-Postgres (Prisma ORM — indexed by toAddress, fromAddress, contractId, ledger)
-    ↓
-Express REST API (GET /transfers/incoming/:address, etc.)
-```
+
+`startIndexer()` runs an infinite loop, calling `getLatestLedger()` every `POLL_INTERVAL_MS` (default 6 s, ≈ 1 ledger). Each cycle calls `fetchEventsSafe`, which requests a batch of Soroban contract events from the RPC via `getEvents`. `parseEvents` then decodes each raw `ScVal` topic/value pair into a typed `TransferRecord` covering `transfer`, `mint`, `burn`, and `clawback` event types as defined by SEP-41 / CAP-67. `upsertTransfers` bulk-inserts the records via Prisma using `skipDuplicates: true` on `eventId`, making re-indexing overlapping ledger ranges idempotent. The Express REST API and WebSocket server both read exclusively from Postgres, keeping the ingestion and query paths fully independent.
+
+> [!NOTE]
+> **Bisection strategy for Protocol 22 XDR errors** — Stellar protocol upgrades occasionally introduce new XDR types that older SDK versions cannot decode (e.g. `ScAddressType` value 3 added in Protocol 22). When `fetchEventsSafe` encounters an XDR decode error on a multi-ledger batch, it **bisects** the ledger range recursively — splitting it into two halves and retrying each — until it isolates the single problematic ledger. That ledger is then skipped with a warning log, and indexing continues from the next ledger. This ensures one bad ledger cannot stall the entire indexer.
 
 ***
 
@@ -103,6 +127,8 @@ docker-compose up --build
 
 ## API Documentation
 
+### REST API Specification
+
 A complete, production-grade OpenAPI 3.0 specification is available for all Wraith REST endpoints.
 
 - **[openapi.yaml](./openapi.yaml)**
@@ -112,6 +138,192 @@ You can use this file to explore the API, generate client SDKs, or import it int
 - [Swagger UI](https://swagger.io/tools/swagger-ui/) or [Swagger Editor](https://editor.swagger.io/)
 - [Postman](https://www.postman.com/)
 - [Redoc](https://redocly.com/redoc/)
+
+### TypeScript / Node.js Library Reference
+
+Browse the complete generated API reference for Wraith's public modules:
+
+- **[TypeDoc API Reference](https://miracle656.github.io/wraith/)**
+
+This includes full JSDoc documentation for all modules, types, and functions.
+
+***
+
+## Usage Examples
+
+Replace `GABC…WXYZ` with a real Stellar address and `http://localhost:3000` with your server's base URL.
+
+### `GET /status` — Health check
+
+```bash
+# curl
+curl http://localhost:3000/status
+```
+
+```js
+// fetch
+const res = await fetch("http://localhost:3000/status");
+const data = await res.json();
+console.log(data);
+
+// Expected response
+// {
+//   "ok": true,
+//   "lastIndexedLedger": 51234567,
+//   "latestLedger": 51234568,
+//   "lagLedgers": 1,
+//   "startedAt": "2025-01-01T00:00:00.000Z",
+//   "uptimeSeconds": 3600,
+//   "totalIndexed": 15000
+// }
+```
+
+***
+
+### `GET /transfers/incoming/:address` — Incoming transfers
+
+```bash
+# curl — all incoming transfers
+curl "http://localhost:3000/transfers/incoming/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# curl — filter by date window and page size
+curl "http://localhost:3000/transfers/incoming/GABCDEFGHIJKLMNOPQRSTUVWXYZ?fromDate=2025-01-01T00:00:00Z&limit=10"
+```
+
+```js
+// fetch
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const res = await fetch(
+  `http://localhost:3000/transfers/incoming/${ADDRESS}?fromDate=2025-01-01T00:00:00Z&limit=10`
+);
+const data = await res.json();
+console.log(data);
+```
+
+```js
+// axios
+import axios from "axios";
+
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const { data } = await axios.get(
+  `http://localhost:3000/transfers/incoming/${ADDRESS}`,
+  {
+    params: {
+      fromDate: "2025-01-01T00:00:00Z",
+      limit: 10,
+    },
+  }
+);
+console.log(data);
+
+// Expected response
+// {
+//   "total": 42,
+//   "limit": 10,
+//   "offset": 0,
+//   "transfers": [
+//     {
+//       "id": 12345,
+//       "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "eventType": "transfer",
+//       "fromAddress": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "toAddress":   "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "amount":        "10000000000",
+//       "displayAmount": "1000.0000000",
+//       "ledger": 51234567,
+//       "ledgerClosedAt": "2025-01-01T12:00:00Z",
+//       "txHash": "0000000000000000000000000000000000000000000000000000000000000000",
+//       "eventId": "12345-1"
+//     }
+//   ]
+// }
+```
+
+***
+
+### `GET /transfers/address/:address` — All transfers (sent & received, merged)
+
+```bash
+# curl
+curl "http://localhost:3000/transfers/address/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+```
+
+```js
+// fetch — with optional token-contract filter
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const CONTRACT = "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B";
+const res = await fetch(
+  `http://localhost:3000/transfers/address/${ADDRESS}?contractId=${CONTRACT}&limit=20`
+);
+const data = await res.json();
+console.log(data);
+
+// OData-style filters and projections are also supported:
+// `http://localhost:3000/transfers/address/${ADDRESS}?$filter=ledger gt 1000 and contains(contractId,'CB64')&$select=contractId,amount&cursor=...`
+
+// Expected response  (same shape as /transfers/incoming — adds "direction" per row)
+// {
+//   "total": 85,
+//   "limit": 20,
+//   "offset": 0,
+//   "transfers": [
+//     {
+//       "id": 12345,
+//       "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "eventType": "transfer",
+//       "fromAddress": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "toAddress":   "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//       "amount":        "10000000000",
+//       "displayAmount": "1000.0000000",
+//       "ledger": 51234567,
+//       "ledgerClosedAt": "2025-01-01T12:00:00Z",
+//       "txHash": "0000000000000000000000000000000000000000000000000000000000000000",
+//       "eventId": "12345-1",
+//       "direction": "incoming"
+//     }
+//   ]
+// }
+```
+
+***
+
+### `GET /summary/:address` — Token summary
+
+```bash
+# curl
+curl "http://localhost:3000/summary/GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+```
+
+```js
+// fetch — narrow to a date window
+const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const res = await fetch(
+  `http://localhost:3000/summary/${ADDRESS}?fromDate=2025-01-01T00:00:00Z&toDate=2025-01-31T23:59:59Z`
+);
+const data = await res.json();
+console.log(data);
+
+// Expected response
+// {
+//   "address": "GABCDEFGHIJKLMNOPQRSTUVWXYZ",
+//   "window": {
+//     "fromDate": "2025-01-01T00:00:00Z",
+//     "toDate":   "2025-01-31T23:59:59Z"
+//   },
+//   "tokens": [
+//     {
+//       "contractId":          "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+//       "totalReceived":       "50000000000",
+//       "totalSent":           "10000000000",
+//       "netFlow":             "40000000000",
+//       "displayTotalReceived": "5000.0000000",
+//       "displayTotalSent":     "1000.0000000",
+//       "displayNetFlow":       "4000.0000000",
+//       "txCount": 42
+//     }
+//   ]
+// }
+```
 
 ***
 
@@ -192,6 +404,8 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `STELLAR_NETWORK`     | —             | `testnet` or `mainnet`. Testnet auto-configures the default RPC URL.                          |
 | `SOROBAN_RPC_URL`     | *(see below)* | Soroban RPC endpoint. Overrides any network default. Required when `STELLAR_NETWORK=mainnet`. |
 | `STELLAR_RPC_URL`     | —             | Backward-compat alias for `SOROBAN_RPC_URL`. Used when `SOROBAN_RPC_URL` is unset.            |
+| `HORIZON_URL`         | —             | Optional Horizon endpoint used as a fallback source when RPC is unhealthy.                    |
+| `HORIZON_EVENTS_PATH`  | `/events`     | Horizon contract-events path used by the fallback source.                                      |
 | `START_LEDGER`        | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
 | `POLL_INTERVAL_MS`    | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
@@ -208,6 +422,10 @@ Wraith resolves the RPC endpoint in this order and fails fast at startup if noth
 3. `STELLAR_NETWORK=testnet` → `https://soroban-testnet.stellar.org` (free public endpoint)
 4. `STELLAR_NETWORK=mainnet` → **error**: requires explicit `SOROBAN_RPC_URL`
 5. Nothing set → **error**: clear message explaining what to configure
+
+### Indexer Source Fallback
+
+If `HORIZON_URL` is set, the indexer checks the RPC source first and switches to Horizon when the RPC health check fails. It switches back automatically once RPC becomes healthy again.
 
 ### Mainnet RPC Providers
 
@@ -240,6 +458,88 @@ From the [CAP-67 discussion](https://github.com/stellar/stellar-protocol/discuss
 > *"We've made that mistake before with Horizon, by solving all indexing problems at the Horizon layer which encouraged folks to build on Horizon rather than innovate on new and or better data sources."*
 
 Wraith is the third-party solution that SDF's architecture intentionally encourages.
+
+***
+
+***
+
+## Command-Line Interface (CLI)
+
+Wraith includes a lightweight, powerful command-line interface shipped as `@veil/wraith-cli`. It allows developers to query transfer histories, get aggregate token summaries, and stream live Stellar Soroban events directly in their terminal without writing boilerplate.
+
+You can run it instantly without installation using `npx`:
+
+```bash
+npx @veil/wraith-cli --help
+```
+
+### Configuration
+By default, the CLI connects to the public Wraith instance (`https://api.wraith.veil.co`). You can point it to a self-hosted instance or a local development server by setting the `WRAITH_URL` environment variable:
+
+```bash
+export WRAITH_URL="http://localhost:3000"
+```
+
+### Commands & Examples
+
+#### 1. Query transfers
+Retrieve transfer histories (transfers, mints, burns, clawbacks) for any Stellar address:
+
+```bash
+# Get all transfers for a specific account (pretty ASCII table by default)
+npx @veil/wraith-cli transfers --account GABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# Filter transfers to a specific token contract
+npx @veil/wraith-cli transfers --account GABCDEFGHIJKLMNOPQRSTUVWXYZ --contract CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B
+
+# Retrieve only incoming transfers with custom pagination and limit
+npx @veil/wraith-cli transfers --account GABCDEFGHIJKLMNOPQRSTUVWXYZ --direction incoming --limit 10 --offset 0
+
+# Emit parseable JSON for scripts or piping
+npx @veil/wraith-cli transfers --account GABCDEFGHIJKLMNOPQRSTUVWXYZ --json
+```
+
+#### 2. Account summaries
+Get a grouped summary of token balances, incoming/outgoing flows, and transaction counts:
+
+```bash
+# View aggregate token statistics for an address
+npx @veil/wraith-cli summary GABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# Narrow down the summary to a specific timeframe
+npx @veil/wraith-cli summary GABCDEFGHIJKLMNOPQRSTUVWXYZ --from-date 2025-01-01T00:00:00Z --to-date 2025-01-31T23:59:59Z
+
+# Get raw JSON output
+npx @veil/wraith-cli summary GABCDEFGHIJKLMNOPQRSTUVWXYZ --json
+```
+
+#### 3. Live watch (Streaming)
+Establish a real-time WebSocket connection to stream new transfers as soon as they are indexed by the server:
+
+```bash
+# Stream all incoming/outgoing transfers for a specific address in real time
+npx @veil/wraith-cli watch GABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# Stream live events filtered by a specific token contract
+npx @veil/wraith-cli watch GABCDEFGHIJKLMNOPQRSTUVWXYZ --contract CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B
+
+# Output live streams as a sequence of raw JSON lines (perfect for logging/scripting)
+npx @veil/wraith-cli watch GABCDEFGHIJKLMNOPQRSTUVWXYZ --json
+```
+
+#### 4. Webhook Management
+Manage real-time webhook subscriptions:
+
+```bash
+# List registered webhooks
+npx @veil/wraith-cli webhooks list
+
+# Register a new webhook url subscribing to specific events
+npx @veil/wraith-cli webhooks create https://your-app.com/webhook --events transfer,mint
+
+# Delete a webhook registration
+npx @veil/wraith-cli webhooks delete <webhook-id>
+```
 
 ***
 

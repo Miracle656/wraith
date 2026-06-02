@@ -1,0 +1,53 @@
+# Dedicated compose stack for the DB-restart chaos test.
+# Uses a separate container name and port (5433 / 3001) so it never
+# collides with a local development stack running on the default ports.
+
+services:
+  # ── Postgres ──────────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: wraith_chaos_db
+    environment:
+      POSTGRES_USER: wraith
+      POSTGRES_PASSWORD: wraith
+      POSTGRES_DB: wraith
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wraith"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ── Wraith indexer + API ───────────────────────────────────────────────────────
+  wraith:
+    build:
+      context: ../..
+      # Use the chaos-specific Debian-based Dockerfile to avoid the Prisma +
+      # alpine musl OpenSSL detection bug that crashes `prisma db push` on
+      # startup. The project's prisma/schema.prisma declares
+      # binaryTargets = ["native", "debian-openssl-3.0.x"] which works natively
+      # on Debian. The chaos Dockerfile keeps all dev deps (prisma CLI) so the
+      # app's runtime `npx prisma db push` works.
+      dockerfile: tests/chaos/Dockerfile.chaos
+    container_name: wraith_chaos_indexer
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
+      DIRECT_DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
+      STELLAR_NETWORK: testnet
+      POLL_INTERVAL_MS: "3000"
+      EVENTS_BATCH_SIZE: "500"
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    # Healthcheck lets `docker compose up --wait` block until the HTTP server
+    # is accepting connections (covers prisma db push + Express listen).
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60       # 60 × 5s = 5 min max
+      start_period: 15s

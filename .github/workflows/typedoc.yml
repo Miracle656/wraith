@@ -1,0 +1,28 @@
+name: TypeDoc
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish-docs:
+    name: Generate & publish API docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci || npm install
+      - run: npx prisma generate
+      - run: npx typedoc
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs

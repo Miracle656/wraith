@@ -1,0 +1,162 @@
+name: Canary Deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy as canary'
+        required: false
+        default: ''
+
+env:
+  REGISTRY: ghcr.io/miracle656/wraith
+  SERVICE_NAME: wraith
+  CANARY_WEIGHT: 10
+  OBSERVATION_WINDOW_SECONDS: 300
+  POLL_INTERVAL_SECONDS: 30
+  MAX_ERROR_RATE_PCT: 5
+  MAX_LATENCY_P99_MS: 2000
+  MIN_HEALTH_CHECK_PCT: 95
+
+jobs:
+  # ── Build and push Docker image ─────────────────────────────────────────────
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ── Deploy canary slice (10% traffic) ──────────────────────────────────────
+  canary-deploy:
+    name: Deploy canary (10%)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [[ -z "$TAG" ]]; then
+            TAG="${{ needs.build.outputs.image_tag }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Using image tag: ${TAG}"
+
+      - name: Deploy canary
+        env:
+          CANARY_WEIGHT: ${{ env.CANARY_WEIGHT }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          REGISTRY: ${{ env.REGISTRY }}
+        run: |
+          chmod +x ops/canary/deploy.sh
+          ops/canary/deploy.sh "${{ steps.tag.outputs.tag }}"
+
+  # ── Monitor canary for stability window ────────────────────────────────────
+  canary-monitor:
+    name: Monitor canary metrics
+    needs: canary-deploy
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      stable: ${{ steps.monitor.outputs.stable }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Monitor canary
+        id: monitor
+        env:
+          CANARY_URL: ${{ secrets.CANARY_URL }}
+          MAX_ERROR_RATE_PCT: ${{ env.MAX_ERROR_RATE_PCT }}
+          MAX_LATENCY_P99_MS: ${{ env.MAX_LATENCY_P99_MS }}
+          MIN_HEALTH_CHECK_PCT: ${{ env.MIN_HEALTH_CHECK_PCT }}
+          POLL_INTERVAL_SECONDS: ${{ env.POLL_INTERVAL_SECONDS }}
+          OBSERVATION_WINDOW_SECONDS: ${{ env.OBSERVATION_WINDOW_SECONDS }}
+        run: |
+          chmod +x ops/canary/monitor.sh
+          if ops/canary/monitor.sh; then
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+  # ── Promote canary to 100% when stable ────────────────────────────────────
+  promote:
+    name: Promote canary to stable
+    needs: canary-monitor
+    if: needs.canary-monitor.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote to stable
+        env:
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+        run: |
+          chmod +x ops/canary/promote.sh
+          ops/canary/promote.sh
+
+      - name: Deployment summary
+        run: |
+          echo "### Canary Promoted" >> "$GITHUB_STEP_SUMMARY"
+          echo "Canary successfully promoted to 100% stable traffic." >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Auto-rollback if canary monitor fails ─────────────────────────────────
+  rollback:
+    name: Rollback canary
+    needs: canary-monitor
+    if: failure() && needs.canary-monitor.result == 'failure'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rollback to previous stable
+        env:
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+        run: |
+          chmod +x ops/canary/rollback.sh
+          ops/canary/rollback.sh
+
+      - name: Rollback summary
+        run: |
+          echo "### Canary Rolled Back" >> "$GITHUB_STEP_SUMMARY"
+          echo "Canary failed health/metrics checks and was automatically rolled back." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the workflow
+        run: exit 1
