@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wraith_test_db
+    environment:
+      POSTGRES_USER: wraith
+      POSTGRES_PASSWORD: wraith
+      POSTGRES_DB: wraith_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wraith -d wraith_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  wraith:
+    build: .
+    container_name: wraith_test_api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith_test
+      DIRECT_DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith_test
+      NODE_ENV: test
+      PORT: 3000
+      RATE_LIMIT_MAX: 1000
+      SKIP_INDEXER: "true"
+    ports:
+      - "3300:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

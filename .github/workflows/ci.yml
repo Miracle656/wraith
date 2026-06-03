@@ -21,3 +21,24 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
       - run: npm test --if-present
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci || npm install
+      - run: npx prisma generate
+      - run: docker compose -f docker-compose.test.yml up -d --build
+      - run: npm run test:integration
+        env:
+          DATABASE_URL: postgresql://wraith:wraith@localhost:55432/wraith_test
+          DIRECT_DATABASE_URL: postgresql://wraith:wraith@localhost:55432/wraith_test
+          INTEGRATION_API_URL: http://localhost:3300
+      - name: Tear down integration stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

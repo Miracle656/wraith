@@ -8,28 +8,39 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest --runInBand",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "jest --watch",
+    "test:chaos": "jest --runInBand --testPathPatterns=tests/chaos --testTimeout=300000 --config=jest.chaos.config.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts"
   },
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
     "roots": [
-      "<rootDir>/src"
+      "<rootDir>/src",
+      "<rootDir>/tests"
     ],
     "testMatch": [
-      "**/__tests__/**/*.test.ts"
+      "**/__tests__/**/*.test.ts",
+      "**/tests/**/*.test.ts"
     ],
+    "transform": {
+      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+    },
     "moduleFileExtensions": [
       "ts",
       "js",
       "json"
     ],
-    "clearMocks": true
+    "clearMocks": true,
+    "transform": {
+      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+    }
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
@@ -48,11 +59,12 @@
     "@types/node": "^20.11.24",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
-    "jest": "^30.3.0",
+    "jest": "^30.4.2",
     "prisma": "^5.10.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-node-dev": "^2.0.0",
+    "fast-check": "^3.22.0",
     "typedoc": "^0.28.19",
     "typescript": "^5.4.2"
   }

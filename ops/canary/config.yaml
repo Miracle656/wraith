@@ -1,0 +1,35 @@
+canary:
+  # Initial traffic slice routed to canary build
+  initial_weight: 10
+
+  # Stable/production traffic weight
+  stable_weight: 90
+
+  # Observation window before promotion decision (seconds)
+  observation_window_seconds: 300
+
+  # How often to poll metrics (seconds)
+  poll_interval_seconds: 30
+
+thresholds:
+  # Maximum acceptable 5xx error rate (percentage)
+  max_error_rate_pct: 5
+
+  # Maximum acceptable p99 latency (milliseconds)
+  max_latency_p99_ms: 2000
+
+  # Minimum health-check success rate (percentage)
+  min_health_check_pct: 95
+
+health_check:
+  endpoint: /healthz
+  interval_seconds: 15
+  timeout_seconds: 5
+  failure_threshold: 3
+
+rollback:
+  # Automatically rollback when thresholds are breached
+  auto_rollback: true
+
+  # Keep previous stable image tag for rollback
+  retain_previous_image: true

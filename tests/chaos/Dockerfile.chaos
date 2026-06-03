@@ -1,0 +1,34 @@
+# Chaos-test-only Dockerfile.
+# ─────────────────────────────
+# Uses node:20-slim (Debian) instead of the project's node:20-alpine to
+# avoid the Prisma + alpine musl OpenSSL detection issue, which makes
+# `prisma db push` crash on startup with:
+#   prisma:warn Prisma failed to detect the libssl/openssl version to use,
+#   Defaulting to "openssl-1.1.x".
+#   Error: Command failed: npx prisma db push --accept-data-loss
+#
+# The project's prisma/schema.prisma declares
+#   binaryTargets = ["native", "debian-openssl-3.0.x"]
+# which works natively on Debian. Keeps all dev deps (prisma CLI) so the
+# app's `npx prisma db push` runs without an extra install round-trip.
+
+FROM node:20-slim
+
+# OpenSSL 3 runtime is needed by the Prisma query engine.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates wget \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install all deps (including prisma CLI for db push at runtime)
+COPY package*.json ./
+RUN npm ci
+
+# Generate Prisma client + compile TypeScript
+COPY prisma ./prisma
+RUN npx prisma generate
+COPY . .
+RUN npm run build
+
+CMD ["node", "dist/index.js"]
