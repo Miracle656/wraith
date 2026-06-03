@@ -7,7 +7,8 @@
     "src/ws.ts",
     "src/decoder.ts",
     "src/events.ts",
-    "src/indexer.ts"
+    "src/indexer.ts",
+    "src/ingester/nft.ts"
   ],
   "out": "docs",
   "theme": "default",
@@ -18,5 +19,19 @@
   "excludeExternals": true,
   "hideGenerator": false,
   "sort": "source-order",
-  "searchInComments": true
+  "searchInComments": true,
+  "highlightLanguages": [
+    "bash",
+    "console",
+    "css",
+    "html",
+    "javascript",
+    "json",
+    "jsonc",
+    "markdown",
+    "mermaid",
+    "sql",
+    "typescript",
+    "yaml"
+  ]
 }
