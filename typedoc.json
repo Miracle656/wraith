@@ -18,5 +18,19 @@
   "excludeExternals": true,
   "hideGenerator": false,
   "sort": "source-order",
-  "searchInComments": true
+  "searchInComments": true,
+  "highlightLanguages": [
+    "bash",
+    "console",
+    "css",
+    "html",
+    "javascript",
+    "json",
+    "jsonc",
+    "markdown",
+    "mermaid",
+    "sql",
+    "typescript",
+    "yaml"
+  ]
 }

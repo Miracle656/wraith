@@ -68,7 +68,7 @@ cp .env.example .env
 
 **Testnet setup** (quick start):
 
-```env
+```bash
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="testnet"
 # SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
@@ -81,7 +81,7 @@ PORT=3000
 
 **Mainnet setup** (production):
 
-```env
+```bash
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="mainnet"
 # Required on mainnet — no free public Soroban RPC exists

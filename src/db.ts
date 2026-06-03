@@ -169,7 +169,7 @@ export type SummaryQueryParams = {
   toDate?: Date;
 };
 
-type SummaryRow = {
+export type SummaryRow = {
   contractId: string;
   totalReceived: string; // NUMERIC cast to TEXT
   totalSent: string;     // NUMERIC cast to TEXT
