@@ -15,13 +15,29 @@ import { createOpaMiddleware } from "../middleware/opa";
 
 type MockOpaResult = { allow: boolean; deny_reason?: string; deny_rule?: string };
 
-let mockOpaResult: MockOpaResult = { allow: true };
-let opaRequestSpy: jest.Mock;
+var mockOpaResult: MockOpaResult = { allow: true };
+var mockOpaError: Error | null = null;
+var opaRequestSpy: jest.Mock;
 
 jest.mock("http", () => {
   const actual = jest.requireActual<typeof http>("http");
 
-  opaRequestSpy = jest.fn((_opts, callback) => {
+  opaRequestSpy = jest.fn((opts: http.RequestOptions, callback?: (res: http.IncomingMessage) => void) => {
+    if (opts?.hostname !== "opa") {
+      return actual.request(opts, callback);
+    }
+
+    if (mockOpaError) {
+      return {
+        on: (event: string, handler: (err: Error) => void) => {
+          if (event === "error") setImmediate(() => handler(mockOpaError as Error));
+          return undefined;
+        },
+        write: jest.fn(),
+        end:   jest.fn(),
+      };
+    }
+
     // Build a fake IncomingMessage
     const fakeRes = new EventEmitter() as NodeJS.ReadableStream & { statusCode: number };
     (fakeRes as { statusCode: number }).statusCode = 200;
@@ -33,7 +49,7 @@ jest.mock("http", () => {
       (fakeRes as EventEmitter).emit("end");
     });
 
-    if (typeof callback === "function") callback(fakeRes);
+    if (typeof callback === "function") callback(fakeRes as http.IncomingMessage);
 
     return {
       on:    jest.fn(),
@@ -60,6 +76,7 @@ function makeApp(overrides = {}) {
 describe("createOpaMiddleware", () => {
   beforeEach(() => {
     mockOpaResult = { allow: true };
+    mockOpaError = null;
     jest.clearAllMocks();
   });
 
@@ -124,16 +141,7 @@ describe("createOpaMiddleware", () => {
   });
 
   it("returns 503 when OPA is unreachable", async () => {
-    (opaRequestSpy as jest.Mock).mockImplementationOnce((_opts: unknown, _callback: unknown) => {
-      const fakeReq = {
-        on: (event: string, handler: (err: Error) => void) => {
-          if (event === "error") setImmediate(() => handler(new Error("ECONNREFUSED")));
-        },
-        write: jest.fn(),
-        end:   jest.fn(),
-      };
-      return fakeReq;
-    });
+    mockOpaError = new Error("ECONNREFUSED");
 
     const res = await supertest(makeApp()).get("/protected");
     expect(res.status).toBe(503);
