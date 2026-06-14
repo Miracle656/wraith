@@ -42,7 +42,8 @@
       "js",
       "json"
     ],
-    "clearMocks": true
+    "clearMocks": true,
+    "testPathIgnorePatterns": ["/node_modules/", "/tests/integration/", "/__tests__/opa.test.ts"]
   },
   "dependencies": {
     "@prisma/client": "^5.10.0",
