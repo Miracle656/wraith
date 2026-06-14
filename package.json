@@ -30,7 +30,12 @@
       "**/tests/**/*.test.ts"
     ],
     "transform": {
-      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.test.json"
+        }
+      ]
     },
     "moduleFileExtensions": [
       "ts",
@@ -57,13 +62,14 @@
     "@types/node": "^20.11.24",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
+    "fast-check": "^3.22.0",
     "jest": "^30.4.2",
     "prisma": "^5.10.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-node-dev": "^2.0.0",
-    "fast-check": "^3.22.0",
     "typedoc": "^0.28.19",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "vitest": "^4.1.8"
   }
 }
