@@ -217,6 +217,7 @@ export type TransferQueryParams = {
   address: string;
   direction: "incoming" | "outgoing";
   contractId?: string;
+  token?: string;
   filter?: string;
   select?: string[];
   cursor?: string;
@@ -234,6 +235,7 @@ export async function queryTransfers(params: TransferQueryParams) {
     address,
     direction,
     contractId,
+    token,
     filter,
     select,
     cursor,
@@ -249,6 +251,7 @@ export async function queryTransfers(params: TransferQueryParams) {
   const baseWhere: Prisma.TokenTransferWhereInput = {
     ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
+    ...(token ? { contractId: token } : {}),
     ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
       ? {
