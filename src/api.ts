@@ -438,7 +438,7 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType } = req.query;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, token } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -447,10 +447,21 @@ export function createApp(): express.Application {
         const eventTypes = parseEventTypes(eventType, res);
         if (eventTypes === null) return;
 
+        if (token !== undefined) {
+          const tokenStr = String(token).trim();
+          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
+            res.status(400).json({
+              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
+            });
+            return;
+          }
+        }
+
         // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
         const result = await queryAllTransfers({
           address,
           contractId: contractId as string | undefined,
+          token: token !== undefined ? String(token).trim() : undefined,
           fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
           toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
           fromDate: fromDateVal,
