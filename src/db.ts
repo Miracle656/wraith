@@ -13,18 +13,27 @@ function toDisplayAmount(amount: string): string {
   return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
 }
 
+import { withReadReplicas } from "./db/router";
+
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
+const replicaUrls = process.env.DATABASE_REPLICAS
+  ? process.env.DATABASE_REPLICAS.split(",").map((s) => s.trim()).filter(Boolean)
+  : [];
+
 export const prisma =
   globalForPrisma.prisma ??
-  new PrismaClient({
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["query", "warn", "error"]
-        : ["warn", "error"],
-  });
+  withReadReplicas(
+    new PrismaClient({
+      log:
+        process.env.NODE_ENV === "development"
+          ? ["query", "warn", "error"]
+          : ["warn", "error"],
+    }),
+    { replicaUrls }
+  );
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
