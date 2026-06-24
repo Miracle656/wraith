@@ -181,3 +181,17 @@ model IndexerState {
 
   @@schema("wraith")
 }
+
+// ─── Partition Retention Runs ───────────────────────────────────────────────
+model RetentionJobRun {
+  id             Int      @id @default(autoincrement())
+  startedAt      DateTime @default(now())
+  finishedAt     DateTime @updatedAt
+  compressed     Int      @default(0)
+  archived       Int      @default(0)
+  reclaimedBytes BigInt   @default(0)
+  skipped        Int      @default(0)
+  status         String   @default("completed")
+
+  @@schema("wraith")
+}
