@@ -43,10 +43,12 @@ async function main() {
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
   // so the API stays responsive while indexing happens concurrently.
-  startIndexer().catch((err) => {
-    console.error("[wraith] Indexer crashed — exiting:", err);
-    process.exit(1);
-  });
+  if (process.env.SKIP_INDEXER !== "true") {
+    startIndexer().catch((err) => {
+      console.error("[wraith] Indexer crashed — exiting:", err);
+      process.exit(1);
+    });
+  }
 }
 
 main();

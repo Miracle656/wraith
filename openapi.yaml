@@ -23,7 +23,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                type: object  
                 required: [ok, uptime]
                 properties:
                   ok:

@@ -16,12 +16,20 @@ import { createOpaMiddleware } from "../middleware/opa";
 type MockOpaResult = { allow: boolean; deny_reason?: string; deny_rule?: string };
 
 let mockOpaResult: MockOpaResult = { allow: true };
-let opaRequestSpy: jest.Mock;
+// var (not let) so the declaration is hoisted without TDZ — jest.mock factories run
+// before let/const initialisers, causing a ReferenceError when let is used.
+var opaRequestSpy: jest.Mock; // eslint-disable-line no-var
 
 jest.mock("http", () => {
   const actual = jest.requireActual<typeof http>("http");
 
-  opaRequestSpy = jest.fn((_opts, callback) => {
+  opaRequestSpy = jest.fn((opts, callback) => {
+    // Only intercept OPA requests; pass through everything else (e.g. supertest connections)
+    const hostname = typeof opts === "string" ? new URL(opts).hostname : opts?.hostname;
+    if (hostname !== "opa") {
+      return actual.request(opts, callback);
+    }
+
     // Build a fake IncomingMessage
     const fakeRes = new EventEmitter() as NodeJS.ReadableStream & { statusCode: number };
     (fakeRes as { statusCode: number }).statusCode = 200;
@@ -124,15 +132,17 @@ describe("createOpaMiddleware", () => {
   });
 
   it("returns 503 when OPA is unreachable", async () => {
-    (opaRequestSpy as jest.Mock).mockImplementationOnce((_opts: unknown, _callback: unknown) => {
-      const fakeReq = {
+    const actual = jest.requireActual<typeof http>("http");
+    // Supertest's connection comes first; pass it through, then intercept the OPA call
+    (opaRequestSpy as jest.Mock).mockImplementationOnce((opts: unknown, callback: unknown) => {
+      (opaRequestSpy as jest.Mock).mockImplementationOnce(() => ({
         on: (event: string, handler: (err: Error) => void) => {
           if (event === "error") setImmediate(() => handler(new Error("ECONNREFUSED")));
         },
         write: jest.fn(),
         end:   jest.fn(),
-      };
-      return fakeReq;
+      }));
+      return actual.request(opts as Parameters<typeof actual.request>[0], callback as Parameters<typeof actual.request>[1]);
     });
 
     const res = await supertest(makeApp()).get("/protected");
