@@ -1,8 +1,18 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import { queryHostFnLogs } from "./indexer/host-fn-log";
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
+import {
+  queryTransfers,
+  queryAllTransfers,
+  queryByTxHash,
+  querySummary,
+  queryNftTransfers,
+  getNftOwner,
+  getNftMetadata,
+  getLastIndexedLedger,
+  prisma,
+  queryHostFnLogs,
+} from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
@@ -12,8 +22,8 @@ import { createWebhooksRouter } from "./api/webhooks";
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
-  standardHeaders: true,   // Sends `RateLimit-*` headers
-  legacyHeaders: false,    // Disables `X-RateLimit-*` headers
+  standardHeaders: true, // Sends `RateLimit-*` headers
+  legacyHeaders: false, // Disables `X-RateLimit-*` headers
   message: { error: "Too many requests, please try again later." },
 });
 
@@ -41,7 +51,10 @@ const withDisplay = <T extends { amount: string }>(t: T) => ({
 
 function parseSelectQuery(value: unknown): string[] | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
@@ -86,14 +99,19 @@ export function createApp(): express.Application {
     return isNaN(n) ? fallback : n;
   };
 
-
   /**
    * Parse a comma-separated eventType param (e.g. "transfer,mint").
    * Returns the array on success, sends a 400 and returns null on invalid values.
    */
-  const parseEventTypes = (val: unknown, res: Response): string[] | null | undefined => {
+  const parseEventTypes = (
+    val: unknown,
+    res: Response,
+  ): string[] | null | undefined => {
     if (val === undefined || val === "") return undefined;
-    const types = String(val).split(",").map((s) => s.trim()).filter(Boolean);
+    const types = String(val)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const invalid = types.filter((t) => !VALID_EVENT_TYPES.has(t));
     if (invalid.length) {
       res.status(400).json({
@@ -109,11 +127,16 @@ export function createApp(): express.Application {
    * Returns undefined when absent, a Date when valid, null when invalid
    * (also sends a 400 so the caller should return immediately).
    */
-  const parseDateParam = (val: unknown, res: Response): Date | null | undefined => {
+  const parseDateParam = (
+    val: unknown,
+    res: Response,
+  ): Date | null | undefined => {
     if (val === undefined || val === "") return undefined;
     const d = new Date(String(val));
     if (isNaN(d.getTime())) {
-      res.status(400).json({ error: `Invalid date: "${val}". Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z).` });
+      res.status(400).json({
+        error: `Invalid date: "${val}". Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z).`,
+      });
       return null;
     }
     return d;
@@ -188,24 +211,27 @@ export function createApp(): express.Application {
    * Response:
    *   { lastIndexedLedger, latestLedger, lagLedgers, uptimeSeconds, totalIndexed }
    */
-  app.get("/status", async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const [lastIndexedLedger, latestLedger] = await Promise.all([
-        getLastIndexedLedger(),
-        getLatestLedger(),
-      ]);
-      const stats = getIndexerStats();
-      res.json({
-        ok: true,
-        lastIndexedLedger,
-        latestLedger,
-        lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
-        ...stats,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
+  app.get(
+    "/status",
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const [lastIndexedLedger, latestLedger] = await Promise.all([
+          getLastIndexedLedger(),
+          getLatestLedger(),
+        ]);
+        const stats = getIndexerStats();
+        res.json({
+          ok: true,
+          lastIndexedLedger,
+          latestLedger,
+          lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
+          ...stats,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   // ── GET /transfers/incoming/:address ────────────────────────────────────────
   /**
@@ -226,7 +252,19 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select } = req.query;
+        const {
+          contractId,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventType,
+          limit,
+          offset,
+          cursor,
+          $filter,
+          $select,
+        } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -257,7 +295,10 @@ export function createApp(): express.Application {
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+            if (
+              transfer &&
+              typeof (transfer as { amount?: unknown }).amount === "string"
+            ) {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
@@ -268,7 +309,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /transfers/outgoing/:address ────────────────────────────────────────
@@ -281,7 +322,19 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select } = req.query;
+        const {
+          contractId,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventType,
+          limit,
+          offset,
+          cursor,
+          $filter,
+          $select,
+        } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -312,7 +365,10 @@ export function createApp(): express.Application {
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+            if (
+              transfer &&
+              typeof (transfer as { amount?: unknown }).amount === "string"
+            ) {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
@@ -323,7 +379,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /transfers/address/:address ─────────────────────────────────────────
@@ -403,7 +459,10 @@ export function createApp(): express.Application {
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+            if (
+              transfer &&
+              typeof (transfer as { amount?: unknown }).amount === "string"
+            ) {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
@@ -414,7 +473,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /transfers/address/:address/export.csv ──────────────────────────────
@@ -438,7 +497,15 @@ export function createApp(): express.Application {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, token } = req.query;
+        const {
+          contractId,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventType,
+          token,
+        } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -475,15 +542,26 @@ export function createApp(): express.Application {
         const csvLines: string[] = [];
 
         // Add CSV header
-        csvLines.push(formatCSVRow(["date", "type", "from", "to", "amount", "token", "ledger"]));
+        csvLines.push(
+          formatCSVRow([
+            "date",
+            "type",
+            "from",
+            "to",
+            "amount",
+            "token",
+            "ledger",
+          ]),
+        );
 
         // Add data rows
         for (const transfer of result.transfers) {
           const t = transfer as Record<string, unknown>;
           const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
-          const closedAt = t.ledgerClosedAt instanceof Date
-            ? t.ledgerClosedAt
-            : new Date(String(t.ledgerClosedAt ?? 0));
+          const closedAt =
+            t.ledgerClosedAt instanceof Date
+              ? t.ledgerClosedAt
+              : new Date(String(t.ledgerClosedAt ?? 0));
           csvLines.push(
             formatCSVRow([
               closedAt.toISOString(),
@@ -493,7 +571,7 @@ export function createApp(): express.Application {
               displayAmount,
               t.contractId,
               t.ledger,
-            ])
+            ]),
           );
         }
 
@@ -501,12 +579,15 @@ export function createApp(): express.Application {
 
         // Set response headers for CSV download
         res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", `attachment; filename="transfers-${address}.csv"`);
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="transfers-${address}.csv"`,
+        );
         res.send(csvContent);
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /transfers/tx/:txHash ────────────────────────────────────────────────
@@ -525,7 +606,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /summary/:address ────────────────────────────────────────────────────
@@ -542,51 +623,55 @@ export function createApp(): express.Application {
    *     totalReceived, totalSent, netFlow,
    *     displayTotalReceived, displayTotalSent, displayNetFlow, txCount }] }
    */
-  const summaryHandler = async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const { address } = req.params;
-        const { contractId, fromDate, toDate } = req.query;
+  const summaryHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      const { address } = req.params;
+      const { contractId, fromDate, toDate } = req.query;
 
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
+      const fromDateVal = parseDateParam(fromDate, res);
+      if (fromDateVal === null) return;
+      const toDateVal = parseDateParam(toDate, res);
+      if (toDateVal === null) return;
 
-        const rows = await querySummary({
-          address,
-          contractId: contractId as string | undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-        });
+      const rows = await querySummary({
+        address,
+        contractId: contractId as string | undefined,
+        fromDate: fromDateVal,
+        toDate: toDateVal,
+      });
 
-        const tokens = rows.map((row) => {
-          const received = BigInt(row.totalReceived);
-          const sent = BigInt(row.totalSent);
-          const net = received - sent;
-          return {
-            contractId: row.contractId,
-            totalReceived: row.totalReceived,
-            totalSent: row.totalSent,
-            netFlow: net.toString(),
-            displayTotalReceived: toDisplayAmount(row.totalReceived),
-            displayTotalSent: toDisplayAmount(row.totalSent),
-            displayNetFlow: toDisplayAmount(net.toString()),
-            txCount: Number(row.txCount),
-          };
-        });
+      const tokens = rows.map((row) => {
+        const received = BigInt(row.totalReceived);
+        const sent = BigInt(row.totalSent);
+        const net = received - sent;
+        return {
+          contractId: row.contractId,
+          totalReceived: row.totalReceived,
+          totalSent: row.totalSent,
+          netFlow: net.toString(),
+          displayTotalReceived: toDisplayAmount(row.totalReceived),
+          displayTotalSent: toDisplayAmount(row.totalSent),
+          displayNetFlow: toDisplayAmount(net.toString()),
+          txCount: Number(row.txCount),
+        };
+      });
 
-        res.json({
-          address,
-          window: {
-            fromDate: fromDateVal?.toISOString() ?? null,
-            toDate: toDateVal?.toISOString() ?? null,
-          },
-          tokens,
-        });
-      } catch (err) {
-        next(err);
-      }
-    };
+      res.json({
+        address,
+        window: {
+          fromDate: fromDateVal?.toISOString() ?? null,
+          toDate: toDateVal?.toISOString() ?? null,
+        },
+        tokens,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
 
   app.get("/summary/:address", summaryHandler);
   app.get("/accounts/:address/summary", summaryHandler);
@@ -609,10 +694,10 @@ export function createApp(): express.Application {
       try {
         const { contractId } = req.params;
         const functionName = req.query.functionName as string | undefined;
-        const limit  = parseIntParam(req.query.limit,  50);
+        const limit = parseIntParam(req.query.limit, 50);
         const offset = parseIntParam(req.query.offset, 0);
 
-        const { total, logs } = await queryHostFnLogs({
+        const result = await queryHostFnLogs({
           contractId,
           functionName,
           limit,
@@ -621,15 +706,15 @@ export function createApp(): express.Application {
 
         res.json({
           contractId,
-          total,
           limit: Math.min(limit, 200),
           offset,
-          logs,
+          rows: result.rows,
+          nextCursor: result.nextCursor,
         });
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /nfts/transfers ──────────────────────────────────────────────────────
@@ -652,7 +737,18 @@ export function createApp(): express.Application {
     "/nfts/transfers",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { contract, token_id, address, fromLedger, toLedger, limit, offset, cursor, $filter, $select } = req.query;
+        const {
+          contract,
+          token_id,
+          address,
+          fromLedger,
+          toLedger,
+          limit,
+          offset,
+          cursor,
+          $filter,
+          $select,
+        } = req.query;
         const lim = parseIntParam(limit, 50);
         const off = parseIntParam(offset, 0);
 
@@ -673,7 +769,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── GET /nfts/owners/:contract/:token_id ─────────────────────────────────────
@@ -701,7 +797,8 @@ export function createApp(): express.Application {
 
         if (owner === null) {
           res.status(404).json({
-            error: "Token not found. No transfers indexed for this contract/token_id.",
+            error:
+              "Token not found. No transfers indexed for this contract/token_id.",
           });
           return;
         }
@@ -717,7 +814,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    }
+    },
   );
 
   // ── 404 handler ──────────────────────────────────────────────────────────────

@@ -30,7 +30,12 @@
       "**/tests/**/*.test.ts"
     ],
     "transform": {
-      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.test.json"
+        }
+      ]
     },
     "moduleFileExtensions": [
       "ts",
@@ -39,16 +44,25 @@
     ],
     "clearMocks": true,
     "transform": {
-      "^.+\\.tsx?$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.test.json"
+        }
+      ]
     }
   },
   "dependencies": {
+    "@apollo/server": "^4.11.0",
+    "@graphql-tools/schema": "^10.0.0",
     "@prisma/client": "^5.10.0",
     "@stellar/stellar-sdk": "^15.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.18.3",
     "express-rate-limit": "^8.3.2",
+    "graphql": "^16.8.1",
+    "graphql-ws": "^5.15.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {

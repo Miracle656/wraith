@@ -1,6 +1,12 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
-import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
+import {
+  decodeCursor,
+  encodeCursor,
+  parseODataFilter,
+  parseODataSelect,
+  projectRecord,
+} from "./lib/odata";
 
 const STROOPS = 10_000_000n;
 
@@ -46,7 +52,10 @@ type ListPage<T> = {
   nextCursor: string | null;
 };
 
-function buildListPage<T extends { id: number }>(rows: T[], limit: number): ListPage<T> {
+function buildListPage<T extends { id: number }>(
+  rows: T[],
+  limit: number,
+): ListPage<T> {
   if (rows.length <= limit) {
     return { rows, nextCursor: null };
   }
@@ -61,7 +70,7 @@ function buildListPage<T extends { id: number }>(rows: T[], limit: number): List
 function selectRows<T extends Record<string, unknown>>(
   rows: T[],
   select: string[] | undefined,
-  derived: Record<string, (row: T) => unknown> = {}
+  derived: Record<string, (row: T) => unknown> = {},
 ): Array<Record<string, unknown>> {
   return rows.map((row) => projectRecord(row, select, derived));
 }
@@ -155,7 +164,9 @@ const ACCOUNT_SUMMARY_FIELD_TYPES = {
  * Conflicts on `eventId` are silently ignored — safe to call multiple times
  * with overlapping ledger ranges.
  */
-export async function upsertTransfers(records: TransferRecord[]): Promise<number> {
+export async function upsertTransfers(
+  records: TransferRecord[],
+): Promise<number> {
   if (records.length === 0) return 0;
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
@@ -205,7 +216,7 @@ export async function pruneOldTransfers(): Promise<number> {
 
   if (result.count > 0) {
     console.log(
-      `[prune] Deleted ${result.count} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`
+      `[prune] Deleted ${result.count} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`,
     );
   }
 
@@ -247,7 +258,9 @@ export async function queryTransfers(params: TransferQueryParams) {
   } = params;
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
-    ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
+    ...(direction === "incoming"
+      ? { toAddress: address }
+      : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
     ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
@@ -273,7 +286,10 @@ export async function queryTransfers(params: TransferQueryParams) {
     ? { AND: [baseWhere, odataWhere as Prisma.TokenTransferWhereInput] }
     : baseWhere;
 
-  const requestedSelect = parseODataSelect(select?.join(","), TRANSFER_SELECTABLE_FIELDS);
+  const requestedSelect = parseODataSelect(
+    select?.join(","),
+    TRANSFER_SELECTABLE_FIELDS,
+  );
   const prismaSelect = requestedSelect
     ? {
         id: true,
@@ -281,7 +297,9 @@ export async function queryTransfers(params: TransferQueryParams) {
         eventType: requestedSelect.includes("eventType"),
         fromAddress: requestedSelect.includes("fromAddress"),
         toAddress: requestedSelect.includes("toAddress"),
-        amount: requestedSelect.includes("amount") || requestedSelect.includes("displayAmount"),
+        amount:
+          requestedSelect.includes("amount") ||
+          requestedSelect.includes("displayAmount"),
         ledger: requestedSelect.includes("ledger"),
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
@@ -308,9 +326,14 @@ export async function queryTransfers(params: TransferQueryParams) {
 
   return {
     total,
-    transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect, {
-      displayAmount: (row) => toDisplayAmount(String((row as { amount?: string }).amount)),
-    }),
+    transfers: selectRows(
+      page.rows as Array<Record<string, unknown>>,
+      requestedSelect,
+      {
+        displayAmount: (row) =>
+          toDisplayAmount(String((row as { amount?: string }).amount)),
+      },
+    ),
     nextCursor: page.nextCursor,
   };
 }
@@ -333,23 +356,25 @@ export type SummaryQueryParams = {
 type SummaryRow = {
   contractId: string;
   totalReceived: string; // NUMERIC cast to TEXT
-  totalSent: string;     // NUMERIC cast to TEXT
-  txCount: bigint;       // INT8 — node-postgres returns bigint columns as BigInt
+  totalSent: string; // NUMERIC cast to TEXT
+  txCount: bigint; // INT8 — node-postgres returns bigint columns as BigInt
 };
 
 /**
  * Returns per-token aggregate totals for an address.
  * Uses a raw SQL query because Prisma cannot SUM string-typed columns.
  */
-export async function querySummary(params: SummaryQueryParams): Promise<SummaryRow[]> {
+export async function querySummary(
+  params: SummaryQueryParams,
+): Promise<SummaryRow[]> {
   const { address, contractId, fromDate, toDate } = params;
 
   const conditions: Prisma.Sql[] = [
     Prisma.sql`("toAddress" = ${address} OR "fromAddress" = ${address})`,
   ];
   if (contractId) conditions.push(Prisma.sql`"contractId" = ${contractId}`);
-  if (fromDate)   conditions.push(Prisma.sql`"ledgerClosedAt" >= ${fromDate}`);
-  if (toDate)     conditions.push(Prisma.sql`"ledgerClosedAt" <= ${toDate}`);
+  if (fromDate) conditions.push(Prisma.sql`"ledgerClosedAt" >= ${fromDate}`);
+  if (toDate) conditions.push(Prisma.sql`"ledgerClosedAt" <= ${toDate}`);
 
   const where = Prisma.join(conditions, " AND ");
 
@@ -368,7 +393,9 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
 
 // ─── NFT helpers ─────────────────────────────────────────────────────────────
 
-export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<number> {
+export async function upsertNftTransfers(
+  records: NftTransferRecord[],
+): Promise<number> {
   if (records.length === 0) return 0;
   const result = await prisma.nftTransfer.createMany({
     data: records,
@@ -379,7 +406,7 @@ export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<
 
 export async function getNftMetadata(
   contractId: string,
-  tokenId: string
+  tokenId: string,
 ): Promise<{ name: string | null; tokenUri: string | null } | null> {
   return prisma.nftMetadata.findUnique({
     where: { contractId_tokenId: { contractId, tokenId } },
@@ -390,12 +417,21 @@ export async function getNftMetadata(
 export async function upsertNftMetadata(
   contractId: string,
   tokenId: string,
-  data: NftMetadataPayload
+  data: NftMetadataPayload,
 ): Promise<void> {
   await prisma.nftMetadata.upsert({
     where: { contractId_tokenId: { contractId, tokenId } },
-    create: { contractId, tokenId, name: data.name ?? null, tokenUri: data.tokenUri ?? null },
-    update: { name: data.name ?? null, tokenUri: data.tokenUri ?? null, fetchedAt: new Date() },
+    create: {
+      contractId,
+      tokenId,
+      name: data.name ?? null,
+      tokenUri: data.tokenUri ?? null,
+    },
+    update: {
+      name: data.name ?? null,
+      tokenUri: data.tokenUri ?? null,
+      fetchedAt: new Date(),
+    },
   });
 }
 
@@ -429,7 +465,9 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
   const baseWhere: Prisma.NftTransferWhereInput = {
     ...(contractId ? { contractId } : {}),
     ...(tokenId ? { tokenId } : {}),
-    ...(address ? { OR: [{ fromAddress: address }, { toAddress: address }] } : {}),
+    ...(address
+      ? { OR: [{ fromAddress: address }, { toAddress: address }] }
+      : {}),
     ...(fromLedger || toLedger
       ? {
           ledger: {
@@ -445,7 +483,10 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
     ? { AND: [baseWhere, odataWhere as Prisma.NftTransferWhereInput] }
     : baseWhere;
 
-  const requestedSelect = parseODataSelect(select?.join(","), NFT_TRANSFER_SELECTABLE_FIELDS);
+  const requestedSelect = parseODataSelect(
+    select?.join(","),
+    NFT_TRANSFER_SELECTABLE_FIELDS,
+  );
   const prismaSelect = requestedSelect
     ? {
         id: true,
@@ -478,7 +519,10 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
 
   return {
     total,
-    transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect),
+    transfers: selectRows(
+      page.rows as Array<Record<string, unknown>>,
+      requestedSelect,
+    ),
     nextCursor: page.nextCursor,
   };
 }
@@ -488,7 +532,7 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
  */
 export async function getNftOwner(
   contractId: string,
-  tokenId: string
+  tokenId: string,
 ): Promise<string | null> {
   const latest = await prisma.nftTransfer.findFirst({
     where: { contractId, tokenId, toAddress: { not: null } },
@@ -511,18 +555,40 @@ export async function getNftOwner(
  *
  * Using raw SQL because Prisma cannot do arithmetic on string-typed NUMERIC columns.
  */
-export async function upsertAccountSummaries(records: TransferRecord[]): Promise<void> {
+export async function upsertAccountSummaries(
+  records: TransferRecord[],
+): Promise<void> {
   if (records.length === 0) return;
 
   // Accumulate deltas keyed by "address|contractId"
   const deltas = new Map<
     string,
-    { address: string; contractId: string; sent: bigint; received: bigint; count: number; lastAt: Date }
+    {
+      address: string;
+      contractId: string;
+      sent: bigint;
+      received: bigint;
+      count: number;
+      lastAt: Date;
+    }
   >();
 
-  const touch = (address: string, contractId: string, sent: bigint, received: bigint, at: Date) => {
+  const touch = (
+    address: string,
+    contractId: string,
+    sent: bigint,
+    received: bigint,
+    at: Date,
+  ) => {
     const key = `${address}|${contractId}`;
-    const prev = deltas.get(key) ?? { address, contractId, sent: 0n, received: 0n, count: 0, lastAt: at };
+    const prev = deltas.get(key) ?? {
+      address,
+      contractId,
+      sent: 0n,
+      received: 0n,
+      count: 0,
+      lastAt: at,
+    };
     deltas.set(key, {
       address,
       contractId,
@@ -533,16 +599,29 @@ export async function upsertAccountSummaries(records: TransferRecord[]): Promise
     });
   };
 
-  for (const { contractId, fromAddress, toAddress, amount, ledgerClosedAt } of records) {
+  for (const {
+    contractId,
+    fromAddress,
+    toAddress,
+    amount,
+    ledgerClosedAt,
+  } of records) {
     const amt = BigInt(amount);
     if (fromAddress) touch(fromAddress, contractId, amt, 0n, ledgerClosedAt);
-    if (toAddress)   touch(toAddress,   contractId, 0n, amt, ledgerClosedAt);
+    if (toAddress) touch(toAddress, contractId, 0n, amt, ledgerClosedAt);
   }
 
-  for (const { address, contractId, sent, received, count, lastAt } of deltas.values()) {
-    const sentStr     = sent.toString();
+  for (const {
+    address,
+    contractId,
+    sent,
+    received,
+    count,
+    lastAt,
+  } of deltas.values()) {
+    const sentStr = sent.toString();
     const receivedStr = received.toString();
-    const netStr      = (received - sent).toString();
+    const netStr = (received - sent).toString();
 
     await prisma.$executeRaw`
       INSERT INTO wraith."AccountSummary"
@@ -573,11 +652,11 @@ export async function getAccountSummary(address: string, contractId?: string) {
     },
     orderBy: { lastActivityAt: "desc" },
     select: {
-      contractId:     true,
-      totalSent:      true,
-      totalReceived:  true,
-      net:            true,
-      txCount:        true,
+      contractId: true,
+      totalSent: true,
+      totalReceived: true,
+      net: true,
+      txCount: true,
       lastActivityAt: true,
     },
   });
@@ -594,7 +673,15 @@ export type AccountSummaryQueryParams = {
 };
 
 export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
-  const { address, contractId, filter, select, cursor, limit = 50, offset = 0 } = params;
+  const {
+    address,
+    contractId,
+    filter,
+    select,
+    cursor,
+    limit = 50,
+    offset = 0,
+  } = params;
 
   const baseWhere: Prisma.AccountSummaryWhereInput = {
     address,
@@ -606,7 +693,10 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
     ? { AND: [baseWhere, odataWhere as Prisma.AccountSummaryWhereInput] }
     : baseWhere;
 
-  const requestedSelect = parseODataSelect(select?.join(","), ACCOUNT_SUMMARY_SELECTABLE_FIELDS);
+  const requestedSelect = parseODataSelect(
+    select?.join(","),
+    ACCOUNT_SUMMARY_SELECTABLE_FIELDS,
+  );
   const prismaSelect = requestedSelect
     ? {
         id: true,
@@ -638,11 +728,15 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
 
   return {
     total,
-    transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect, {
-      displayTotalSent: (row) => row.totalSent,
-      displayTotalReceived: (row) => row.totalReceived,
-      displayNet: (row) => row.net,
-    }),
+    transfers: selectRows(
+      page.rows as Array<Record<string, unknown>>,
+      requestedSelect,
+      {
+        displayTotalSent: (row) => row.totalSent,
+        displayTotalReceived: (row) => row.totalReceived,
+        displayNet: (row) => row.net,
+      },
+    ),
     nextCursor: page.nextCursor,
   };
 }
@@ -711,7 +805,10 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
 
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
-  const requestedSelect = parseODataSelect(select?.join(","), TRANSFER_SELECTABLE_FIELDS);
+  const requestedSelect = parseODataSelect(
+    select?.join(","),
+    TRANSFER_SELECTABLE_FIELDS,
+  );
   const prismaSelect = requestedSelect
     ? {
         id: true,
@@ -719,7 +816,9 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
         eventType: requestedSelect.includes("eventType"),
         fromAddress: requestedSelect.includes("fromAddress"),
         toAddress: requestedSelect.includes("toAddress"),
-        amount: requestedSelect.includes("amount") || requestedSelect.includes("displayAmount"),
+        amount:
+          requestedSelect.includes("amount") ||
+          requestedSelect.includes("displayAmount"),
         ledger: requestedSelect.includes("ledger"),
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
@@ -741,10 +840,57 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
 
   const page = buildListPage(rows as Array<{ id: number }>, cap);
 
-  const transfers = selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect ? [...requestedSelect, "direction"] : undefined, {
-    displayAmount: (row) => toDisplayAmount(String((row as { amount?: string }).amount)),
-    direction: (row) => ((row as { toAddress?: string | null }).toAddress === address ? "incoming" : "outgoing"),
-  });
+  const transfers = selectRows(
+    page.rows as Array<Record<string, unknown>>,
+    requestedSelect ? [...requestedSelect, "direction"] : undefined,
+    {
+      displayAmount: (row) =>
+        toDisplayAmount(String((row as { amount?: string }).amount)),
+      direction: (row) =>
+        (row as { toAddress?: string | null }).toAddress === address
+          ? "incoming"
+          : "outgoing",
+    },
+  );
 
   return { total, transfers, nextCursor: page.nextCursor };
+}
+
+// ─── Host Function Log Query ──────────────────────────────────────────────────
+
+export type HostFnLogQueryParams = {
+  contractId: string;
+  functionName?: string;
+  limit?: number;
+  cursor?: string;
+  offset?: number;
+};
+
+export async function queryHostFnLogs(params: HostFnLogQueryParams) {
+  const { contractId, functionName, limit = 50, cursor, offset = 0 } = params;
+
+  const where: Prisma.HostFnLogWhereInput = {
+    contractId,
+    ...(functionName ? { functionName } : {}),
+  };
+
+  const cap = Math.min(limit, 200);
+  const cursorId = decodeCursor(cursor);
+
+  const [total, rows] = await prisma.$transaction([
+    prisma.hostFnLog.count({ where }),
+    prisma.hostFnLog.findMany({
+      where,
+      orderBy: [{ ledger: "desc" }, { id: "desc" }],
+      take: cap + 1,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+    }),
+  ]);
+
+  const page = buildListPage(rows as Array<{ id: number }>, cap);
+
+  return {
+    rows: page.rows,
+    nextCursor: page.nextCursor,
+  };
 }

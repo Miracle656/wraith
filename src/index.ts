@@ -6,6 +6,7 @@ import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
 import { startWebhookWorker } from "./workers/webhooks";
+import { createGraphQLServer } from "./api/graphql";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -25,16 +26,28 @@ async function main() {
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  // ── Start REST API + WebSocket server ─────────────────────────────────────
+  // ── Start REST API + WebSocket server + GraphQL ────────────────────────────
   const app = createApp();
   const server = http.createServer(app);
 
-  // Attach WebSocket upgrade handler — clients connect to /subscribe/:address
+  // Set up GraphQL server with subscriptions
+  const graphqlServer = createGraphQLServer();
+  await graphqlServer.start();
+
+  // Attach legacy WebSocket upgrade handler — clients connect to /subscribe/:address
   attachWebSocketServer(server);
 
   server.listen(PORT, () => {
     console.log(`[wraith] API listening on http://localhost:${PORT}`);
-    console.log(`[wraith] WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`);
+    console.log(
+      `[wraith] GraphQL endpoint available at http://localhost:${PORT}/graphql`,
+    );
+    console.log(
+      `[wraith] GraphQL subscriptions available at ws://localhost:${PORT}/graphql/ws`,
+    );
+    console.log(
+      `[wraith] Legacy WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`,
+    );
   });
 
   // ── Start webhook worker ───────────────────────────────────────────────────
