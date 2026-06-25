@@ -83,6 +83,7 @@
     "ts-jest": "^29.4.9",
     "ts-node-dev": "^2.0.0",
     "typedoc": "^0.28.19",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "vitest": "^4.1.9"
   }
 }
