@@ -1,6 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getAccountSummary } from "../db";
 import { toDisplayAmount } from "../api";
+import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
+
+type AccountSummaryRow = Awaited<ReturnType<typeof getAccountSummary>>[number];
 
 /**
  * Accounts router — mounts at /accounts
@@ -10,11 +13,17 @@ import { toDisplayAmount } from "../api";
  *     Returns one row per asset the address has ever sent or received.
  *     Reads from the materialized AccountSummary table — O(1) per query.
  *
+ *   GET /accounts/:address/transfers
+ *     Returns token transfers sent or received by the address.
+ *     Supports token-scoped filtering with ?token=C...
+ *
  *   Query params:
  *     contractId  — filter to a single token contract
  */
 export function createAccountsRouter(): Router {
-  const router = Router();
+  const router = Router({ mergeParams: true });
+
+  router.use("/:address/transfers", createAccountsTransfersRouter());
 
   // ── GET /accounts/:address/summary ─────────────────────────────────────────
   router.get(
@@ -29,7 +38,7 @@ export function createAccountsRouter(): Router {
           contractId as string | undefined
         );
 
-        const assets = rows.map((row) => {
+        const assets = rows.map((row: AccountSummaryRow) => {
           const net = BigInt(row.net);
           return {
             contractId:          row.contractId,

@@ -195,6 +195,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AddressParam'
         - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/TokenParam'
         - $ref: '#/components/parameters/FromLedgerParam'
         - $ref: '#/components/parameters/ToLedgerParam'
         - $ref: '#/components/parameters/FromDateParam'
@@ -224,6 +225,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/AddressParam'
         - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/TokenParam'
         - $ref: '#/components/parameters/FromLedgerParam'
         - $ref: '#/components/parameters/ToLedgerParam'
         - $ref: '#/components/parameters/FromDateParam'
@@ -264,6 +266,39 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Transfer'
+        "400":
+          $ref: '#/components/responses/BadRequest'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{address}/transfers:
+    get:
+      operationId: getAccountTransfers
+      summary: Account transfers
+      description: All token transfers sent or received by the specified account.
+      parameters:
+        - $ref: '#/components/parameters/AddressParam'
+        - $ref: '#/components/parameters/ContractIdParam'
+        - $ref: '#/components/parameters/TokenParam'
+        - $ref: '#/components/parameters/FromLedgerParam'
+        - $ref: '#/components/parameters/ToLedgerParam'
+        - $ref: '#/components/parameters/FromDateParam'
+        - $ref: '#/components/parameters/ToDateParam'
+        - $ref: '#/components/parameters/EventTypeParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/FilterParam'
+        - $ref: '#/components/parameters/SelectParam'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferListResponse'
         "400":
           $ref: '#/components/responses/BadRequest'
         "404":
@@ -320,6 +355,14 @@ components:
       schema:
         type: string
       description: Token contract ID to filter by
+      example: "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+    TokenParam:
+      name: token
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Token contract ID to filter by. Same contract ID validation as /transfers/address/{address}.
       example: "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
     FromLedgerParam:
       name: fromLedger

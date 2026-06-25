@@ -6,6 +6,7 @@ import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
 import { startWebhookWorker } from "./workers/webhooks";
+import { startPartitionRetentionJob } from "./jobs/retention";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 

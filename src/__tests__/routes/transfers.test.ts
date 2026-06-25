@@ -733,6 +733,27 @@ describe("Transfer route handlers", () => {
       );
     });
 
+    it("respects token filter for CSV export", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+
+      await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ token: CONTRACT_A });
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ token: CONTRACT_A })
+      );
+    });
+
+    it("returns 400 for invalid ?token= on CSV export", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ token: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid token address/i);
+    });
+
     it("respects fromDate and toDate filters", async () => {
       mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
 
