@@ -3,6 +3,8 @@ import { getAccountSummary } from "../db";
 import { toDisplayAmount } from "../api";
 import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
 
+type AccountSummaryRow = Awaited<ReturnType<typeof getAccountSummary>>[number];
+
 /**
  * Accounts router — mounts at /accounts
  *
@@ -36,7 +38,7 @@ export function createAccountsRouter(): Router {
           contractId as string | undefined
         );
 
-        const assets = rows.map((row) => {
+        const assets = rows.map((row: AccountSummaryRow) => {
           const net = BigInt(row.net);
           return {
             contractId:          row.contractId,
