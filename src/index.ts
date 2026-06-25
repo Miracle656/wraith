@@ -6,7 +6,7 @@ import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
 import { startWebhookWorker } from "./workers/webhooks";
-import { createGraphQLServer } from "./api/graphql";
+import { createGraphQLServer } from "./graphql/server";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
