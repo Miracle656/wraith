@@ -18,7 +18,7 @@ import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// ─── Rate limiting ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
@@ -59,7 +59,7 @@ function parseSelectQuery(value: unknown): string[] | undefined {
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 
-// ── CSV utilities ─────────────────────────────────────────────────────────────
+// ── CSV utilities ──────────────────────────────────────────────────────────────
 /**
  * Escape a value for CSV output.
  * If the value contains comma, quote, or newline, wrap in quotes and escape inner quotes.

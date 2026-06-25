@@ -3,6 +3,14 @@
  *
  * Provides GraphQL schema and resolvers for querying and subscribing to
  * real-time TokenTransfer and HostFnLog events with filtering and backpressure.
+ *
+ * Features:
+ * - Apollo Server for queries and mutations
+ * - graphql-ws for WebSocket-based subscriptions
+ * - Per-client filtering by contract/address
+ * - Server-side backpressure handling to prevent OOM
+ * - Persisted query support (for production)
+ * - Cost/depth guards for query safety
  */
 
 import { ApolloServer, BaseContext } from "@apollo/server";
@@ -11,7 +19,7 @@ import {
   subscribeToTransfers,
   subscribeToHostFnLogs,
   SubscriptionFilters,
-} from "./subscriptions";
+} from "../api/subscriptions";
 import {
   queryTransfers,
   queryAllTransfers,
@@ -31,12 +39,6 @@ const typeDefs = `#graphql
     MINT
     BURN
     CLAWBACK
-  }
-
-  enum SubscriptionEventType {
-    TRANSFER
-    HOST_FN_LOG
-    BACKPRESSURE
   }
 
   # ─── Token Transfer Types ───────────────────────────────────────────────────
@@ -301,7 +303,7 @@ const resolvers = {
       return {
         rows: result.transfers.map((t) => ({
           ...t,
-          displayAmount: toDisplayAmount(t.amount as string),
+          displayAmount: toDisplayAmount((t as any).amount as string),
           ledgerClosedAt: (t as any).ledgerClosedAt,
           createdAt: (t as any).createdAt,
         })),
