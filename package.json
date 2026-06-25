@@ -16,7 +16,8 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "docs": "typedoc",
-    "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts"
+    "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts",
+    "bench": "ts-node --project bench/tsconfig.json bench/insert.bench.ts"
   },
   "jest": {
     "preset": "ts-jest",
@@ -55,6 +56,11 @@
   "dependencies": {
     "@apollo/server": "^4.11.0",
     "@graphql-tools/schema": "^10.0.0",
+    "clearMocks": true
+  },
+  "dependencies": {
+    "@apollo/server": "^5.5.1",
+    "@as-integrations/express4": "^1.1.2",
     "@prisma/client": "^5.10.0",
     "@stellar/stellar-sdk": "^15.0.1",
     "cors": "^2.8.5",
@@ -63,6 +69,7 @@
     "express-rate-limit": "^8.3.2",
     "graphql": "^16.8.1",
     "graphql-ws": "^5.15.0",
+    "graphql": "^16.11.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {
@@ -73,12 +80,13 @@
     "@types/node": "^20.11.24",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
+    "fast-check": "^3.22.0",
     "jest": "^30.4.2",
     "prisma": "^5.10.0",
     "supertest": "^7.2.2",
+    "tinybench": "^6.0.2",
     "ts-jest": "^29.4.9",
     "ts-node-dev": "^2.0.0",
-    "fast-check": "^3.22.0",
     "typedoc": "^0.28.19",
     "typescript": "^5.4.2"
   }

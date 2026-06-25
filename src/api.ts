@@ -17,6 +17,7 @@ import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
+import { createGraphQLMiddleware } from "./graphql/server";
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -92,6 +93,7 @@ export function createApp(): express.Application {
 
   // ── Webhook subscription management ──────────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
+  app.use("/graphql", createGraphQLMiddleware());
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
@@ -265,6 +267,7 @@ export function createApp(): express.Application {
           $filter,
           $select,
         } = req.query;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -273,6 +276,18 @@ export function createApp(): express.Application {
         const eventTypes = parseEventTypes(eventType, res);
         if (eventTypes === null) return;
 
+        // Validate optional ?token= query param.
+        // Must be a 56-character Stellar SAC contract address starting with "C".
+        if (token !== undefined) {
+          const tokenStr = String(token).trim();
+          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
+            res.status(400).json({
+              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
+            });
+            return;
+          }
+        }
+
         const lim = parseIntParam(limit, 50);
         const off = parseIntParam(offset, 0);
 
@@ -280,6 +295,7 @@ export function createApp(): express.Application {
           address,
           direction: "incoming",
           contractId: contractId as string | undefined,
+          token: token !== undefined ? String(token).trim() : undefined,
           filter: $filter as string | undefined,
           select: parseSelectQuery($select),
           cursor: cursor as string | undefined,
@@ -335,6 +351,7 @@ export function createApp(): express.Application {
           $filter,
           $select,
         } = req.query;
+        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -343,6 +360,18 @@ export function createApp(): express.Application {
         const eventTypes = parseEventTypes(eventType, res);
         if (eventTypes === null) return;
 
+        // Validate optional ?token= query param.
+        // Must be a 56-character Stellar SAC contract address starting with "C".
+        if (token !== undefined) {
+          const tokenStr = String(token).trim();
+          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
+            res.status(400).json({
+              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
+            });
+            return;
+          }
+        }
+
         const lim = parseIntParam(limit, 50);
         const off = parseIntParam(offset, 0);
 
@@ -350,6 +379,7 @@ export function createApp(): express.Application {
           address,
           direction: "outgoing",
           contractId: contractId as string | undefined,
+          token: token !== undefined ? String(token).trim() : undefined,
           filter: $filter as string | undefined,
           select: parseSelectQuery($select),
           cursor: cursor as string | undefined,
