@@ -17,6 +17,7 @@
     "db:studio": "prisma studio",
     "docs": "typedoc",
     "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts",
+    "backfill": "ts-node src/cli.ts backfill",
     "bench": "ts-node --project bench/tsconfig.json bench/insert.bench.ts"
   },
   "jest": {
@@ -57,6 +58,15 @@
     "@apollo/server": "^4.11.0",
     "@graphql-tools/schema": "^10.0.0",
     "clearMocks": true
+    "collectCoverage": true,
+    "coverageThreshold": {
+      "global": {
+        "lines": 75,
+        "functions": 75,
+        "branches": 75,
+        "statements": 75
+      }
+    }
   },
   "dependencies": {
     "@apollo/server": "^5.5.1",
