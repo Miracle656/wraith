@@ -399,6 +399,37 @@ export async function getNftMetadata(
   });
 }
 
+/**
+ * Roll back indexed rows to a target ledger sequence.
+ * Deletes any rows with ledger > `targetLedger` from event tables
+ * and atomically updates the indexer state to reflect the new tip.
+ * Returns the number of deleted rows (sum across tables).
+ */
+export async function rollbackToLedger(targetLedger: number): Promise<number> {
+  // Perform deletes and state update atomically.
+  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
+    prisma.tokenTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.nftTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.indexerState.upsert({
+      where: { id: 1 },
+      create: { id: 1, lastIndexedLedger: targetLedger },
+      update: { lastIndexedLedger: targetLedger },
+    }),
+  ]);
+
+  const totalDeleted =
+    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
+
+  if (totalDeleted > 0) {
+    console.log(`[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`);
+  } else {
+    console.log(`[reorg] Rolled back to ledger ${targetLedger}, no rows deleted`);
+  }
+
+  return totalDeleted;
+}
+
 export async function upsertNftMetadata(
   contractId: string,
   tokenId: string,
