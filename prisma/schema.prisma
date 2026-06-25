@@ -181,3 +181,18 @@ model IndexerState {
 
   @@schema("wraith")
 }
+
+// ─── Indexer Checkpoint ──────────────────────────────────────────────────────
+// Tracks the cursor position for exactly-once idempotent batch processing.
+// Each batch is keyed by batchId (e.g., "sac:6000-7000") to enable parallel
+// workers to checkpoint independently. Atomic upsert of events + cursor ensures
+// a crash mid-batch either completes or rolls back, never leaving a gap.
+model IndexerCheckpoint {
+  id            Int      @id @default(autoincrement())
+  batchId       String   @unique
+  lastLedger    Int
+  processedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@schema("wraith")
+}
