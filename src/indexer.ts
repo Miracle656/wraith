@@ -13,6 +13,7 @@ import {
 } from "./db";
 import { emitTransfer } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
+import { tagSacTransfers } from "./indexer/sac-detect";
 import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig } from "./indexer/sources";
@@ -139,6 +140,11 @@ async function pollOnce(
 
   // ── Fungible path ────────────────────────────────────────────────────────────
   const records  = parseEvents(fungibleEvents);
+  // Tag each transfer with whether its contract is a SAC (#136). Best-effort:
+  // a detection failure must never block ingest, so default to false on error.
+  await tagSacTransfers(records).catch((e) =>
+    console.error("[indexer] SAC detection failed:", e)
+  );
   const inserted = await upsertTransfers(records);
   totalIndexed  += inserted;
 

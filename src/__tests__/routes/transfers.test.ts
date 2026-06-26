@@ -61,6 +61,7 @@ function baseTransfer() {
     ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
     txHash: "aaaa1111",
     eventId: "evt-001",
+    isSac: false,
     createdAt: new Date("2025-01-01T00:00:01Z"),
   };
 }

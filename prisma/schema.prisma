@@ -26,6 +26,9 @@ model TokenTransfer {
   ledgerClosedAt DateTime
   txHash         String
   eventId        String    @unique
+  // True when the emitting contract is a Stellar Asset Contract (SAC) wrapping a
+  // classic asset, as opposed to a native Soroban token. Set by sac-detect (#136).
+  isSac          Boolean   @default(false)
   createdAt      DateTime  @default(now())
 
   @@index([toAddress])
@@ -193,6 +196,10 @@ model IndexerCheckpoint {
   lastLedger    Int
   processedAt   DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@schema("wraith")
+}
+
 // ─── Partition Retention Runs ───────────────────────────────────────────────
 model RetentionJobRun {
   id             Int      @id @default(autoincrement())
