@@ -26,7 +26,9 @@ import { withReadReplicas } from "./db/router";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 const replicaUrls = process.env.DATABASE_REPLICAS
-  ? process.env.DATABASE_REPLICAS.split(",").map((s) => s.trim()).filter(Boolean)
+  ? process.env.DATABASE_REPLICAS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
   : [];
 
 export const prisma =
@@ -38,7 +40,7 @@ export const prisma =
           ? ["query", "warn", "error"]
           : ["warn", "error"],
     }),
-    { replicaUrls }
+    { replicaUrls },
   );
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
@@ -218,11 +220,17 @@ export interface BackfillCursorState {
 export async function getBackfillCursor(): Promise<BackfillCursorState | null> {
   const state = await prisma.backfillCursor.findUnique({ where: { id: 1 } });
   return state
-    ? { startLedger: state.startLedger, endLedger: state.endLedger, nextLedger: state.nextLedger }
+    ? {
+        startLedger: state.startLedger,
+        endLedger: state.endLedger,
+        nextLedger: state.nextLedger,
+      }
     : null;
 }
 
-export async function setBackfillCursor(cursor: BackfillCursorState): Promise<void> {
+export async function setBackfillCursor(
+  cursor: BackfillCursorState,
+): Promise<void> {
   await prisma.backfillCursor.upsert({
     where: { id: 1 },
     create: { id: 1, ...cursor },
@@ -460,24 +468,35 @@ export async function getNftMetadata(
  */
 export async function rollbackToLedger(targetLedger: number): Promise<number> {
   // Perform deletes and state update atomically.
-  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
-    prisma.tokenTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
-    prisma.nftTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
-    prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
-    prisma.indexerState.upsert({
-      where: { id: 1 },
-      create: { id: 1, lastIndexedLedger: targetLedger },
-      update: { lastIndexedLedger: targetLedger },
-    }),
-  ]);
+  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] =
+    await prisma.$transaction([
+      prisma.tokenTransfer.deleteMany({
+        where: { ledger: { gt: targetLedger } },
+      }),
+      prisma.nftTransfer.deleteMany({
+        where: { ledger: { gt: targetLedger } },
+      }),
+      prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+      prisma.indexerState.upsert({
+        where: { id: 1 },
+        create: { id: 1, lastIndexedLedger: targetLedger },
+        update: { lastIndexedLedger: targetLedger },
+      }),
+    ]);
 
   const totalDeleted =
-    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
+    (deletedTransfers?.count ?? 0) +
+    (deletedNftTransfers?.count ?? 0) +
+    (deletedHostFnLogs?.count ?? 0);
 
   if (totalDeleted > 0) {
-    console.log(`[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`);
+    console.log(
+      `[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`,
+    );
   } else {
-    console.log(`[reorg] Rolled back to ledger ${targetLedger}, no rows deleted`);
+    console.log(
+      `[reorg] Rolled back to ledger ${targetLedger}, no rows deleted`,
+    );
   }
 
   return totalDeleted;
@@ -962,6 +981,8 @@ export async function queryHostFnLogs(params: HostFnLogQueryParams) {
     rows: page.rows,
     nextCursor: page.nextCursor,
   };
+}
+
 // ─── Popular assets query ───────────────────────────────────────────────────
 export type PopularAssetsQueryParams = {
   fromDate: Date;
@@ -980,9 +1001,10 @@ export async function queryPopularAssets(params: PopularAssetsQueryParams) {
   const { fromDate, by, limit, offset } = params;
   const cap = Math.min(limit, 100);
 
-  const orderClause = by === "volume"
-    ? Prisma.sql`SUM(CAST("amount" AS NUMERIC)) DESC`
-    : Prisma.sql`COUNT(*) DESC`;
+  const orderClause =
+    by === "volume"
+      ? Prisma.sql`SUM(CAST("amount" AS NUMERIC)) DESC`
+      : Prisma.sql`COUNT(*) DESC`;
 
   const countResult = await prisma.$queryRaw<Array<{ total: bigint }>>`
     SELECT COUNT(DISTINCT "contractId")::INT8 AS "total"
