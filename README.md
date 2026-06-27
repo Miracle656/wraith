@@ -129,9 +129,9 @@ docker-compose up --build
 
 ### REST API Specification
 
-A complete, production-grade OpenAPI 3.0 specification is available for all Wraith REST endpoints.
+A complete, production-grade OpenAPI 3.0 specification is generated from the shared Zod schemas used by the API handlers.
 
-- **[openapi.yaml](./openapi.yaml)**
+- **[openapi.json](./docs/openapi.json)**
 
 You can use this file to explore the API, generate client SDKs, or import it into tools like:
 
@@ -550,4 +550,3 @@ npx @veil/wraith-cli webhooks delete <webhook-id>
 - [SEP-41 Token Interface](https://stellar.org/protocol/sep-41)
 - [Token Transfer Processor](https://developers.stellar.org/docs/data/indexers/build-your-own/processors/token-transfer-processor)
 - [Galexie — Ledger Data Lake](https://developers.stellar.org/docs/data/indexers)
-

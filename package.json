@@ -16,6 +16,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "docs": "typedoc",
+    "docs:openapi": "ts-node src/openapi/build.ts",
     "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts",
     "backfill": "ts-node src/cli.ts backfill",
     "bench": "ts-node --project bench/tsconfig.json bench/insert.bench.ts"
@@ -58,6 +59,7 @@
   "dependencies": {
     "@apollo/server": "^5.5.1",
     "@as-integrations/express4": "^1.1.2",
+    "@asteasolutions/zod-to-openapi": "^8.5.0",
     "@prisma/client": "^5.10.0",
     "@stellar/stellar-sdk": "^15.0.1",
     "cors": "^2.8.5",
@@ -65,7 +67,8 @@
     "express": "^4.18.3",
     "express-rate-limit": "^8.3.2",
     "graphql": "^16.11.0",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
