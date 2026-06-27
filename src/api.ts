@@ -270,8 +270,8 @@ export function createApp(): express.Application {
           cursor,
           $filter,
           $select,
+          token,
         } = req.query;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
@@ -354,8 +354,8 @@ export function createApp(): express.Application {
           cursor,
           $filter,
           $select,
+          token,
         } = req.query;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = req.query;
 
         const fromDateVal = parseDateParam(fromDate, res);
         if (fromDateVal === null) return;
