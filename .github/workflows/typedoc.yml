@@ -20,6 +20,7 @@ jobs:
           cache: npm
       - run: npm ci || npm install
       - run: npx prisma generate
+      - run: npm run docs:openapi
       - run: npx typedoc
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3

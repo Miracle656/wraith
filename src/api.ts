@@ -1,31 +1,31 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import {
-  queryTransfers,
-  queryAllTransfers,
-  queryByTxHash,
-  querySummary,
-  queryNftTransfers,
-  getNftOwner,
-  getNftMetadata,
-  getLastIndexedLedger,
-  prisma,
-  queryHostFnLogs,
-} from "./db";
+import { queryHostFnLogs } from "./indexer/host-fn-log";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats } from "./indexer";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
+import {
+  hostFnQuerySchema,
+  nftOwnerParamsSchema,
+  nftTransfersQuerySchema,
+  txHashParamsSchema,
+  readyzQuerySchema,
+  summaryQuerySchema,
+  transferQuerySchema,
+} from "./openapi/schemas";
+import { parseOr400 } from "./openapi/validation";
 
-// ─── Rate limiting ────────────────────────────────────────────────────────────
+// ── Rate limiting ─────────────────────────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
-  standardHeaders: true, // Sends `RateLimit-*` headers
-  legacyHeaders: false, // Disables `X-RateLimit-*` headers
+  standardHeaders: true,   // Sends `RateLimit-*` headers
+  legacyHeaders: false,    // Disables `X-RateLimit-*` headers
   message: { error: "Too many requests, please try again later." },
 });
 
@@ -53,15 +53,12 @@ const withDisplay = <T extends { amount: string }>(t: T) => ({
 
 function parseSelectQuery(value: unknown): string[] | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 
-// ── CSV utilities ──────────────────────────────────────────────────────────────
+// ── CSV utilities ─────────────────────────────────────────────────────────────
 /**
  * Escape a value for CSV output.
  * If the value contains comma, quote, or newline, wrap in quotes and escape inner quotes.
@@ -105,19 +102,14 @@ export function createApp(): express.Application {
     return isNaN(n) ? fallback : n;
   };
 
+
   /**
    * Parse a comma-separated eventType param (e.g. "transfer,mint").
    * Returns the array on success, sends a 400 and returns null on invalid values.
    */
-  const parseEventTypes = (
-    val: unknown,
-    res: Response,
-  ): string[] | null | undefined => {
+  const parseEventTypes = (val: unknown, res: Response): string[] | null | undefined => {
     if (val === undefined || val === "") return undefined;
-    const types = String(val)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const types = String(val).split(",").map((s) => s.trim()).filter(Boolean);
     const invalid = types.filter((t) => !VALID_EVENT_TYPES.has(t));
     if (invalid.length) {
       res.status(400).json({
@@ -133,16 +125,11 @@ export function createApp(): express.Application {
    * Returns undefined when absent, a Date when valid, null when invalid
    * (also sends a 400 so the caller should return immediately).
    */
-  const parseDateParam = (
-    val: unknown,
-    res: Response,
-  ): Date | null | undefined => {
+  const parseDateParam = (val: unknown, res: Response): Date | null | undefined => {
     if (val === undefined || val === "") return undefined;
     const d = new Date(String(val));
     if (isNaN(d.getTime())) {
-      res.status(400).json({
-        error: `Invalid date: "${val}". Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z).`,
-      });
+      res.status(400).json({ error: `Invalid date: "${val}". Expected ISO 8601 (e.g. 2025-01-01T00:00:00Z).` });
       return null;
     }
     return d;
@@ -170,7 +157,9 @@ export function createApp(): express.Application {
    * Returns 503 if any check fails.
    */
   app.get("/readyz", async (_req: Request, res: Response) => {
-    const maxLag = parseInt(String(_req.query.maxLag), 10) || 100;
+    const parsed = parseOr400(readyzQuerySchema, _req.query, res);
+    if (!parsed) return;
+    const { maxLag } = parsed;
     const checks: Record<string, boolean> = {};
 
     try {
@@ -217,27 +206,24 @@ export function createApp(): express.Application {
    * Response:
    *   { lastIndexedLedger, latestLedger, lagLedgers, uptimeSeconds, totalIndexed }
    */
-  app.get(
-    "/status",
-    async (_req: Request, res: Response, next: NextFunction) => {
-      try {
-        const [lastIndexedLedger, latestLedger] = await Promise.all([
-          getLastIndexedLedger(),
-          getLatestLedger(),
-        ]);
-        const stats = getIndexerStats();
-        res.json({
-          ok: true,
-          lastIndexedLedger,
-          latestLedger,
-          lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
-          ...stats,
-        });
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
+  app.get("/status", async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const [lastIndexedLedger, latestLedger] = await Promise.all([
+        getLastIndexedLedger(),
+        getLatestLedger(),
+      ]);
+      const stats = getIndexerStats();
+      res.json({
+        ok: true,
+        lastIndexedLedger,
+        latestLedger,
+        lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
+        ...stats,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // ── GET /transfers/incoming/:address ────────────────────────────────────────
   /**
@@ -257,79 +243,56 @@ export function createApp(): express.Application {
     "/transfers/incoming/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const {
-          contractId,
-          fromLedger,
-          toLedger,
-          fromDate,
-          toDate,
-          eventType,
-          limit,
-          offset,
-          cursor,
-          $filter,
-          $select,
-          token,
-        } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        // Validate optional ?token= query param.
-        // Must be a 56-character Stellar SAC contract address starting with "C".
-        if (token !== undefined) {
-          const tokenStr = String(token).trim();
-          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
-            res.status(400).json({
-              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
-            });
-            return;
-          }
-        }
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+          token?: string;
+        };
 
         const result = await queryTransfers({
           address,
           direction: "incoming",
-          contractId: contractId as string | undefined,
-          token: token !== undefined ? String(token).trim() : undefined,
-          filter: $filter as string | undefined,
-          select: parseSelectQuery($select),
-          cursor: cursor as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
+          contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit,
+          offset,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (
-              transfer &&
-              typeof (transfer as { amount?: unknown }).amount === "string"
-            ) {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
           }),
-          limit: lim,
-          offset: off,
+          limit,
+          offset,
         });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /transfers/outgoing/:address ────────────────────────────────────────
@@ -341,79 +304,56 @@ export function createApp(): express.Application {
     "/transfers/outgoing/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const {
-          contractId,
-          fromLedger,
-          toLedger,
-          fromDate,
-          toDate,
-          eventType,
-          limit,
-          offset,
-          cursor,
-          $filter,
-          $select,
-          token,
-        } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        // Validate optional ?token= query param.
-        // Must be a 56-character Stellar SAC contract address starting with "C".
-        if (token !== undefined) {
-          const tokenStr = String(token).trim();
-          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
-            res.status(400).json({
-              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
-            });
-            return;
-          }
-        }
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+          token?: string;
+        };
 
         const result = await queryTransfers({
           address,
           direction: "outgoing",
-          contractId: contractId as string | undefined,
-          token: token !== undefined ? String(token).trim() : undefined,
-          filter: $filter as string | undefined,
-          select: parseSelectQuery($select),
-          cursor: cursor as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
+          contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit,
+          offset,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (
-              transfer &&
-              typeof (transfer as { amount?: unknown }).amount === "string"
-            ) {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
           }),
-          limit: lim,
-          offset: off,
+          limit,
+          offset,
         });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /transfers/address/:address ─────────────────────────────────────────
@@ -436,78 +376,55 @@ export function createApp(): express.Application {
     "/transfers/address/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const {
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, token, cursor, $filter, $select } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          token?: string;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+        };
+
+        const result = await queryAllTransfers({
+          address,
           contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
           fromLedger,
           toLedger,
           fromDate,
           toDate,
-          eventType,
+          eventTypes: eventType as string[] | undefined,
           limit,
           offset,
-          token,
-          cursor,
-          $filter,
-          $select,
-        } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        // Validate optional ?token= query param.
-        // Must be a 56-character Stellar SAC contract address starting with "C".
-        if (token !== undefined) {
-          const tokenStr = String(token).trim();
-          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
-            res.status(400).json({
-              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
-            });
-            return;
-          }
-        }
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
-
-        const result = await queryAllTransfers({
-          address,
-          contractId: contractId as string | undefined,
-          token: token !== undefined ? String(token).trim() : undefined,
-          filter: $filter as string | undefined,
-          select: parseSelectQuery($select),
-          cursor: cursor as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
-            if (
-              transfer &&
-              typeof (transfer as { amount?: unknown }).amount === "string"
-            ) {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
               return withDisplay(transfer as { amount: string });
             }
             return transfer;
           }),
-          limit: lim,
-          offset: off,
+          limit,
+          offset,
         });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /transfers/address/:address/export.csv ──────────────────────────────
@@ -530,44 +447,33 @@ export function createApp(): express.Application {
     "/transfers/address/:address/export.csv",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const {
-          contractId,
-          fromLedger,
-          toLedger,
-          fromDate,
-          toDate,
-          eventType,
-          token,
-        } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        if (token !== undefined) {
-          const tokenStr = String(token).trim();
-          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
-            res.status(400).json({
-              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
-            });
-            return;
-          }
-        }
+        const parsed = parseOr400(
+          transferQuerySchema.omit({ limit: true, offset: true, cursor: true, $filter: true, $select: true }),
+          { ...req.params, ...req.query },
+          res,
+        );
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          token?: string;
+        };
 
         // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
         const result = await queryAllTransfers({
           address,
-          contractId: contractId as string | undefined,
-          token: token !== undefined ? String(token).trim() : undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
+          contractId,
+          token,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
           limit: 10000,
           offset: 0,
         });
@@ -576,26 +482,15 @@ export function createApp(): express.Application {
         const csvLines: string[] = [];
 
         // Add CSV header
-        csvLines.push(
-          formatCSVRow([
-            "date",
-            "type",
-            "from",
-            "to",
-            "amount",
-            "token",
-            "ledger",
-          ]),
-        );
+        csvLines.push(formatCSVRow(["date", "type", "from", "to", "amount", "token", "ledger"]));
 
         // Add data rows
         for (const transfer of result.transfers) {
           const t = transfer as Record<string, unknown>;
           const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
-          const closedAt =
-            t.ledgerClosedAt instanceof Date
-              ? t.ledgerClosedAt
-              : new Date(String(t.ledgerClosedAt ?? 0));
+          const closedAt = t.ledgerClosedAt instanceof Date
+            ? t.ledgerClosedAt
+            : new Date(String(t.ledgerClosedAt ?? 0));
           csvLines.push(
             formatCSVRow([
               closedAt.toISOString(),
@@ -605,7 +500,7 @@ export function createApp(): express.Application {
               displayAmount,
               t.contractId,
               t.ledger,
-            ]),
+            ])
           );
         }
 
@@ -613,15 +508,12 @@ export function createApp(): express.Application {
 
         // Set response headers for CSV download
         res.setHeader("Content-Type", "text/csv");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="transfers-${address}.csv"`,
-        );
+        res.setHeader("Content-Disposition", `attachment; filename="transfers-${address}.csv"`);
         res.send(csvContent);
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /transfers/tx/:txHash ────────────────────────────────────────────────
@@ -635,12 +527,14 @@ export function createApp(): express.Application {
     "/transfers/tx/:txHash",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const transfers = await queryByTxHash(req.params.txHash);
+        const parsed = parseOr400(txHashParamsSchema, req.params, res);
+        if (!parsed) return;
+        const transfers = await queryByTxHash(parsed.txHash);
         res.json({ transfers: transfers.map(withDisplay) });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /summary/:address ────────────────────────────────────────────────────
@@ -657,55 +551,47 @@ export function createApp(): express.Application {
    *     totalReceived, totalSent, netFlow,
    *     displayTotalReceived, displayTotalSent, displayNetFlow, txCount }] }
    */
-  const summaryHandler = async (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => {
-    try {
-      const { address } = req.params;
-      const { contractId, fromDate, toDate } = req.query;
+  const summaryHandler = async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseOr400(summaryQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromDate, toDate } = parsed;
 
-      const fromDateVal = parseDateParam(fromDate, res);
-      if (fromDateVal === null) return;
-      const toDateVal = parseDateParam(toDate, res);
-      if (toDateVal === null) return;
+        const rows = await querySummary({
+          address,
+          contractId,
+          fromDate,
+          toDate,
+        });
 
-      const rows = await querySummary({
-        address,
-        contractId: contractId as string | undefined,
-        fromDate: fromDateVal,
-        toDate: toDateVal,
-      });
+        const tokens = rows.map((row) => {
+          const received = BigInt(row.totalReceived);
+          const sent = BigInt(row.totalSent);
+          const net = received - sent;
+          return {
+            contractId: row.contractId,
+            totalReceived: row.totalReceived,
+            totalSent: row.totalSent,
+            netFlow: net.toString(),
+            displayTotalReceived: toDisplayAmount(row.totalReceived),
+            displayTotalSent: toDisplayAmount(row.totalSent),
+            displayNetFlow: toDisplayAmount(net.toString()),
+            txCount: Number(row.txCount),
+          };
+        });
 
-      const tokens = rows.map((row) => {
-        const received = BigInt(row.totalReceived);
-        const sent = BigInt(row.totalSent);
-        const net = received - sent;
-        return {
-          contractId: row.contractId,
-          totalReceived: row.totalReceived,
-          totalSent: row.totalSent,
-          netFlow: net.toString(),
-          displayTotalReceived: toDisplayAmount(row.totalReceived),
-          displayTotalSent: toDisplayAmount(row.totalSent),
-          displayNetFlow: toDisplayAmount(net.toString()),
-          txCount: Number(row.txCount),
-        };
-      });
-
-      res.json({
-        address,
-        window: {
-          fromDate: fromDateVal?.toISOString() ?? null,
-          toDate: toDateVal?.toISOString() ?? null,
-        },
-        tokens,
-      });
-    } catch (err) {
-      next(err);
-    }
-  };
+        res.json({
+          address,
+          window: {
+            fromDate: fromDate?.toISOString() ?? null,
+            toDate: toDate?.toISOString() ?? null,
+          },
+          tokens,
+        });
+      } catch (err) {
+        next(err);
+      }
+    };
 
   app.get("/summary/:address", summaryHandler);
   app.get("/accounts/:address/summary", summaryHandler);
@@ -726,12 +612,11 @@ export function createApp(): express.Application {
     "/host-fn/:contractId",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { contractId } = req.params;
-        const functionName = req.query.functionName as string | undefined;
-        const limit = parseIntParam(req.query.limit, 50);
-        const offset = parseIntParam(req.query.offset, 0);
+        const parsed = parseOr400(hostFnQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { contractId, functionName, limit, offset } = parsed;
 
-        const result = await queryHostFnLogs({
+        const { total, logs } = await queryHostFnLogs({
           contractId,
           functionName,
           limit,
@@ -740,15 +625,18 @@ export function createApp(): express.Application {
 
         res.json({
           contractId,
-          limit: Math.min(limit, 200),
+          total,
+          limit,
           offset,
-          rows: result.rows,
-          nextCursor: result.nextCursor,
+          logs: logs.map((log) => ({
+            ...log,
+            gasUsed: log.gasUsed === null ? null : log.gasUsed.toString(),
+          })),
         });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /nfts/transfers ──────────────────────────────────────────────────────
@@ -771,39 +659,39 @@ export function createApp(): express.Application {
     "/nfts/transfers",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const {
-          contract,
-          token_id,
+        const parsed = parseOr400(nftTransfersQuerySchema, req.query, res);
+        if (!parsed) return;
+        const { contract, token_id, address, fromLedger, toLedger, limit, offset, cursor, $filter, $select } = parsed as {
+          contract?: string;
+          token_id?: string;
+          address?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+        };
+
+        const result = await queryNftTransfers({
+          contractId: contract,
+          tokenId: token_id,
           address,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
           fromLedger,
           toLedger,
           limit,
           offset,
-          cursor,
-          $filter,
-          $select,
-        } = req.query;
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
-
-        const result = await queryNftTransfers({
-          contractId: contract as string | undefined,
-          tokenId: token_id as string | undefined,
-          address: address as string | undefined,
-          filter: $filter as string | undefined,
-          select: parseSelectQuery($select),
-          cursor: cursor as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          limit: lim,
-          offset: off,
         });
 
-        res.json({ ...result, limit: lim, offset: off });
+        res.json({ ...result, limit, offset });
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── GET /nfts/owners/:contract/:token_id ─────────────────────────────────────
@@ -822,7 +710,9 @@ export function createApp(): express.Application {
     "/nfts/owners/:contract/:token_id",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { contract, token_id } = req.params;
+        const parsed = parseOr400(nftOwnerParamsSchema, req.params, res);
+        if (!parsed) return;
+        const { contract, token_id } = parsed;
 
         const [owner, metadata] = await Promise.all([
           getNftOwner(contract, token_id),
@@ -831,8 +721,7 @@ export function createApp(): express.Application {
 
         if (owner === null) {
           res.status(404).json({
-            error:
-              "Token not found. No transfers indexed for this contract/token_id.",
+            error: "Token not found. No transfers indexed for this contract/token_id.",
           });
           return;
         }
@@ -848,7 +737,7 @@ export function createApp(): express.Application {
       } catch (err) {
         next(err);
       }
-    },
+    }
   );
 
   // ── 404 handler ──────────────────────────────────────────────────────────────
