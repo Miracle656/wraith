@@ -14,7 +14,9 @@
  */
 
 import { ApolloServer, BaseContext } from "@apollo/server";
+import { expressMiddleware } from "@as-integrations/express4";
 import { makeExecutableSchema } from "@graphql-tools/schema";
+import type { RequestHandler } from "express";
 import {
   subscribeToTransfers,
   subscribeToHostFnLogs,
@@ -456,17 +458,12 @@ export { SubscriptionFilters };
  * @param server Optional pre-created Apollo Server (useful for testing)
  * @returns Express middleware
  */
-export function createGraphQLMiddleware(server?: ApolloServer<Context>) {
-  const { expressMiddleware } = require("@as-integrations/express4");
-
+export function createGraphQLMiddleware(
+  server?: ApolloServer<Context>,
+): RequestHandler {
   const gqlServer = server || createGraphQLServer();
 
-  // Start the server in the background if not already started
-  if (!server) {
-    (
-      gqlServer as any
-    ).startInBackgroundHandlingStartupErrorsByLoggingAndFailingAllRequests();
-  }
-
-  return expressMiddleware(gqlServer);
+  return expressMiddleware(gqlServer, {
+    context: async () => ({}),
+  });
 }
