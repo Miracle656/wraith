@@ -1,0 +1,42 @@
+name: Publish Python SDK
+
+on:
+  push:
+    tags: ['pyclient-v*']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: clients/python
+
+jobs:
+  test:
+    name: Test wraith-py
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  publish:
+    name: Build & publish to PyPI
+    needs: test
+    runs-on: ubuntu-latest
+    # Only publish from a tag, never from a manual test-only dispatch.
+    if: startsWith(github.ref, 'refs/tags/pyclient-v')
+    environment: pypi
+    permissions:
+      id-token: write   # Trusted publishing (OIDC) — no API token needed.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist
