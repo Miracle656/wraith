@@ -214,6 +214,31 @@ model RetentionJobRun {
   @@schema("wraith")
 }
 
+// ─── Contract Tombstones ────────────────────────────────────────────────────
+// A tombstone marks a contract whose persistent storage has expired (its
+// instance entry's liveUntilLedger fell behind the current ledger). Downstream
+// consumers watch this table for a "the contract is gone" signal. One row per
+// contract — the first expiry detection wins; re-detection is idempotent.
+model ContractTombstone {
+  id              Int      @id @default(autoincrement())
+
+  // The contract whose storage expired (C...)
+  contractId      String   @unique
+
+  // The contract instance's liveUntilLedger at the moment of expiry — the last
+  // ledger for which the entry was still live.
+  liveUntilLedger Int
+
+  // The ledger at which we observed the entry had expired
+  // (detectedLedger > liveUntilLedger).
+  detectedLedger  Int
+
+  createdAt       DateTime @default(now())
+
+  @@index([detectedLedger])
+  @@schema("wraith")
+}
+
 // ─── Backfill Cursor ───────────────────────────────────────────────────────────
 // Durable cursor so the backfill job can resume mid-range after a crash.
 // Always row ID 1 — singleton, one backfill at a time.
