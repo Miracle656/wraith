@@ -13,6 +13,7 @@ import {
 } from "./db";
 import { emitTransfer } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
+import { tagSacTransfers } from "./indexer/sac-detect";
 import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig } from "./indexer/sources";
@@ -74,10 +75,7 @@ const POLL_INTERVAL_MS  = parseInt(process.env.POLL_INTERVAL_MS    ?? "6000",  1
 const BATCH_SIZE        = parseInt(process.env.EVENTS_BATCH_SIZE   ?? "10000", 10);
 const INGEST_WORKERS    = parseInt(process.env.INGEST_WORKERS      ?? "1",     10);
 const SAC_CONTRACT_IDS  = resolveSacContractIds();
-const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS ?? "6000", 10);
-const BATCH_SIZE = parseInt(process.env.EVENTS_BATCH_SIZE ?? "10000", 10);
-const SAC_CONTRACT_IDS = resolveSacContractIds();
-const NFT_CONTRACT_IDS = resolveNftContractIds();
+const NFT_CONTRACT_IDS  = resolveNftContractIds();
 // Combined watch list — deduplicated so we don't request the same contract twice
 const ALL_CONTRACT_IDS = [...new Set([...SAC_CONTRACT_IDS, ...NFT_CONTRACT_IDS])];
 const sourceSwitcher = createSourceSwitcherWithConfig({
@@ -135,9 +133,6 @@ async function pollOnce(
     return highestLedger;
   }
 
-  // Parse token transfer events
-  const records = parseEvents(events);
-
   // Persist token transfers
   // Split events by type: NFT (4 topics) vs fungible (3 topics)
   const fungibleEvents = events.filter((e) => !isNftTransferEvent(e));
@@ -145,6 +140,11 @@ async function pollOnce(
 
   // ── Fungible path ────────────────────────────────────────────────────────────
   const records  = parseEvents(fungibleEvents);
+  // Tag each transfer with whether its contract is a SAC (#136). Best-effort:
+  // a detection failure must never block ingest, so default to false on error.
+  await tagSacTransfers(records).catch((e) =>
+    console.error("[indexer] SAC detection failed:", e)
+  );
   const inserted = await upsertTransfers(records);
   totalIndexed  += inserted;
 
@@ -168,6 +168,8 @@ async function pollOnce(
     await upsertHostFnLogs(hostFnRecords).catch(err =>
       console.error("[indexer] host-fn log error:", err),
     );
+  }
+
   // ── NFT path ─────────────────────────────────────────────────────────────────
   const nftParsed   = parseNftEvents(nftRawEvents);
   const nftRecords  = nftParsed.map((p) => p.record);

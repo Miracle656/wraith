@@ -6,6 +6,7 @@ import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
 import { startWebhookWorker } from "./workers/webhooks";
+import { startPartitionRetentionJob } from "./jobs/retention";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -39,6 +40,9 @@ async function main() {
 
   // ── Start webhook worker ───────────────────────────────────────────────────
   startWebhookWorker();
+
+  // ── Start partition retention scheduler ───────────────────────────────────
+  startPartitionRetentionJob();
 
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it

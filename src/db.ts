@@ -4,7 +4,7 @@ import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, project
 
 const STROOPS = 10_000_000n;
 
-function toDisplayAmount(amount: string): string {
+export function toDisplayAmount(amount: string): string {
   const raw = BigInt(amount);
   const abs = raw < 0n ? -raw : raw;
   const integer = abs / STROOPS;
@@ -13,18 +13,27 @@ function toDisplayAmount(amount: string): string {
   return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
 }
 
+import { withReadReplicas } from "./db/router";
+
 // ─── Singleton Prisma client ──────────────────────────────────────────────────
 // Re-use one connection pool across the process.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
+const replicaUrls = process.env.DATABASE_REPLICAS
+  ? process.env.DATABASE_REPLICAS.split(",").map((s) => s.trim()).filter(Boolean)
+  : [];
+
 export const prisma =
   globalForPrisma.prisma ??
-  new PrismaClient({
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["query", "warn", "error"]
-        : ["warn", "error"],
-  });
+  withReadReplicas(
+    new PrismaClient({
+      log:
+        process.env.NODE_ENV === "development"
+          ? ["query", "warn", "error"]
+          : ["warn", "error"],
+    }),
+    { replicaUrls }
+  );
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
@@ -39,6 +48,7 @@ export interface TransferRecord {
   ledgerClosedAt: Date;
   txHash: string;
   eventId: string;
+  isSac?: boolean; // true when the contract is a Stellar Asset Contract (#136)
 }
 
 type ListPage<T> = {
@@ -77,6 +87,7 @@ const TRANSFER_SELECTABLE_FIELDS = [
   "ledgerClosedAt",
   "txHash",
   "eventId",
+  "isSac",
   "createdAt",
   "displayAmount",
   "direction",
@@ -188,6 +199,32 @@ export async function setLastIndexedLedger(ledger: number): Promise<void> {
   });
 }
 
+// ─── Backfill cursor helpers ──────────────────────────────────────────────────
+export interface BackfillCursorState {
+  startLedger: number;
+  endLedger: number;
+  nextLedger: number;
+}
+
+export async function getBackfillCursor(): Promise<BackfillCursorState | null> {
+  const state = await prisma.backfillCursor.findUnique({ where: { id: 1 } });
+  return state
+    ? { startLedger: state.startLedger, endLedger: state.endLedger, nextLedger: state.nextLedger }
+    : null;
+}
+
+export async function setBackfillCursor(cursor: BackfillCursorState): Promise<void> {
+  await prisma.backfillCursor.upsert({
+    where: { id: 1 },
+    create: { id: 1, ...cursor },
+    update: cursor,
+  });
+}
+
+export async function clearBackfillCursor(): Promise<void> {
+  await prisma.backfillCursor.deleteMany({ where: { id: 1 } });
+}
+
 // ─── Data retention ──────────────────────────────────────────────────────────
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? "30", 10);
 
@@ -217,6 +254,7 @@ export type TransferQueryParams = {
   address: string;
   direction: "incoming" | "outgoing";
   contractId?: string;
+  token?: string;
   filter?: string;
   select?: string[];
   cursor?: string;
@@ -234,6 +272,7 @@ export async function queryTransfers(params: TransferQueryParams) {
     address,
     direction,
     contractId,
+    token,
     filter,
     select,
     cursor,
@@ -249,6 +288,7 @@ export async function queryTransfers(params: TransferQueryParams) {
   const baseWhere: Prisma.TokenTransferWhereInput = {
     ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
+    ...(token ? { contractId: token } : {}),
     ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
       ? {
@@ -286,6 +326,7 @@ export async function queryTransfers(params: TransferQueryParams) {
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
         eventId: requestedSelect.includes("eventId"),
+        isSac: requestedSelect.includes("isSac"),
         createdAt: requestedSelect.includes("createdAt"),
       }
     : undefined;
@@ -359,7 +400,7 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
       COALESCE(SUM(CASE WHEN "toAddress"   = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalReceived",
       COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)::TEXT AS "totalSent",
       COUNT(*)::INT8 AS "txCount"
-    FROM "TokenTransfer"
+    FROM "wraith"."TokenTransfer"
     WHERE ${where}
     GROUP BY "contractId"
     ORDER BY "contractId"
@@ -385,6 +426,37 @@ export async function getNftMetadata(
     where: { contractId_tokenId: { contractId, tokenId } },
     select: { name: true, tokenUri: true },
   });
+}
+
+/**
+ * Roll back indexed rows to a target ledger sequence.
+ * Deletes any rows with ledger > `targetLedger` from event tables
+ * and atomically updates the indexer state to reflect the new tip.
+ * Returns the number of deleted rows (sum across tables).
+ */
+export async function rollbackToLedger(targetLedger: number): Promise<number> {
+  // Perform deletes and state update atomically.
+  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
+    prisma.tokenTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.nftTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.indexerState.upsert({
+      where: { id: 1 },
+      create: { id: 1, lastIndexedLedger: targetLedger },
+      update: { lastIndexedLedger: targetLedger },
+    }),
+  ]);
+
+  const totalDeleted =
+    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
+
+  if (totalDeleted > 0) {
+    console.log(`[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`);
+  } else {
+    console.log(`[reorg] Rolled back to ledger ${targetLedger}, no rows deleted`);
+  }
+
+  return totalDeleted;
 }
 
 export async function upsertNftMetadata(
@@ -651,6 +723,7 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
 export type AllTransfersQueryParams = {
   address: string;
   contractId?: string;
+  token?: string;
   filter?: string;
   select?: string[];
   cursor?: string;
@@ -667,6 +740,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const {
     address,
     contractId,
+    token,
     filter,
     select,
     cursor,
@@ -682,6 +756,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const baseWhere: Prisma.TokenTransferWhereInput = {
     OR: [{ toAddress: address }, { fromAddress: address }],
     ...(contractId ? { contractId } : {}),
+    ...(token ? { contractId: token } : {}),
     ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
     ...(fromLedger || toLedger
       ? {
@@ -721,6 +796,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
         eventId: requestedSelect.includes("eventId"),
+        isSac: requestedSelect.includes("isSac"),
         createdAt: requestedSelect.includes("createdAt"),
       }
     : undefined;
@@ -744,4 +820,49 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   });
 
   return { total, transfers, nextCursor: page.nextCursor };
+}
+
+// ─── Popular assets query ───────────────────────────────────────────────────
+export type PopularAssetsQueryParams = {
+  fromDate: Date;
+  by: string;
+  limit: number;
+  offset: number;
+};
+
+type PopularAssetRow = {
+  contractId: string;
+  transferCount: bigint;
+  volume: string;
+};
+
+export async function queryPopularAssets(params: PopularAssetsQueryParams) {
+  const { fromDate, by, limit, offset } = params;
+  const cap = Math.min(limit, 100);
+
+  const orderClause = by === "volume"
+    ? Prisma.sql`SUM(CAST("amount" AS NUMERIC)) DESC`
+    : Prisma.sql`COUNT(*) DESC`;
+
+  const countResult = await prisma.$queryRaw<Array<{ total: bigint }>>`
+    SELECT COUNT(DISTINCT "contractId")::INT8 AS "total"
+    FROM "wraith"."TokenTransfer"
+    WHERE "ledgerClosedAt" >= ${fromDate}
+  `;
+  const total = Number(countResult[0]?.total ?? 0);
+
+  const assets = await prisma.$queryRaw<PopularAssetRow[]>`
+    SELECT
+      "contractId",
+      COUNT(*)::INT8 AS "transferCount",
+      COALESCE(SUM(CAST("amount" AS NUMERIC)), 0)::TEXT AS "volume"
+    FROM "wraith"."TokenTransfer"
+    WHERE "ledgerClosedAt" >= ${fromDate}
+    GROUP BY "contractId"
+    ORDER BY ${orderClause}
+    LIMIT ${cap}
+    OFFSET ${offset}
+  `;
+
+  return { total, assets };
 }

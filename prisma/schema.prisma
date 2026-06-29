@@ -26,6 +26,9 @@ model TokenTransfer {
   ledgerClosedAt DateTime
   txHash         String
   eventId        String    @unique
+  // True when the emitting contract is a Stellar Asset Contract (SAC) wrapping a
+  // classic asset, as opposed to a native Soroban token. Set by sac-detect (#136).
+  isSac          Boolean   @default(false)
   createdAt      DateTime  @default(now())
 
   @@index([toAddress])
@@ -178,6 +181,48 @@ model IndexerState {
   id                 Int      @id @default(1)
   lastIndexedLedger  Int
   updatedAt          DateTime @updatedAt
+
+  @@schema("wraith")
+}
+
+// ─── Indexer Checkpoint ──────────────────────────────────────────────────────
+// Tracks the cursor position for exactly-once idempotent batch processing.
+// Each batch is keyed by batchId (e.g., "sac:6000-7000") to enable parallel
+// workers to checkpoint independently. Atomic upsert of events + cursor ensures
+// a crash mid-batch either completes or rolls back, never leaving a gap.
+model IndexerCheckpoint {
+  id            Int      @id @default(autoincrement())
+  batchId       String   @unique
+  lastLedger    Int
+  processedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@schema("wraith")
+}
+
+// ─── Partition Retention Runs ───────────────────────────────────────────────
+model RetentionJobRun {
+  id             Int      @id @default(autoincrement())
+  startedAt      DateTime @default(now())
+  finishedAt     DateTime @updatedAt
+  compressed     Int      @default(0)
+  archived       Int      @default(0)
+  reclaimedBytes BigInt   @default(0)
+  skipped        Int      @default(0)
+  status         String   @default("completed")
+
+  @@schema("wraith")
+}
+
+// ─── Backfill Cursor ───────────────────────────────────────────────────────────
+// Durable cursor so the backfill job can resume mid-range after a crash.
+// Always row ID 1 — singleton, one backfill at a time.
+model BackfillCursor {
+  id             Int      @id @default(1)
+  startLedger    Int
+  endLedger      Int
+  nextLedger     Int
+  updatedAt      DateTime @updatedAt
 
   @@schema("wraith")
 }
