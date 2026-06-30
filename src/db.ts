@@ -436,10 +436,11 @@ export async function getNftMetadata(
  */
 export async function rollbackToLedger(targetLedger: number): Promise<number> {
   // Perform deletes and state update atomically.
-  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
+  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, deletedLpTransfers, _state] = await prisma.$transaction([
     prisma.tokenTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
     prisma.nftTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
     prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.lpShareTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
     prisma.indexerState.upsert({
       where: { id: 1 },
       create: { id: 1, lastIndexedLedger: targetLedger },
@@ -448,7 +449,7 @@ export async function rollbackToLedger(targetLedger: number): Promise<number> {
   ]);
 
   const totalDeleted =
-    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
+    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0) + (deletedLpTransfers?.count ?? 0);
 
   if (totalDeleted > 0) {
     console.log(`[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`);

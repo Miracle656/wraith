@@ -14,6 +14,7 @@ import {
 import { emitTransfer } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
 import { tagSacTransfers } from "./indexer/sac-detect";
+import { parseLpShareEvents, upsertLpShareTransfers } from "./indexer/lp-shares";
 import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig } from "./indexer/sources";
@@ -170,6 +171,18 @@ async function pollOnce(
     );
   }
 
+  // ── LP-share path ──────────────────────────────────────────────────────────
+  // Decode pool deposits/withdrawals as LP-share transfers tagged with the pool
+  // ID. Best-effort and additive: deposit/withdraw events are ignored by the
+  // fungible path, while a pool's own share mint/burn is recorded here in
+  // addition to its token-transfer row.
+  const lpRecords  = parseLpShareEvents(events);
+  const lpInserted = await upsertLpShareTransfers(lpRecords).catch((e) => {
+    console.error("[indexer] LP-share upsert failed:", e);
+    return 0;
+  });
+  totalIndexed    += lpInserted;
+
   // ── NFT path ─────────────────────────────────────────────────────────────────
   const nftParsed   = parseNftEvents(nftRawEvents);
   const nftRecords  = nftParsed.map((p) => p.record);
@@ -196,7 +209,7 @@ async function pollOnce(
   await setLastIndexedLedger(highestLedger);
 
   console.log(
-    `[indexer] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT records saved (ledger ${highestLedger})`
+    `[indexer] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT + ${lpInserted} LP-share records saved (ledger ${highestLedger})`
   );
 
   return highestLedger;

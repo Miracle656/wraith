@@ -119,6 +119,36 @@ model NftMetadata {
   @@schema("wraith")
 }
 
+// ─── LP-Share Transfers ──────────────────────────────────────────────────────
+// Liquidity-pool deposits/withdrawals surfaced as LP-share movements. The shares
+// have no symbol of their own, so each row carries the pool whose shares moved
+// (poolId = the emitting pool contract). A deposit mints shares to toAddress
+// (no from); a withdrawal burns shares from fromAddress (no to).
+model LpShareTransfer {
+  id             Int      @id @default(autoincrement())
+  // The liquidity-pool contract whose shares moved (C...)
+  poolId         String
+  // "deposit" (shares minted to provider) | "withdraw" (shares burned from provider)
+  action         String
+  fromAddress    String?
+  toAddress      String?
+  // i128 share amount as a decimal string
+  shares         String
+  ledger         Int
+  ledgerClosedAt DateTime
+  txHash         String
+  eventId        String   @unique
+  createdAt      DateTime @default(now())
+
+  @@index([poolId])
+  @@index([toAddress])
+  @@index([fromAddress])
+  @@index([ledger])
+  @@index([txHash])
+  @@index([poolId, action])
+  @@schema("wraith")
+}
+
 // ─── Account Summaries ────────────────────────────────────────────────────────
 model AccountSummary {
   id             Int      @id @default(autoincrement())
