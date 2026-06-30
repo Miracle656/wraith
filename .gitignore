@@ -1,6 +1,5 @@
 node_modules/
 dist/
-docs/
 .env
 *.env.local
 bench/results.json
