@@ -20,8 +20,6 @@ describe("Migrations idempotency", () => {
   test(
     "apply -> reset -> apply yields stable migration checksums",
     () => {
-      jest.setTimeout(5 * 60 * 1000);
-
       // Apply all migrations (up)
       runPrisma("migrate deploy");
 
@@ -40,5 +38,7 @@ describe("Migrations idempotency", () => {
 
       expect(first).toBe(second);
     },
+    // Migrate deploy + reset can take minutes; override vitest's default timeout.
+    5 * 60 * 1000,
   );
 });
