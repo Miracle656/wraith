@@ -7,6 +7,10 @@ export default defineConfig({
     globals: true,
     include: ["tests/integration/**/*.test.ts"],
     setupFiles: ["tests/integration/setup.ts"],
+    // Run suites one file at a time: setup.ts reseeds a single shared Postgres
+    // (deleteMany + createMany) per file, so parallel files race and collide on
+    // the tokenTransfer.eventId unique constraint, corrupting each other's data.
+    fileParallelism: false,
     testTimeout: 30_000,
   },
 });
