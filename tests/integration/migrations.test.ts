@@ -20,8 +20,11 @@ describe("Migrations idempotency", () => {
   test(
     "apply -> reset -> apply yields stable migration checksums",
     () => {
-      // Apply all migrations (up)
-      runPrisma("migrate deploy");
+      // Establish migrations from scratch with `reset` rather than `deploy`:
+      // the integration stack provisions its schema via `prisma db push`, which
+      // leaves no _prisma_migrations baseline, so `migrate deploy` aborts with
+      // P3005 ("database schema is not empty"). `reset` drops and reapplies.
+      runPrisma("migrate reset --force --skip-seed");
 
       // Capture migration checksums from the migrations table
       const first = runPrisma(
