@@ -11,7 +11,12 @@ async function waitForApi(): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${API_BASE_URL}/healthz`);
+      // Per-request timeout: without it a single hung connection (an unhealthy
+      // container that accepts sockets but never responds) blocks forever and
+      // the deadline check below is never reached.
+      const response = await fetch(`${API_BASE_URL}/healthz`, {
+        signal: AbortSignal.timeout(5_000),
+      });
       if (response.ok) return;
     } catch {
       // The compose service may still be booting.
