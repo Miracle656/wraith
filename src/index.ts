@@ -47,10 +47,19 @@ async function main() {
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
   // so the API stays responsive while indexing happens concurrently.
-  startIndexer().catch((err) => {
-    console.error("[wraith] Indexer crashed — exiting:", err);
-    process.exit(1);
-  });
+  //
+  // SKIP_INDEXER lets a deployment serve the read API without a live Soroban
+  // RPC connection — used by the integration test stack (docker-compose.test.yml),
+  // which exercises the HTTP surface only. Without this guard the indexer throws
+  // on the missing RPC endpoint and takes the whole process (and API) down.
+  if (process.env.SKIP_INDEXER === "true") {
+    console.log("[wraith] SKIP_INDEXER=true — indexer not started (API-only mode)");
+  } else {
+    startIndexer().catch((err) => {
+      console.error("[wraith] Indexer crashed — exiting:", err);
+      process.exit(1);
+    });
+  }
 }
 
 main();
