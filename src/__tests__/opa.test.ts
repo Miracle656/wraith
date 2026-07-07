@@ -15,23 +15,37 @@ import { createOpaMiddleware } from "../middleware/opa";
 
 type MockOpaResult = { allow: boolean; deny_reason?: string; deny_rule?: string };
 
-var mockOpaResult: MockOpaResult = { allow: true };
-var mockOpaError: Error | null = null;
-var opaRequestSpy: jest.Mock;
+let mockOpaResult: MockOpaResult = { allow: true };
+// When true, the mocked OPA request emits an "error" instead of a response,
+// exercising the middleware's fail-closed (503) path.
+let mockOpaUnreachable = false;
+// `var` (not `let`) so the binding is hoisted and initialized to `undefined`
+// before jest hoists the `jest.mock("http", …)` factory above this line — a
+// `let`/`const` would still be in its temporal dead zone when the factory runs.
+var mockOpaRequest: jest.Mock;
 
 jest.mock("http", () => {
   const actual = jest.requireActual<typeof http>("http");
 
-  opaRequestSpy = jest.fn((opts: http.RequestOptions, callback?: (res: http.IncomingMessage) => void) => {
-    if (opts?.hostname !== "opa") {
-      return actual.request(opts, callback);
+  mockOpaRequest = jest.fn((opts: unknown, callback?: unknown) => {
+    // Only intercept requests bound for the OPA server (hostname "opa"). Anything
+    // else — notably supertest's own client socket to the in-process express app —
+    // must go to the real http.request, or the round-trip breaks (e.g. the missing
+    // `setNoDelay`). This is why a blanket global mock previously failed.
+    const host =
+      opts && typeof opts === "object"
+        ? ((opts as { hostname?: string; host?: string }).hostname ??
+           (opts as { hostname?: string; host?: string }).host)
+        : undefined;
+    if (host !== "opa") {
+      return (actual.request as unknown as (...a: unknown[]) => unknown)(opts, callback);
     }
 
-    if (mockOpaError) {
+    // Simulate an unreachable OPA server: emit an error instead of a response.
+    if (mockOpaUnreachable) {
       return {
         on: (event: string, handler: (err: Error) => void) => {
-          if (event === "error") setImmediate(() => handler(mockOpaError as Error));
-          return undefined;
+          if (event === "error") setImmediate(() => handler(new Error("ECONNREFUSED")));
         },
         write: jest.fn(),
         end:   jest.fn(),
@@ -49,7 +63,7 @@ jest.mock("http", () => {
       (fakeRes as EventEmitter).emit("end");
     });
 
-    if (typeof callback === "function") callback(fakeRes as http.IncomingMessage);
+    if (typeof callback === "function") (callback as (r: unknown) => void)(fakeRes);
 
     return {
       on:    jest.fn(),
@@ -58,7 +72,7 @@ jest.mock("http", () => {
     };
   });
 
-  return { ...actual, request: opaRequestSpy };
+  return { ...actual, request: mockOpaRequest };
 });
 
 // ── Test app factory ──────────────────────────────────────────────────────────
@@ -76,7 +90,7 @@ function makeApp(overrides = {}) {
 describe("createOpaMiddleware", () => {
   beforeEach(() => {
     mockOpaResult = { allow: true };
-    mockOpaError = null;
+    mockOpaUnreachable = false;
     jest.clearAllMocks();
   });
 
@@ -137,11 +151,11 @@ describe("createOpaMiddleware", () => {
       .set("Authorization", "Bearer my-token-123");
 
     // Verify OPA was called (token extraction is internal; we confirm it was queried)
-    expect(opaRequestSpy).toHaveBeenCalled();
+    expect(mockOpaRequest).toHaveBeenCalled();
   });
 
   it("returns 503 when OPA is unreachable", async () => {
-    mockOpaError = new Error("ECONNREFUSED");
+    mockOpaUnreachable = true;
 
     const res = await supertest(makeApp()).get("/protected");
     expect(res.status).toBe(503);
@@ -155,7 +169,7 @@ describe("createOpaMiddleware", () => {
       .set("Authorization", "Bearer tok")
       .set("x-user-role", "admin");
 
-    expect(opaRequestSpy).toHaveBeenCalled();
+    expect(mockOpaRequest).toHaveBeenCalled();
   });
 
   it("uses custom getRole extractor when provided", async () => {

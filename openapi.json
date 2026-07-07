@@ -1,0 +1,3726 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Wraith API",
+    "version": "1.0.0",
+    "description": "REST API documentation for the Wraith token transfer indexer.",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3000",
+      "description": "Local development server"
+    }
+  ],
+  "components": {
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "uptime": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "uptime"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readiness probe",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 100,
+              "description": "Max acceptable ledger lag"
+            },
+            "required": false,
+            "description": "Max acceptable ledger lag",
+            "name": "maxLag",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "properties": {
+                        "db": {
+                          "type": "boolean"
+                        },
+                        "rpc": {
+                          "type": "boolean"
+                        },
+                        "indexerCaughtUp": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "db",
+                        "rpc",
+                        "indexerCaughtUp"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "properties": {
+                        "db": {
+                          "type": "boolean"
+                        },
+                        "rpc": {
+                          "type": "boolean"
+                        },
+                        "indexerCaughtUp": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "db",
+                        "rpc",
+                        "indexerCaughtUp"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "summary": "Indexer status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "lastIndexedLedger": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "latestLedger": {
+                      "type": "integer"
+                    },
+                    "lagLedgers": {
+                      "type": "integer"
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "uptimeSeconds": {
+                      "type": "integer"
+                    },
+                    "totalIndexed": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "lastIndexedLedger",
+                    "latestLedger",
+                    "lagLedgers",
+                    "startedAt",
+                    "uptimeSeconds",
+                    "totalIndexed"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transfers/incoming/{address}": {
+      "get": {
+        "summary": "Incoming transfers",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated list of event types"
+            },
+            "required": false,
+            "description": "Comma-separated list of event types",
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Opaque pagination cursor"
+            },
+            "required": false,
+            "description": "Opaque pagination cursor",
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "OData filter expression"
+            },
+            "required": false,
+            "description": "OData filter expression",
+            "name": "$filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated field list"
+            },
+            "required": false,
+            "description": "Comma-separated field list",
+            "name": "$select",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "transfer",
+                              "mint",
+                              "burn",
+                              "clawback"
+                            ]
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "amount": {
+                            "type": "string"
+                          },
+                          "displayAmount": {
+                            "type": "string"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "incoming",
+                              "outgoing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "eventType",
+                          "fromAddress",
+                          "toAddress",
+                          "amount",
+                          "displayAmount",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transfers/outgoing/{address}": {
+      "get": {
+        "summary": "Outgoing transfers",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated list of event types"
+            },
+            "required": false,
+            "description": "Comma-separated list of event types",
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Opaque pagination cursor"
+            },
+            "required": false,
+            "description": "Opaque pagination cursor",
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "OData filter expression"
+            },
+            "required": false,
+            "description": "OData filter expression",
+            "name": "$filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated field list"
+            },
+            "required": false,
+            "description": "Comma-separated field list",
+            "name": "$select",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "transfer",
+                              "mint",
+                              "burn",
+                              "clawback"
+                            ]
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "amount": {
+                            "type": "string"
+                          },
+                          "displayAmount": {
+                            "type": "string"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "incoming",
+                              "outgoing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "eventType",
+                          "fromAddress",
+                          "toAddress",
+                          "amount",
+                          "displayAmount",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transfers/address/{address}": {
+      "get": {
+        "summary": "All transfers for address",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated list of event types"
+            },
+            "required": false,
+            "description": "Comma-separated list of event types",
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Opaque pagination cursor"
+            },
+            "required": false,
+            "description": "Opaque pagination cursor",
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "OData filter expression"
+            },
+            "required": false,
+            "description": "OData filter expression",
+            "name": "$filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated field list"
+            },
+            "required": false,
+            "description": "Comma-separated field list",
+            "name": "$select",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "transfer",
+                              "mint",
+                              "burn",
+                              "clawback"
+                            ]
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "amount": {
+                            "type": "string"
+                          },
+                          "displayAmount": {
+                            "type": "string"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "incoming",
+                              "outgoing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "eventType",
+                          "fromAddress",
+                          "toAddress",
+                          "amount",
+                          "displayAmount",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transfers/address/{address}/export.csv": {
+      "get": {
+        "summary": "Export transfers to CSV",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated list of event types"
+            },
+            "required": false,
+            "description": "Comma-separated list of event types",
+            "name": "eventType",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV export",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transfers/tx/{txHash}": {
+      "get": {
+        "summary": "Transfers by transaction",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Transaction hash"
+            },
+            "required": true,
+            "description": "Transaction hash",
+            "name": "txHash",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "transfer",
+                              "mint",
+                              "burn",
+                              "clawback"
+                            ]
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "amount": {
+                            "type": "string"
+                          },
+                          "displayAmount": {
+                            "type": "string"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "incoming",
+                              "outgoing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "eventType",
+                          "fromAddress",
+                          "toAddress",
+                          "amount",
+                          "displayAmount",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/summary/{address}": {
+      "get": {
+        "summary": "Token summary",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "minLength": 1,
+                      "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "fromDate": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time",
+                          "example": "2025-01-01T00:00:00Z"
+                        },
+                        "toDate": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time",
+                          "example": "2025-01-01T00:00:00Z"
+                        }
+                      },
+                      "required": [
+                        "fromDate",
+                        "toDate"
+                      ]
+                    },
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "totalReceived": {
+                            "type": "string"
+                          },
+                          "totalSent": {
+                            "type": "string"
+                          },
+                          "netFlow": {
+                            "type": "string"
+                          },
+                          "displayTotalReceived": {
+                            "type": "string"
+                          },
+                          "displayTotalSent": {
+                            "type": "string"
+                          },
+                          "displayNetFlow": {
+                            "type": "string"
+                          },
+                          "txCount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "contractId",
+                          "totalReceived",
+                          "totalSent",
+                          "netFlow",
+                          "displayTotalReceived",
+                          "displayTotalSent",
+                          "displayNetFlow",
+                          "txCount"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "address",
+                    "window",
+                    "tokens"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{address}/summary": {
+      "get": {
+        "summary": "Token summary",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "minLength": 1,
+                      "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "fromDate": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time",
+                          "example": "2025-01-01T00:00:00Z"
+                        },
+                        "toDate": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "date-time",
+                          "example": "2025-01-01T00:00:00Z"
+                        }
+                      },
+                      "required": [
+                        "fromDate",
+                        "toDate"
+                      ]
+                    },
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "totalReceived": {
+                            "type": "string"
+                          },
+                          "totalSent": {
+                            "type": "string"
+                          },
+                          "netFlow": {
+                            "type": "string"
+                          },
+                          "displayTotalReceived": {
+                            "type": "string"
+                          },
+                          "displayTotalSent": {
+                            "type": "string"
+                          },
+                          "displayNetFlow": {
+                            "type": "string"
+                          },
+                          "txCount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "contractId",
+                          "totalReceived",
+                          "totalSent",
+                          "netFlow",
+                          "displayTotalReceived",
+                          "displayTotalSent",
+                          "displayNetFlow",
+                          "txCount"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "address",
+                    "window",
+                    "tokens"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/{address}/transfers": {
+      "get": {
+        "summary": "Account transfers",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Token contract ID to filter by"
+            },
+            "required": false,
+            "description": "Token contract ID to filter by",
+            "name": "contractId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive lower bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive lower bound on ledgerClosedAt",
+            "name": "fromDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "format": "date-time",
+              "description": "Inclusive upper bound on ledgerClosedAt"
+            },
+            "required": false,
+            "description": "Inclusive upper bound on ledgerClosedAt",
+            "name": "toDate",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated list of event types"
+            },
+            "required": false,
+            "description": "Comma-separated list of event types",
+            "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Opaque pagination cursor"
+            },
+            "required": false,
+            "description": "Opaque pagination cursor",
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "OData filter expression"
+            },
+            "required": false,
+            "description": "OData filter expression",
+            "name": "$filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated field list"
+            },
+            "required": false,
+            "description": "Comma-separated field list",
+            "name": "$select",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "eventType": {
+                            "type": "string",
+                            "enum": [
+                              "transfer",
+                              "mint",
+                              "burn",
+                              "clawback"
+                            ]
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "amount": {
+                            "type": "string"
+                          },
+                          "displayAmount": {
+                            "type": "string"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "incoming",
+                              "outgoing"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "eventType",
+                          "fromAddress",
+                          "toAddress",
+                          "amount",
+                          "displayAmount",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks": {
+      "post": {
+        "summary": "Create a webhook subscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "filter": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "contract": {
+                        "type": "string"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      },
+                      "min_amount": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "url",
+                  "secret"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "filter": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "contract": {
+                          "type": "string"
+                        },
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "min_amount": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "active": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "signatureVerification": {
+                      "type": "object",
+                      "properties": {
+                        "header": {
+                          "type": "string",
+                          "enum": [
+                            "X-Wraith-Signature"
+                          ]
+                        },
+                        "algorithm": {
+                          "type": "string",
+                          "enum": [
+                            "sha256"
+                          ]
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "body": {
+                          "type": "string"
+                        },
+                        "example": {
+                          "type": "string"
+                        },
+                        "safeCompare": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "header",
+                        "algorithm",
+                        "format",
+                        "body",
+                        "example",
+                        "safeCompare"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "url",
+                    "filter",
+                    "active",
+                    "createdAt",
+                    "signatureVerification"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List webhook subscriptions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "filter": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "contract": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              },
+                              "min_amount": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "active": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "url",
+                          "filter",
+                          "active",
+                          "createdAt",
+                          "updatedAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "subscriptions"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/{id}": {
+      "delete": {
+        "summary": "Delete a webhook subscription",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/{id}/deliveries": {
+      "get": {
+        "summary": "Webhook delivery log",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "success",
+                "failed"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "deliveries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "attempts": {
+                            "type": "integer"
+                          },
+                          "lastStatusCode": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "lastError": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "nextRetryAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "deliveredAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "eventId",
+                          "status",
+                          "attempts",
+                          "lastStatusCode",
+                          "lastError",
+                          "nextRetryAt",
+                          "deliveredAt",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "deliveries"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/host-fn/{contractId}": {
+      "get": {
+        "summary": "Host function logs",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": true,
+            "name": "contractId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Host function name to filter by"
+            },
+            "required": false,
+            "description": "Host function name to filter by",
+            "name": "functionName",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "contractId": {
+                      "type": "string",
+                      "pattern": "^C[A-Z2-7]{55}$",
+                      "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "logs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "functionName": {
+                            "type": "string"
+                          },
+                          "args": {
+                            "nullable": true
+                          },
+                          "result": {
+                            "nullable": true
+                          },
+                          "gasUsed": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "contractId",
+                          "functionName",
+                          "gasUsed",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "contractId",
+                    "total",
+                    "limit",
+                    "offset",
+                    "logs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nfts/transfers": {
+      "get": {
+        "summary": "NFT transfers",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "NFT contract ID to filter by"
+            },
+            "required": false,
+            "description": "NFT contract ID to filter by",
+            "name": "contract",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "NFT token identifier"
+            },
+            "required": false,
+            "description": "NFT token identifier",
+            "name": "token_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Filter by sender or recipient address"
+            },
+            "required": false,
+            "description": "Filter by sender or recipient address",
+            "name": "address",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "fromLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true
+            },
+            "required": false,
+            "name": "toLedger",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 50,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Opaque pagination cursor"
+            },
+            "required": false,
+            "description": "Opaque pagination cursor",
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "OData filter expression"
+            },
+            "required": false,
+            "description": "OData filter expression",
+            "name": "$filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "array",
+              "nullable": true,
+              "items": {
+                "type": "string"
+              },
+              "description": "Comma-separated field list"
+            },
+            "required": false,
+            "description": "Comma-separated field list",
+            "name": "$select",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "transfers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "tokenId": {
+                            "type": "string"
+                          },
+                          "fromAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toAddress": {
+                            "type": "string",
+                            "nullable": true,
+                            "minLength": 1,
+                            "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "ledger": {
+                            "type": "integer"
+                          },
+                          "ledgerClosedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "txHash": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contractId",
+                          "tokenId",
+                          "fromAddress",
+                          "toAddress",
+                          "ledger",
+                          "ledgerClosedAt",
+                          "txHash",
+                          "eventId",
+                          "createdAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "limit",
+                    "offset",
+                    "transfers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nfts/owners/{contract}/{token_id}": {
+      "get": {
+        "summary": "NFT owner lookup",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": true,
+            "name": "contract",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "token_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "contract": {
+                      "type": "string",
+                      "pattern": "^C[A-Z2-7]{55}$",
+                      "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                    },
+                    "token_id": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string",
+                      "minLength": 1,
+                      "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "tokenUri": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "tokenUri"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "token_id",
+                    "owner",
+                    "metadata"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/assets/popular": {
+      "get": {
+        "summary": "Popular assets",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "default": "24h"
+            },
+            "required": false,
+            "name": "window",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "transfers",
+                "volume"
+              ],
+              "default": "transfers"
+            },
+            "required": false,
+            "name": "by",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 20,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "window": {
+                      "type": "string",
+                      "enum": [
+                        "1h",
+                        "24h",
+                        "7d"
+                      ]
+                    },
+                    "by": {
+                      "type": "string",
+                      "enum": [
+                        "transfers",
+                        "volume"
+                      ]
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "assets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "transferCount": {
+                            "type": "integer"
+                          },
+                          "volume": {
+                            "type": "string"
+                          },
+                          "displayVolume": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "contractId",
+                          "transferCount",
+                          "volume",
+                          "displayVolume"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "window",
+                    "by",
+                    "limit",
+                    "offset",
+                    "total",
+                    "assets"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

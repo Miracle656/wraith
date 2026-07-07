@@ -48,6 +48,7 @@ export interface TransferRecord {
   ledgerClosedAt: Date;
   txHash: string;
   eventId: string;
+  isSac?: boolean; // true when the contract is a Stellar Asset Contract (#136)
 }
 
 type ListPage<T> = {
@@ -86,6 +87,7 @@ const TRANSFER_SELECTABLE_FIELDS = [
   "ledgerClosedAt",
   "txHash",
   "eventId",
+  "isSac",
   "createdAt",
   "displayAmount",
   "direction",
@@ -324,6 +326,7 @@ export async function queryTransfers(params: TransferQueryParams) {
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
         eventId: requestedSelect.includes("eventId"),
+        isSac: requestedSelect.includes("isSac"),
         createdAt: requestedSelect.includes("createdAt"),
       }
     : undefined;
@@ -793,6 +796,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
         ledgerClosedAt: requestedSelect.includes("ledgerClosedAt"),
         txHash: requestedSelect.includes("txHash"),
         eventId: requestedSelect.includes("eventId"),
+        isSac: requestedSelect.includes("isSac"),
         createdAt: requestedSelect.includes("createdAt"),
       }
     : undefined;

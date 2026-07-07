@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { queryPopularAssets, toDisplayAmount } from "../../db";
+import { parseOr400 } from "../../openapi/validation";
+import { popularAssetsQuerySchema } from "../../openapi/schemas";
 
 const VALID_WINDOWS = new Set(["1h", "24h", "7d"]);
 const VALID_SORT_BY = new Set(["transfers", "volume"]);
@@ -25,24 +27,9 @@ export function createPopularAssetsRouter(): Router {
     "/popular",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const window = (req.query.window as string) || "24h";
-        const by = (req.query.by as string) || "transfers";
-        const limit = parseInt(String(req.query.limit ?? "20"), 10);
-        const offset = parseInt(String(req.query.offset ?? "0"), 10);
-
-        if (!VALID_WINDOWS.has(window)) {
-          res.status(400).json({
-            error: `Invalid window: "${window}". Valid values: 1h, 24h, 7d.`,
-          });
-          return;
-        }
-
-        if (!VALID_SORT_BY.has(by)) {
-          res.status(400).json({
-            error: `Invalid by: "${by}". Valid values: transfers, volume.`,
-          });
-          return;
-        }
+        const parsed = parseOr400(popularAssetsQuerySchema, req.query, res);
+        if (!parsed) return;
+        const { window, by, limit, offset } = parsed;
 
         const fromDate = windowToDate(window);
         const { total, assets } = await queryPopularAssets({ fromDate, by, limit, offset });
@@ -50,7 +37,7 @@ export function createPopularAssetsRouter(): Router {
         res.json({
           window,
           by,
-          limit: Math.min(limit, 100),
+          limit,
           offset,
           total,
           assets: assets.map((a) => ({

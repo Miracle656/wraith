@@ -50,7 +50,10 @@ describe("Wraith integration API", () => {
   });
 
   it("aggregates account summary across incoming and outgoing events", async () => {
-    const body = await getJson(`/accounts/${ALICE}/summary`);
+    // Use /summary/:address (the querySummary handler returning `tokens`). The
+    // /accounts/:address/summary route is shadowed by the accounts router, which
+    // returns a different `{ address, assets }` shape.
+    const body = await getJson(`/summary/${ALICE}`);
 
     expect(body.address).toBe(ALICE);
     expect(body.tokens).toEqual([

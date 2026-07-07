@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { queryAllTransfers } from "../../db";
+import { parseOr400 } from "../../openapi/validation";
+import { transferQuerySchema } from "../../openapi/schemas";
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 const STROOPS = 10_000_000n;
@@ -53,56 +55,38 @@ export function createAccountsTransfersRouter(): Router {
     "/",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const {
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, token, cursor, $filter, $select } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          token?: string;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+        };
+
+        const result = await queryAllTransfers({
+          address,
           contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
           fromLedger,
           toLedger,
           fromDate,
           toDate,
-          eventType,
+          eventTypes: eventType as string[] | undefined,
           limit,
           offset,
-          token,
-          cursor,
-          $filter,
-          $select,
-        } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        if (token !== undefined) {
-          const tokenStr = String(token).trim();
-          if (!tokenStr.startsWith("C") || tokenStr.length !== 56) {
-            res.status(400).json({
-              error: `Invalid token address: "${tokenStr}". Must be a 56-character Stellar contract address starting with "C".`,
-            });
-            return;
-          }
-        }
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
-
-        const result = await queryAllTransfers({
-          address,
-          contractId: contractId as string | undefined,
-          token: token !== undefined ? String(token).trim() : undefined,
-          filter: $filter as string | undefined,
-          select: typeof $select === "string" ? String($select).split(",").map((item) => item.trim()).filter(Boolean) : undefined,
-          cursor: cursor as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
         });
 
         res.json({
@@ -113,8 +97,8 @@ export function createAccountsTransfersRouter(): Router {
             }
             return transfer;
           }),
-          limit: lim,
-          offset: off,
+          limit,
+          offset,
         });
       } catch (err) {
         next(err);
