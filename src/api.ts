@@ -12,6 +12,7 @@ import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
 import { createSearchRouter } from "./routes/search";
+import { cacheMiddleware } from "./cache/redis";
 import {
   hostFnQuerySchema,
   nftOwnerParamsSchema,
@@ -33,6 +34,11 @@ const limiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
   skip: () => process.env.NODE_ENV === "test",
 });
+
+// ── Response cache (opt-in via CACHE_ENABLED) ───────────────────────────────────
+// Per-route TTLs: popular-asset rollups tolerate more staleness than search.
+const POPULAR_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_POPULAR_MS ?? "60000", 10);
+const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000", 10);
 
 // ── Amount formatting ─────────────────────────────────────────────────────────
 const STROOPS = 10_000_000n;
@@ -100,13 +106,13 @@ export function createApp(): express.Application {
   app.use("/graphql", createGraphQLMiddleware());
 
   // ── Assets routes ───────────────────────────────────────────────────────────
-  app.use("/assets", createPopularAssetsRouter());
+  app.use("/assets", cacheMiddleware({ ttlMs: POPULAR_CACHE_TTL_MS }), createPopularAssetsRouter());
 
   // ── Export routes ─────────────────────────────────────────────────────────────
   app.use("/", createExportsRouter());
 
   // ── Fuzzy search across accounts, assets, and contracts ──────────────────────
-  app.use("/search", createSearchRouter());
+  app.use("/search", cacheMiddleware({ ttlMs: SEARCH_CACHE_TTL_MS }), createSearchRouter());
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
