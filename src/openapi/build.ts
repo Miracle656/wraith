@@ -6,9 +6,9 @@ import {
   booleanOkResponseSchema,
   errorResponseSchema,
   healthzResponseSchema,
+  hostFnQuerySchema,
   hostFnLogsResponseSchema,
   hostFnParamsSchema,
-  hostFnQuerySchema,
   nftOwnerParamsSchema,
   nftOwnerResponseSchema,
   nftTransfersQuerySchema,
@@ -17,6 +17,8 @@ import {
   popularAssetsResponseSchema,
   readyzQuerySchema,
   readyzResponseSchema,
+  searchQuerySchema,
+  searchResponseSchema,
   statusResponseSchema,
   summaryQuerySchema,
   summaryResponseSchema,
@@ -290,6 +292,19 @@ registry.registerPath({
   },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: popularAssetsResponseSchema } } },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/search",
+  summary: "Fuzzy search across accounts, assets, and contracts",
+  request: {
+    query: searchQuerySchema,
+  },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: searchResponseSchema } } },
     ...commonErrorResponses,
   },
 });

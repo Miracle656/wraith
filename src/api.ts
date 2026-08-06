@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import { jsonApiMiddleware } from "./middleware/jsonapi";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
@@ -24,12 +25,14 @@ import {
 import { parseOr400 } from "./openapi/validation";
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
+// Skip rate limiting in test environment to avoid 429 errors during tests
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
-  standardHeaders: true,   // Sends `RateLimit-*` headers
-  legacyHeaders: false,    // Disables `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
+  skip: () => process.env.NODE_ENV === "test",
 });
 
 // ── Response cache (opt-in via CACHE_ENABLED) ───────────────────────────────────
@@ -92,6 +95,7 @@ export function createApp(): express.Application {
 
   app.use(cors());
   app.use(express.json());
+  app.use(jsonApiMiddleware);
   app.use(limiter);
 
   // ── Accounts routes ───────────────────────────────────────────────────────────

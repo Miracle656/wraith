@@ -440,6 +440,99 @@ If `HORIZON_URL` is set, the indexer checks the RPC source first and switches to
 
 ***
 
+## JSON:API Content Negotiation
+
+All `GET` endpoints support the JSON:API specification via content negotiation. Include an `Accept: application/vnd.api+json` header to receive responses in JSON:API format.
+
+### JSON:API Response Structure
+
+Responses are transformed to the JSON:API document structure:
+
+- **Collection endpoints** return an array in the `data` member with pagination metadata in `meta`
+- **Single resource endpoints** return a single resource object in `data`
+- **Error responses** return an array in the `errors` member with `title` and `detail` fields
+- **Dates** are serialized as ISO 8601 strings
+- **BigInt values** are converted to strings
+
+### Example: Transfers in JSON:API Format
+
+```bash
+# Request with JSON:API Accept header
+curl -H "Accept: application/vnd.api+json" http://localhost:3000/transfers/address/GABC123...
+
+# Response
+{
+  "data": [
+    {
+      "id": "evt-001",
+      "type": "transfer",
+      "attributes": {
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "eventType": "transfer",
+        "fromAddress": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF",
+        "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "amount": "10000000",
+        "ledger": 1001,
+        "ledgerClosedAt": "2025-01-01T00:00:00.000Z",
+        "txHash": "aaaa1111",
+        "displayAmount": "1.0000000"
+      }
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+### Example: Summary in JSON:API Format
+
+```bash
+curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123...
+
+{
+  "data": [
+    {
+      "id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      "type": "token-summary",
+      "attributes": {
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "totalReceived": "110000000",
+        "totalSent": "170000000",
+        "netFlow": "-60000000",
+        "txCount": 3
+      }
+    }
+  ],
+  "meta": {
+    "address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "window": { "fromDate": null, "toDate": null }
+  }
+}
+```
+
+### Supported Endpoints
+
+| Endpoint | Resource Type |
+|----------|---------------|
+| `GET /transfers/address/:address` | `transfer` |
+| `GET /transfers/incoming/:address` | `transfer` |
+| `GET /transfers/outgoing/:address` | `transfer` |
+| `GET /transfers/tx/:txHash` | `transfer` |
+| `GET /summary/:address` | `token-summary` |
+| `GET /accounts/:address/summary` | `account-summary` |
+| `GET /accounts/:address/transfers` | `transfer` |
+| `GET /assets/popular` | `popular-asset` |
+| `GET /nfts/transfers` | `nft-transfer` |
+| `GET /nfts/owners/:contract/:token_id` | `nft-owner` |
+| `GET /status` | `status` |
+| `GET /healthz` | `health` |
+| `GET /readyz` | `readiness` |
+
+***
+
 ## Event Types Indexed
 
 | Type       | `fromAddress` | `toAddress` | Context                         |
