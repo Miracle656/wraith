@@ -15,7 +15,7 @@ export function toDisplayAmount(amount: string): string {
 
 import { withReadReplicas } from "./db/router";
 
-// ─── Singleton Prisma client ──────────────────────────────────────────────────
+// ─── Singleton Prisma client ───────────────────────────────────────────────
 // Re-use one connection pool across the process.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
@@ -37,7 +37,7 @@ export const prisma =
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────
 export interface TransferRecord {
   contractId: string;
   eventType: string; // "transfer" | "mint" | "burn" | "clawback"
@@ -160,7 +160,7 @@ const ACCOUNT_SUMMARY_FIELD_TYPES = {
   updatedAt: { type: "date" as const },
 };
 
-// ─── Upsert helper ────────────────────────────────────────────────────────────
+// ─── Upsert helper ─────────────────────────────────────────────────────────
 /**
  * Idempotently insert a batch of transfer events.
  * Conflicts on `eventId` are silently ignored — safe to call multiple times
@@ -178,7 +178,7 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
   return result.count;
 }
 
-// ─── Indexer state helpers ────────────────────────────────────────────────────
+// ─── Indexer state helpers ─────────────────────────────────────────────────
 /**
  * Read the last indexed ledger from DB.
  * Returns null if no state row exists yet.
@@ -186,6 +186,14 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
 export async function getLastIndexedLedger(): Promise<number | null> {
   const state = await prisma.indexerState.findUnique({ where: { id: 1 } });
   return state?.lastIndexedLedger ?? null;
+}
+
+/**
+ * Read the last indexed ledger and state details from DB.
+ */
+export async function getLastIndexedState(): Promise<{ lastIndexedLedger: number | null }> {
+  const state = await prisma.indexerState.findUnique({ where: { id: 1 } });
+  return { lastIndexedLedger: state?.lastIndexedLedger ?? null };
 }
 
 /**
@@ -199,7 +207,7 @@ export async function setLastIndexedLedger(ledger: number): Promise<void> {
   });
 }
 
-// ─── Backfill cursor helpers ──────────────────────────────────────────────────
+// ─── Backfill cursor helpers ───────────────────────────────────────────────
 export interface BackfillCursorState {
   startLedger: number;
   endLedger: number;
@@ -225,7 +233,7 @@ export async function clearBackfillCursor(): Promise<void> {
   await prisma.backfillCursor.deleteMany({ where: { id: 1 } });
 }
 
-// ─── Data retention ──────────────────────────────────────────────────────────
+// ─── Data retention ─────────────────────────────────────────────────────────
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? "30", 10);
 
 /**
@@ -249,7 +257,7 @@ export async function pruneOldTransfers(): Promise<number> {
   return result.count;
 }
 
-// ─── Query helpers ────────────────────────────────────────────────────────────
+// ─── Query helpers ─────────────────────────────────────────────────────────
 export type TransferQueryParams = {
   address: string;
   direction: "incoming" | "outgoing";
@@ -363,7 +371,7 @@ export async function queryByTxHash(txHash: string) {
   });
 }
 
-// ─── Summary aggregate query ──────────────────────────────────────────────────
+// ─── Summary aggregate query ───────────────────────────────────────────────
 export type SummaryQueryParams = {
   address: string;
   contractId?: string;
@@ -407,7 +415,7 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
   `;
 }
 
-// ─── NFT helpers ─────────────────────────────────────────────────────────────
+// ─── NFT helpers ───────────────────────────────────────────────────────────
 
 export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<number> {
   if (records.length === 0) return 0;
@@ -570,7 +578,7 @@ export async function getNftOwner(
   return latest?.toAddress ?? null;
 }
 
-// ─── Account summary helpers ──────────────────────────────────────────────────
+// ─── Account summary helpers ───────────────────────────────────────────────
 
 /**
  * Incrementally update materialized aggregates for every address touched by
@@ -719,7 +727,7 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
   };
 }
 
-// ─── Combined address query ───────────────────────────────────────────────────
+// ─── Combined address query ────────────────────────────────────────────────
 export type AllTransfersQueryParams = {
   address: string;
   contractId?: string;
@@ -822,7 +830,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   return { total, transfers, nextCursor: page.nextCursor };
 }
 
-// ─── Popular assets query ───────────────────────────────────────────────────
+// ─── Popular assets query ──────────────────────────────────────────────────
 export type PopularAssetsQueryParams = {
   fromDate: Date;
   by: string;
