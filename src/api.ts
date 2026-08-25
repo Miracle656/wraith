@@ -24,7 +24,32 @@ import {
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// ─── RPC Health Check Cache ───────────────────────────────────────────────
+let cachedRpcHealth: { healthy: boolean; timestamp: number } | null = null;
+const RPC_HEALTH_CACHE_TTL_MS = 3000;
+
+export function clearRpcHealthCache(): void {
+  cachedRpcHealth = null;
+}
+
+export async function checkRpcHealth(): Promise<boolean> {
+  const now = Date.now();
+  if (cachedRpcHealth && now - cachedRpcHealth.timestamp < RPC_HEALTH_CACHE_TTL_MS) {
+    return cachedRpcHealth.healthy;
+  }
+
+  try {
+    const latest = await getLatestLedger();
+    const healthy = typeof latest === "number" && latest > 0;
+    cachedRpcHealth = { healthy, timestamp: now };
+    return healthy;
+  } catch {
+    cachedRpcHealth = { healthy: false, timestamp: now };
+    return false;
+  }
+}
+
+// ─── Rate limiting ─────────────────────────────────────────────────────────
 // Skip rate limiting in test environment to avoid 429 errors during tests
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
@@ -35,12 +60,12 @@ const limiter = rateLimit({
   skip: () => process.env.NODE_ENV === "test",
 });
 
-// ── Response cache (opt-in via CACHE_ENABLED) ───────────────────────────────────
+// ─── Response cache (opt-in via CACHE_ENABLED) ─────────────────────────────
 // Per-route TTLs: popular-asset rollups tolerate more staleness than search.
 const POPULAR_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_POPULAR_MS ?? "60000", 10);
 const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000", 10);
 
-// ── Amount formatting ─────────────────────────────────────────────────────────
+// ─── Amount formatting ────────────────────────────────────────────────────
 const STROOPS = 10_000_000n;
 
 /**
@@ -69,7 +94,7 @@ function parseSelectQuery(value: unknown): string[] | undefined {
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 
-// ── CSV utilities ─────────────────────────────────────────────────────────────
+// ─── CSV utilities ─────────────────────────────────────────────────────────
 /**
  * Escape a value for CSV output.
  * If the value contains comma, quote, or newline, wrap in quotes and escape inner quotes.
@@ -98,23 +123,59 @@ export function createApp(): express.Application {
   app.use(jsonApiMiddleware);
   app.use(limiter);
 
-  // ── Accounts routes ───────────────────────────────────────────────────────────
+  // ─── Stale read middleware ──────────────────────────────────────────
+  // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`
+  // body parameters when serving DB data during an RPC outage.
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET" || req.path === "/healthz") {
+      return next();
+    }
+
+    try {
+      const rpcHealthy = await checkRpcHealth();
+      if (!rpcHealthy) {
+        const lastIndexed = await getLastIndexedLedger().catch(() => null);
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexed !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexed));
+        }
+
+        const originalJson = res.json.bind(res);
+        res.json = (body: any) => {
+          if (body && typeof body === "object" && !Array.isArray(body) && body.error === undefined) {
+            if (body.stale === undefined) {
+              body.stale = true;
+            }
+            if (body.as_of_ledger === undefined && lastIndexed !== null) {
+              body.as_of_ledger = lastIndexed;
+            }
+          }
+          return originalJson(body);
+        };
+      }
+    } catch {
+      // Fall through cleanly
+    }
+    next();
+  });
+
+  // ─── Accounts routes ─────────────────────────────────────────────────────
   app.use("/accounts", createAccountsRouter());
 
-  // ── Webhook subscription management ──────────────────────────────────────────
+  // ─── Webhook subscription management ─────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
   app.use("/graphql", createGraphQLMiddleware());
 
-  // ── Assets routes ───────────────────────────────────────────────────────────
+  // ─── Assets routes ───────────────────────────────────────────────────────
   app.use("/assets", cacheMiddleware({ ttlMs: POPULAR_CACHE_TTL_MS }), createPopularAssetsRouter());
 
-  // ── Export routes ─────────────────────────────────────────────────────────────
+  // ─── Export routes ───────────────────────────────────────────────────────
   app.use("/", createExportsRouter());
 
-  // ── Fuzzy search across accounts, assets, and contracts ──────────────────────
+  // ─── Fuzzy search across accounts, assets, and contracts ──────────────────
   app.use("/search", cacheMiddleware({ ttlMs: SEARCH_CACHE_TTL_MS }), createSearchRouter());
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ─── Helpers ─────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
     const n = parseInt(String(val), 10);
     return isNaN(n) ? fallback : n;
@@ -153,7 +214,7 @@ export function createApp(): express.Application {
     return d;
   };
 
-  // ── GET /healthz — K8s/Render liveness probe ─────────────────────────────────
+  // ─── GET /healthz — K8s/Render liveness probe ───────────────────────────
   /**
    * Returns 200 as long as the process is alive.
    * Used by orchestrators to decide whether to restart the container.
@@ -162,17 +223,11 @@ export function createApp(): express.Application {
     res.json({ ok: true, uptime: process.uptime() });
   });
 
-  // ── GET /readyz — K8s/Render readiness probe ─────────────────────────────────
+  // ─── GET /readyz — K8s/Render readiness probe ───────────────────────────
   /**
-   * Returns 200 only when:
-   *   - Database connection is alive
-   *   - Stellar RPC is reachable
-   *   - Indexer lag is within acceptable threshold
-   *
-   * Query params:
-   *   maxLag  — max acceptable ledger lag (default: 100)
-   *
-   * Returns 503 if any check fails.
+   * Returns 200 when database connection is alive.
+   * Degrades to 200 with status "degraded" when only RPC/indexer is down.
+   * Returns 503 with status "down" only when DB is dead.
    */
   app.get("/readyz", async (_req: Request, res: Response) => {
     const parsed = parseOr400(readyzQuerySchema, _req.query, res);
@@ -188,21 +243,19 @@ export function createApp(): express.Application {
       checks.db = false;
     }
 
+    let latest: number | null = null;
     try {
       // RPC check
-      const latest = await getLatestLedger();
-      checks.rpc = latest > 0;
+      latest = await getLatestLedger();
+      checks.rpc = typeof latest === "number" && latest > 0;
     } catch {
       checks.rpc = false;
     }
 
+    let lastIndexed: number | null = null;
     try {
-      // Indexer lag check
-      const [lastIndexed, latest] = await Promise.all([
-        getLastIndexedLedger(),
-        getLatestLedger(),
-      ]);
-      const lag = lastIndexed !== null ? latest - lastIndexed : Infinity;
+      lastIndexed = await getLastIndexedLedger();
+      const lag = (lastIndexed !== null && latest !== null) ? latest - lastIndexed : Infinity;
       checks.indexerCaughtUp = lag <= maxLag;
     } catch {
       checks.indexerCaughtUp = false;
@@ -210,40 +263,78 @@ export function createApp(): express.Application {
 
     const allHealthy = Object.values(checks).every(Boolean);
 
-    if (!allHealthy) {
-      res.status(503).json({ ok: false, checks });
+    if (!checks.db) {
+      res.status(503).json({ ok: false, status: "down", checks });
     } else {
-      res.json({ ok: true, checks });
+      const status = allHealthy ? "healthy" : "degraded";
+      if (!allHealthy) {
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexed !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexed));
+        }
+      }
+      res.json({
+        ok: true,
+        status,
+        checks,
+        ...(lastIndexed !== null ? { as_of_ledger: lastIndexed } : {}),
+        ...(allHealthy ? {} : { stale: true }),
+      });
     }
   });
 
-  // ── GET /status ─────────────────────────────────────────────────────────────
+  // ─── GET /status ─────────────────────────────────────────────────────────
   /**
-   * Returns the indexer health status.
-   *
-   * Response:
-   *   { lastIndexedLedger, latestLedger, lagLedgers, uptimeSeconds, totalIndexed }
+   * Returns indexer health status: "healthy", "degraded", or "down".
    */
   app.get("/status", async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const [lastIndexedLedger, latestLedger] = await Promise.all([
+      const [lastIndexedResult, latestLedgerResult] = await Promise.allSettled([
         getLastIndexedLedger(),
         getLatestLedger(),
       ]);
+
+      if (lastIndexedResult.status === "rejected") {
+        res.status(503).json({ ok: false, status: "down", error: "Database unavailable" });
+        return;
+      }
+
+      const lastIndexedLedger = lastIndexedResult.value;
+      const rpcSuccess = latestLedgerResult.status === "fulfilled" && typeof latestLedgerResult.value === "number";
+      const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
       const stats = getIndexerStats();
-      res.json({
-        ok: true,
-        lastIndexedLedger,
-        latestLedger,
-        lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
-        ...stats,
-      });
+
+      if (rpcSuccess && latestLedger !== null) {
+        res.json({
+          ok: true,
+          status: "healthy",
+          lastIndexedLedger,
+          latestLedger,
+          lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
+          ...stats,
+        });
+      } else {
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexedLedger !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexedLedger));
+        }
+        res.json({
+          ok: true,
+          status: "degraded",
+          stale: true,
+          as_of_ledger: lastIndexedLedger ?? undefined,
+          lastIndexedLedger,
+          latestLedger: null,
+          lagLedgers: null,
+          ...stats,
+        });
+      }
     } catch (err) {
       next(err);
     }
   });
 
-  // ── GET /transfers/incoming/:address ────────────────────────────────────────
+  // ─── GET /transfers/incoming/:address ────────────────────────────────────
   /**
    * All token transfers received by `address`.
    *
@@ -313,7 +404,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /transfers/outgoing/:address ────────────────────────────────────────
+  // ─── GET /transfers/outgoing/:address ────────────────────────────────────
   /**
    * All token transfers sent by `address`.
    * Same query params & response shape as /incoming/:address.
@@ -374,7 +465,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /transfers/address/:address ─────────────────────────────────────────
+  // ─── GET /transfers/address/:address ─────────────────────────────────────
   /**
    * All token transfers sent or received by `address`, merged and sorted by
    * ledger descending. Each record includes a `direction` field
@@ -445,7 +536,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /transfers/address/:address/export.csv ──────────────────────────────
+  // ─── GET /transfers/address/:address/export.csv ───────────────────────────
   /**
    * Export all token transfers for `address` as a downloadable CSV file.
    * Re-uses the same filtering logic as /transfers/address/:address but returns
@@ -534,7 +625,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /transfers/tx/:txHash ────────────────────────────────────────────────
+  // ─── GET /transfers/tx/:txHash ───────────────────────────────────────────
   /**
    * All token events emitted within a given transaction.
    *
@@ -555,7 +646,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /summary/:address ────────────────────────────────────────────────────
+  // ─── GET /summary/:address ───────────────────────────────────────────────
   /**
    * Aggregate token stats for `address`, grouped by contractId.
    *
@@ -614,7 +705,7 @@ export function createApp(): express.Application {
   app.get("/summary/:address", summaryHandler);
   app.get("/accounts/:address/summary", summaryHandler);
 
-  // ── GET /host-fn/:contractId ─────────────────────────────────────────────────
+  // ─── GET /host-fn/:contractId ────────────────────────────────────────────
   /**
    * Query raw host-function invocation logs for a contract.
    *
@@ -657,7 +748,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /nfts/transfers ──────────────────────────────────────────────────────
+  // ─── GET /nfts/transfers ─────────────────────────────────────────────────
   /**
    * Query CAP-46 NFT transfer events.
    *
@@ -712,7 +803,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /nfts/owners/:contract/:token_id ─────────────────────────────────────
+  // ─── GET /nfts/owners/:contract/:token_id ────────────────────────────────
   /**
    * Return the current owner of an NFT (the toAddress of its most recent transfer).
    * Also includes any cached metadata for the token.
@@ -758,12 +849,12 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── 404 handler ──────────────────────────────────────────────────────────────
+  // ─── 404 handler ─────────────────────────────────────────────────────────
   app.use((_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found" });
   });
 
-  // ── Global error handler ─────────────────────────────────────────────────────
+  // ─── Global error handler ────────────────────────────────────────────────
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     console.error("[api] Unhandled error:", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });
