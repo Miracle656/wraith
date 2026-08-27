@@ -5,6 +5,7 @@ import { createApp } from "./api";
 import { startIndexer } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
+import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
 
@@ -33,9 +34,13 @@ async function main() {
   // Attach WebSocket upgrade handler — clients connect to /subscribe/:address
   attachWebSocketServer(server);
 
+  // Attach GraphQL subscriptions — clients connect to /graphql/subscriptions
+  attachGraphQLSubscriptions(server);
+
   server.listen(PORT, () => {
     console.log(`[wraith] API listening on http://localhost:${PORT}`);
     console.log(`[wraith] WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`);
+    console.log(`[wraith] GraphQL subscriptions available at ws://localhost:${PORT}${SUBSCRIPTIONS_PATH}`);
   });
 
   // ── Start webhook worker ───────────────────────────────────────────────────
