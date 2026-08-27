@@ -11,7 +11,7 @@ import {
   setLastIndexedLedger,
   pruneOldTransfers,
 } from "./db";
-import { emitTransfer } from "./events";
+import { emitTransfer, emitHostFnLog } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
 import { tagSacTransfers } from "./indexer/sac-detect";
 import { pollParallel } from "./indexer/parallel";
@@ -168,6 +168,7 @@ async function pollOnce(
     await upsertHostFnLogs(hostFnRecords).catch(err =>
       console.error("[indexer] host-fn log error:", err),
     );
+    hostFnRecords.forEach(emitHostFnLog);
   }
 
   // ── NFT path ─────────────────────────────────────────────────────────────────
