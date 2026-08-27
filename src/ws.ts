@@ -27,6 +27,9 @@ export function attachWebSocketServer(server: Server): void {
 
   server.on("upgrade", (req: IncomingMessage, socket, head) => {
     const url = req.url ?? "";
+    // GraphQL subscriptions own /graphql/* upgrades — leave those to
+    // attachGraphQLSubscriptions() rather than 404'ing them here.
+    if (url.startsWith("/graphql/")) return;
     if (!SUBSCRIBE_RE.test(url)) {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();

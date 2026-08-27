@@ -9,7 +9,7 @@ import {
 import { costLimitPlugin } from "./costLimit";
 import { persistedQueryPlugin } from "./persisted";
 
-const typeDefs = `#graphql
+export const typeDefs = `#graphql
   enum TransferDirection {
     INCOMING
     OUTGOING
@@ -65,7 +65,7 @@ const typeDefs = `#graphql
 
 type TransferDirection = "INCOMING" | "OUTGOING" | "ALL";
 
-function formatTransfer(row: Record<string, unknown>) {
+export function formatTransfer(row: Record<string, unknown>) {
   return {
     ...row,
     ledgerClosedAt:
@@ -75,7 +75,7 @@ function formatTransfer(row: Record<string, unknown>) {
   };
 }
 
-const resolvers = {
+export const resolvers = {
   Query: {
     health: () => ({ ok: true, version: process.env.npm_package_version ?? "1.0.0" }),
 
