@@ -1,0 +1,109 @@
+name: Nightly DB backup
+
+# Nightly logical backup of the mainnet and testnet Postgres databases, so a
+# lost or capped managed instance has a minutes-not-days restore path. See
+# docs/backup-restore.md for the restore procedure. This is the durability
+# fallback noted in docs/DUAL_NETWORK.md (#165) — Wraith's data is also
+# re-derivable by re-indexing from chain, so this backup exists to make that
+# unnecessary, not because it's the only copy.
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "Network to back up"
+        required: false
+        default: "both"
+        type: choice
+        options:
+          - both
+          - testnet
+          - mainnet
+
+jobs:
+  backup-testnet:
+    name: pg_dump (testnet)
+    if: ${{ github.event.inputs.network == '' || github.event.inputs.network == 'both' || github.event.inputs.network == 'testnet' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret is configured
+        id: check
+        env:
+          DATABASE_URL_TESTNET: ${{ secrets.DATABASE_URL_TESTNET }}
+        run: |
+          if [[ -z "$DATABASE_URL_TESTNET" ]]; then
+            echo "::warning::DATABASE_URL_TESTNET is not set — skipping testnet backup."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install postgresql-client
+        if: steps.check.outputs.configured == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Dump and compress
+        if: steps.check.outputs.configured == 'true'
+        env:
+          NETWORK: testnet
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TESTNET }}
+        run: |
+          chmod +x ops/backup/dump.sh
+          ops/backup/dump.sh
+
+      - name: Upload backup artifact
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wraith-db-backup-testnet-${{ github.run_id }}
+          path: backups/*.dump.gz
+          retention-days: 14
+          if-no-files-found: error
+
+  backup-mainnet:
+    name: pg_dump (mainnet)
+    if: ${{ github.event.inputs.network == '' || github.event.inputs.network == 'both' || github.event.inputs.network == 'mainnet' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secret is configured
+        id: check
+        env:
+          DATABASE_URL_MAINNET: ${{ secrets.DATABASE_URL_MAINNET }}
+        run: |
+          if [[ -z "$DATABASE_URL_MAINNET" ]]; then
+            echo "::warning::DATABASE_URL_MAINNET is not set — skipping mainnet backup."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install postgresql-client
+        if: steps.check.outputs.configured == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Dump and compress
+        if: steps.check.outputs.configured == 'true'
+        env:
+          NETWORK: mainnet
+          DATABASE_URL: ${{ secrets.DATABASE_URL_MAINNET }}
+        run: |
+          chmod +x ops/backup/dump.sh
+          ops/backup/dump.sh
+
+      - name: Upload backup artifact
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wraith-db-backup-mainnet-${{ github.run_id }}
+          path: backups/*.dump.gz
+          retention-days: 14
+          if-no-files-found: error

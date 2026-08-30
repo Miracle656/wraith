@@ -63,7 +63,7 @@ Dependencies: **#159 → #161** and #160 before #161.
 | [#162](../../issues/162) | Per-network SAC/NFT watch-lists | — |
 | [#163](../../issues/163) | `network` selector on REST/GraphQL/WS | #159–#161 |
 | [#164](../../issues/164) | Serve stale cached data instead of 503 | — |
-| [#165](../../issues/165) | Nightly `pg_dump` backup + restore runbook | — |
+| ~~[#165](../../issues/165)~~ | ~~Nightly `pg_dump` backup + restore runbook~~ (done) | — |
 | [#166](../../issues/166) | Mainnet deploy guide | the rest |
 
 ## Ops (Render + UptimeRobot + external Postgres)
@@ -74,5 +74,8 @@ Dependencies: **#159 → #161** and #160 before #161.
   always-on and testnet on-demand / a second account / a paid instance.
 - **Database:** use Neon or another managed Postgres. **Do not** use Render's
   free Postgres — it is **deleted after 90 days**. One DB per network.
-- **Durability fallback:** nightly `pg_dump` (#165) for fast restore; because
+- **Durability fallback:** nightly `pg_dump` (#165, see
+  [`docs/backup-restore.md`](backup-restore.md)) for fast restore; because
   Wraith is an indexer, the DB is also re-derivable by re-indexing from chain.
+  Requires `DATABASE_URL_TESTNET` / `DATABASE_URL_MAINNET` backup secrets, one
+  per network's database.
