@@ -24,6 +24,7 @@ behave exactly as before; #161 and #163 pass it explicitly.
 
 | Var | testnet | mainnet |
 |-----|---------|---------|
+| `NETWORKS` | `testnet` | `testnet,mainnet` to index both in one process |
 | `STELLAR_NETWORK` | `testnet` | `mainnet` |
 | `SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | external provider endpoint (**secret — host env only**) |
 | `SAC_CONTRACT_IDS` | testnet SAC `CDMLFMKM…` | mainnet XLM SAC `CDLZFC3SY…` |
@@ -33,6 +34,23 @@ behave exactly as before; #161 and #163 pass it explicitly.
 > Mainnet has **no free public Soroban RPC** — an external provider endpoint is
 > required. Never commit the endpoint/key; it lives only in host secrets.
 
+### In-process dual-network (#160, #161)
+
+Set `NETWORKS=testnet,mainnet` to run one indexer loop per network in a single
+process. Each loop owns its cursor, counters, watch list, RPC client and source
+switcher, so neither can stall or repoint the other, and `/status` reports both
+under `networks`.
+
+Every setting that names a chain takes a per-network suffix, falling back to the
+shared name: `SOROBAN_RPC_URL_MAINNET`, `HORIZON_URL_MAINNET`,
+`SAC_CONTRACT_IDS_MAINNET`, `NFT_CONTRACT_IDS_MAINNET`, `START_LEDGER_MAINNET`
+(and the `_TESTNET` equivalents).
+
+> The **unsuffixed** `SOROBAN_RPC_URL` applies only to the network named by
+> `STELLAR_NETWORK`. That is deliberate: honouring it for both would let a
+> mainnet loop connect to a testnet endpoint and write testnet ledgers tagged
+> `network='mainnet'`. Indexing mainnet requires `SOROBAN_RPC_URL_MAINNET`.
+
 ## Ordered work (next Wave)
 
 Dependencies: **#159 → #161** and #160 before #161.
@@ -40,8 +58,8 @@ Dependencies: **#159 → #161** and #160 before #161.
 | # | Issue | Dep |
 |---|-------|-----|
 | ~~[#159](../../issues/159)~~ | ~~`network` column across all Prisma models~~ (done) | — |
-| [#160](../../issues/160) | Per-network `getRpc(network)` factory | — |
-| [#161](../../issues/161) | One indexer loop per network | #159, #160 |
+| ~~[#160](../../issues/160)~~ | ~~Per-network `getRpc(network)` factory~~ (done) | — |
+| ~~[#161](../../issues/161)~~ | ~~One indexer loop per network~~ (done) | #159, #160 |
 | [#162](../../issues/162) | Per-network SAC/NFT watch-lists | — |
 | [#163](../../issues/163) | `network` selector on REST/GraphQL/WS | #159–#161 |
 | [#164](../../issues/164) | Serve stale cached data instead of 503 | — |

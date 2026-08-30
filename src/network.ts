@@ -53,3 +53,28 @@ export function currentNetwork(): Network {
 export function resolveNetwork(network?: Network): Network {
   return network ?? currentNetwork();
 }
+
+/**
+ * The networks this process should index, from `NETWORKS` (comma-separated).
+ *
+ * Defaults to just {@link currentNetwork}, so a deployment that sets only
+ * `STELLAR_NETWORK` keeps running exactly one loop — the pre-#161 behaviour.
+ * `NETWORKS=testnet,mainnet` opts into indexing both in one process.
+ *
+ * Unrecognised entries are dropped rather than throwing: a typo should not
+ * take the whole indexer down, and the caller logs what it actually started.
+ * An empty or entirely invalid list falls back to the configured network for
+ * the same reason.
+ */
+export function enabledNetworks(): Network[] {
+  const raw = process.env.NETWORKS ?? "";
+  const parsed = raw
+    .split(",")
+    .map((entry) => parseNetwork(entry))
+    .filter((entry): entry is Network => entry !== null);
+
+  // De-duplicate: NETWORKS=testnet,testnet must not start two loops writing
+  // the same rows and fighting over the same cursor.
+  const unique = [...new Set(parsed)];
+  return unique.length > 0 ? unique : [currentNetwork()];
+}

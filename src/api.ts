@@ -5,7 +5,8 @@ import { jsonApiMiddleware } from "./middleware/jsonapi";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
-import { getIndexerStats } from "./indexer";
+import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
+import { enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createGraphQLMiddleware } from "./graphql/server";
@@ -304,6 +305,39 @@ export function createApp(): express.Application {
       const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
       const stats = getIndexerStats();
 
+      // Per-network progress (#161). The top-level fields above stay as they
+      // were so existing consumers are unaffected; this reports each loop
+      // separately, which is the only way to see one chain falling behind
+      // while the other is healthy.
+      const active = runningNetworks();
+      const networks: Network[] = active.length > 0 ? active : enabledNetworks();
+      const loopStats = getAllIndexerStats();
+      const perNetwork = await Promise.all(
+        networks.map(async (net) => {
+          const [indexed, tip] = await Promise.allSettled([
+            getLastIndexedLedger(net),
+            getLatestLedger(net),
+          ]);
+          const indexedLedger = indexed.status === "fulfilled" ? indexed.value : null;
+          const tipLedger =
+            tip.status === "fulfilled" && typeof tip.value === "number" ? tip.value : null;
+          return [
+            net,
+            {
+              lastIndexedLedger: indexedLedger,
+              latestLedger: tipLedger,
+              lagLedgers:
+                tipLedger !== null ? tipLedger - (indexedLedger ?? tipLedger) : null,
+              // A loop that has not started reports no stats rather than zeroes
+              // pretending to be progress.
+              running: loopStats[net] !== undefined,
+              ...(loopStats[net] ?? {}),
+            },
+          ] as const;
+        })
+      );
+      const byNetwork = Object.fromEntries(perNetwork);
+
       if (rpcSuccess && latestLedger !== null) {
         res.json({
           ok: true,
@@ -312,6 +346,7 @@ export function createApp(): express.Application {
           latestLedger,
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
+          networks: byNetwork,
         });
       } else {
         res.setHeader("X-Data-Stale", "true");
@@ -327,6 +362,10 @@ export function createApp(): express.Application {
           latestLedger: null,
           lagLedgers: null,
           ...stats,
+          // Also reported when degraded — with two loops, "RPC is down" is
+          // usually true of one chain only, and the top-level nulls above
+          // cannot say which.
+          networks: byNetwork,
         });
       }
     } catch (err) {
