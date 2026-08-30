@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { prisma } from "../db";
 import { parseOr400 } from "../openapi/validation";
 import { searchQuerySchema } from "../openapi/schemas";
+import { requestNetwork } from "../middleware/network";
 
 // Top-10 hits across all types; fetch up to this many per type before merging.
 const MAX_RESULTS = 10;
@@ -80,23 +81,25 @@ export function createSearchRouter(): Router {
 
       const q = normalizeQuery(parsed.q);
 
+      const network = requestNetwork(req);
+
       const [accounts, assets, contracts] = await Promise.all([
         prisma.accountSummary.findMany({
-          where: { address: { startsWith: q } },
+          where: { network, address: { startsWith: q } },
           distinct: ["address"],
           orderBy: [{ address: "asc" }],
           take: PER_TYPE,
           select: { address: true, lastActivityAt: true },
         }),
         prisma.tokenTransfer.findMany({
-          where: { contractId: { startsWith: q } },
+          where: { network, contractId: { startsWith: q } },
           distinct: ["contractId"],
           orderBy: [{ contractId: "asc" }],
           take: PER_TYPE,
           select: { contractId: true, isSac: true },
         }),
         prisma.hostFnLog.findMany({
-          where: { contractId: { startsWith: q } },
+          where: { network, contractId: { startsWith: q } },
           distinct: ["contractId"],
           orderBy: [{ contractId: "asc" }],
           take: PER_TYPE,

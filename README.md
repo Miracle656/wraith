@@ -331,6 +331,55 @@ console.log(data);
 
 Base URL: `http://localhost:3000`
 
+### Selecting a network
+
+Wraith stores testnet and mainnet rows in the same tables, discriminated by a
+`network` column, and a single process can index both (`NETWORKS=testnet,mainnet`).
+Every read route accepts a selector so a caller can say which one it wants:
+
+```bash
+# query parameter
+curl "http://localhost:3000/transfers/incoming/GABC…?network=mainnet"
+
+# or a header — the query parameter wins if both are present
+curl -H "X-Network: mainnet" http://localhost:3000/transfers/incoming/GABC…
+```
+
+Omit it and you get the deployment's configured network (`STELLAR_NETWORK`,
+defaulting to testnet) — the behaviour every route had before the selector
+existed, so nothing changes for existing callers.
+
+Two kinds of rejection, both `400`, because they need different fixes:
+
+| Request | Response |
+| ------- | -------- |
+| `?network=mainet` | `Invalid network: "mainet". Valid values: testnet, mainnet.` |
+| `?network=mainnet` on a testnet-only deployment | `Network "mainnet" is not enabled on this deployment. Enabled networks: testnet.` |
+
+An un-indexed network is refused rather than answered with an empty list: "no
+transfers" and "this process has never looked at that chain" are different
+statements, and returning `[]` for both is how a dashboard ends up confidently
+showing zero.
+
+**GraphQL** takes the same `?network=` / `X-Network` selector, and each field
+also accepts a `network:` argument that overrides it — so one document can read
+both chains in a single round-trip:
+
+```graphql
+{
+  testnet: transfers(address: "GABC…", network: TESTNET) { total }
+  mainnet: transfers(address: "GABC…", network: MAINNET) { total }
+}
+```
+
+**WebSockets** take it on the upgrade URL — `ws://host/subscribe/GABC…?network=mainnet`
+— and the stream is filtered to that network. A socket opened with an invalid or
+un-enabled selector is closed with code `1008` and the reason, rather than left
+open delivering nothing. GraphQL subscriptions work the same way on
+`/graphql/subscriptions`, with an optional per-subscription `network:` argument.
+
+***
+
 ### `GET /status`
 
 Indexer health — current ledger, network tip, lag, uptime.
@@ -342,14 +391,55 @@ curl http://localhost:3000/status
 ```json
 {
   "ok": true,
+  "network": "testnet",
   "lastIndexedLedger": 5842100,
   "latestLedger": 5842102,
   "lagLedgers": 2,
   "startedAt": "2025-10-01T10:00:00.000Z",
   "uptimeSeconds": 3600,
-  "totalIndexed": 12430
+  "totalIndexed": 12430,
+  "networks": {
+    "testnet": { "lastIndexedLedger": 5842100, "latestLedger": 5842102, "lagLedgers": 2, "running": true }
+  }
 }
 ```
+
+`network` names which chain the top-level fields describe — it follows the
+selector. `networks` reports every running loop regardless of the selector, so a
+single response shows one chain falling behind while the other is healthy.
+
+***
+
+### `GET /readyz`
+
+Readiness probe. `checks` and `as_of_ledger` describe the selected network;
+`networks` carries the same checks for every enabled network.
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "network": "testnet",
+  "checks": { "db": true, "rpc": true, "indexerCaughtUp": true },
+  "networks": {
+    "testnet": {
+      "checks": { "db": true, "rpc": true, "indexerCaughtUp": true },
+      "lastIndexedLedger": 5842100,
+      "latestLedger": 5842102,
+      "lagLedgers": 2
+    },
+    "mainnet": {
+      "checks": { "db": true, "rpc": false, "indexerCaughtUp": false },
+      "lastIndexedLedger": 51234000,
+      "latestLedger": null,
+      "lagLedgers": null
+    }
+  }
+}
+```
+
+The database is checked once rather than per network — a dead database is not a
+per-chain condition — and a `503 down` verdict still reports every network.
 
 ***
 
@@ -359,6 +449,7 @@ All token transfers **received** by an address.
 
 | Param        | Type   | Description                                  |
 | ------------ | ------ | -------------------------------------------- |
+| `network`    | string | `testnet` or `mainnet` (see above)           |
 | `contractId` | string | Filter to a specific token contract (`C...`) |
 | `fromLedger` | int    | Inclusive lower ledger bound                 |
 | `toLedger`   | int    | Inclusive upper ledger bound                 |
@@ -411,6 +502,7 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
 | `EVENTS_BATCH_SIZE`   | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
+| `NETWORKS`            | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
 | `PORT`                | `3000`        | REST API port                                                                                 |
 
 ### RPC URL Resolution

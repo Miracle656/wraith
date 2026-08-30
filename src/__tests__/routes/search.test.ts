@@ -69,10 +69,10 @@ describe("GET /search", () => {
     await request(buildApp()).get("/search").query({ q: "  gacc  " });
 
     expect(mockAccounts).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { address: { startsWith: "GACC" } } }),
+      expect.objectContaining({ where: { network: "testnet", address: { startsWith: "GACC" } } }),
     );
     expect(mockAssets).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { contractId: { startsWith: "GACC" } } }),
+      expect.objectContaining({ where: { network: "testnet", contractId: { startsWith: "GACC" } } }),
     );
   });
 
