@@ -42,7 +42,7 @@ describe("automatic reorg rollback", () => {
       ],
     });
 
-    await prisma.indexerState.create({ data: { id: 1, lastIndexedLedger: 101 } });
+    await prisma.indexerState.create({ data: { network: 'testnet', lastIndexedLedger: 101 } });
 
     // Build in-memory buffer reflecting observed ledgers
     const reorg = new ReorgHandler(16);
@@ -85,7 +85,7 @@ describe("automatic reorg rollback", () => {
     expect(rows100[0].eventId).toBe("evt-100");
 
     // Verify indexer state updated to 101
-    const state = await prisma.indexerState.findUnique({ where: { id: 1 } });
+    const state = await prisma.indexerState.findUnique({ where: { network: 'testnet' } });
     expect(state?.lastIndexedLedger).toBe(101);
 
     expect((result as any).action).toBe("reorg");
