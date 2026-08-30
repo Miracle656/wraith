@@ -2,7 +2,7 @@ import "dotenv/config";
 import http from "http";
 import { execSync } from "child_process";
 import { createApp } from "./api";
-import { startIndexer } from "./indexer";
+import { startAllIndexers } from "./indexer";
 import { prisma } from "./db";
 import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
@@ -60,10 +60,10 @@ async function main() {
   if (process.env.SKIP_INDEXER === "true") {
     console.log("[wraith] SKIP_INDEXER=true — indexer not started (API-only mode)");
   } else {
-    startIndexer().catch((err) => {
-      console.error("[wraith] Indexer crashed — exiting:", err);
-      process.exit(1);
-    });
+    // One loop per enabled network (NETWORKS env; defaults to STELLAR_NETWORK).
+    // Each loop restarts itself on crash rather than taking the process down —
+    // a mainnet RPC key expiring must not stop testnet indexing, nor the API.
+    startAllIndexers();
   }
 }
 
