@@ -11,9 +11,14 @@ the safe demo/QA surface while mainnet handles real value.
    issues below (network-aware storage, per-network RPC, per-network loops, a
    network selector on the API).
 
-Either way the storage must be network-segregated: today the schema has **no
-`network` column**, so two networks in one DB collide (`eventId` is globally
-unique; `IndexerState`/`BackfillCursor` are singleton rows).
+Either way the storage must be network-segregated. As of #159 it is: every
+model carries a `network` column, `eventId` is unique per `(network, eventId)`
+rather than globally, and `IndexerState`/`BackfillCursor` hold one row per
+network instead of the old singleton `id = 1`.
+
+Every `db.ts` function takes an optional trailing `network`, defaulting to
+`STELLAR_NETWORK` via `src/network.ts`. Single-network deployments therefore
+behave exactly as before; #161 and #163 pass it explicitly.
 
 ## Env matrix
 
@@ -34,7 +39,7 @@ Dependencies: **#159 → #161** and #160 before #161.
 
 | # | Issue | Dep |
 |---|-------|-----|
-| [#159](../../issues/159) | `network` column across all Prisma models | — |
+| ~~[#159](../../issues/159)~~ | ~~`network` column across all Prisma models~~ (done) | — |
 | [#160](../../issues/160) | Per-network `getRpc(network)` factory | — |
 | [#161](../../issues/161) | One indexer loop per network | #159, #160 |
 | [#162](../../issues/162) | Per-network SAC/NFT watch-lists | — |

@@ -1,6 +1,12 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
+import { resolveNetwork, type Network } from "./network";
+
+// Every function below takes an optional trailing `network`. Omitting it means
+// "the network this process is configured for" (STELLAR_NETWORK), which is
+// exactly the pre-#159 behaviour for single-network deployments. The per-network
+// indexer loop (#161) and the API selector (#163) pass it explicitly.
 
 const STROOPS = 10_000_000n;
 
@@ -163,15 +169,19 @@ const ACCOUNT_SUMMARY_FIELD_TYPES = {
 // ─── Upsert helper ─────────────────────────────────────────────────────────
 /**
  * Idempotently insert a batch of transfer events.
- * Conflicts on `eventId` are silently ignored — safe to call multiple times
- * with overlapping ledger ranges.
+ * Conflicts on `(network, eventId)` are silently ignored — safe to call
+ * multiple times with overlapping ledger ranges.
  */
-export async function upsertTransfers(records: TransferRecord[]): Promise<number> {
+export async function upsertTransfers(
+  records: TransferRecord[],
+  network?: Network
+): Promise<number> {
   if (records.length === 0) return 0;
+  const net = resolveNetwork(network);
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
   const result = await prisma.tokenTransfer.createMany({
-    data: records,
+    data: records.map((r) => ({ ...r, network: net })),
     skipDuplicates: true,
   });
 
@@ -181,28 +191,35 @@ export async function upsertTransfers(records: TransferRecord[]): Promise<number
 // ─── Indexer state helpers ─────────────────────────────────────────────────
 /**
  * Read the last indexed ledger from DB.
- * Returns null if no state row exists yet.
+ * Returns null if no state row exists yet for this network.
  */
-export async function getLastIndexedLedger(): Promise<number | null> {
-  const state = await prisma.indexerState.findUnique({ where: { id: 1 } });
+export async function getLastIndexedLedger(network?: Network): Promise<number | null> {
+  const state = await prisma.indexerState.findUnique({
+    where: { network: resolveNetwork(network) },
+  });
   return state?.lastIndexedLedger ?? null;
 }
 
 /**
  * Read the last indexed ledger and state details from DB.
  */
-export async function getLastIndexedState(): Promise<{ lastIndexedLedger: number | null }> {
-  const state = await prisma.indexerState.findUnique({ where: { id: 1 } });
+export async function getLastIndexedState(
+  network?: Network
+): Promise<{ lastIndexedLedger: number | null }> {
+  const state = await prisma.indexerState.findUnique({
+    where: { network: resolveNetwork(network) },
+  });
   return { lastIndexedLedger: state?.lastIndexedLedger ?? null };
 }
 
 /**
  * Persist the last successfully indexed ledger sequence number.
  */
-export async function setLastIndexedLedger(ledger: number): Promise<void> {
+export async function setLastIndexedLedger(ledger: number, network?: Network): Promise<void> {
+  const net = resolveNetwork(network);
   await prisma.indexerState.upsert({
-    where: { id: 1 },
-    create: { id: 1, lastIndexedLedger: ledger },
+    where: { network: net },
+    create: { network: net, lastIndexedLedger: ledger },
     update: { lastIndexedLedger: ledger },
   });
 }
@@ -214,23 +231,31 @@ export interface BackfillCursorState {
   nextLedger: number;
 }
 
-export async function getBackfillCursor(): Promise<BackfillCursorState | null> {
-  const state = await prisma.backfillCursor.findUnique({ where: { id: 1 } });
+export async function getBackfillCursor(
+  network?: Network
+): Promise<BackfillCursorState | null> {
+  const state = await prisma.backfillCursor.findUnique({
+    where: { network: resolveNetwork(network) },
+  });
   return state
     ? { startLedger: state.startLedger, endLedger: state.endLedger, nextLedger: state.nextLedger }
     : null;
 }
 
-export async function setBackfillCursor(cursor: BackfillCursorState): Promise<void> {
+export async function setBackfillCursor(
+  cursor: BackfillCursorState,
+  network?: Network
+): Promise<void> {
+  const net = resolveNetwork(network);
   await prisma.backfillCursor.upsert({
-    where: { id: 1 },
-    create: { id: 1, ...cursor },
+    where: { network: net },
+    create: { network: net, ...cursor },
     update: cursor,
   });
 }
 
-export async function clearBackfillCursor(): Promise<void> {
-  await prisma.backfillCursor.deleteMany({ where: { id: 1 } });
+export async function clearBackfillCursor(network?: Network): Promise<void> {
+  await prisma.backfillCursor.deleteMany({ where: { network: resolveNetwork(network) } });
 }
 
 // ─── Data retention ─────────────────────────────────────────────────────────
@@ -240,17 +265,20 @@ const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? "30", 10);
  * Delete transfers older than RETENTION_DAYS to keep the DB within free-tier limits.
  * Returns the number of rows deleted.
  */
-export async function pruneOldTransfers(): Promise<number> {
+export async function pruneOldTransfers(network?: Network): Promise<number> {
+  const net = resolveNetwork(network);
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
 
+  // Scoped to one network: pruning testnet must never delete mainnet history,
+  // which is the more expensive of the two to re-index.
   const result = await prisma.tokenTransfer.deleteMany({
-    where: { ledgerClosedAt: { lt: cutoff } },
+    where: { network: net, ledgerClosedAt: { lt: cutoff } },
   });
 
   if (result.count > 0) {
     console.log(
-      `[prune] Deleted ${result.count} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`
+      `[prune] Deleted ${result.count} ${net} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`
     );
   }
 
@@ -259,6 +287,7 @@ export async function pruneOldTransfers(): Promise<number> {
 
 // ─── Query helpers ─────────────────────────────────────────────────────────
 export type TransferQueryParams = {
+  network?: Network;
   address: string;
   direction: "incoming" | "outgoing";
   contractId?: string;
@@ -277,6 +306,7 @@ export type TransferQueryParams = {
 
 export async function queryTransfers(params: TransferQueryParams) {
   const {
+    network,
     address,
     direction,
     contractId,
@@ -294,6 +324,7 @@ export async function queryTransfers(params: TransferQueryParams) {
   } = params;
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
+    network: resolveNetwork(network),
     ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
     ...(token ? { contractId: token } : {}),
@@ -364,15 +395,16 @@ export async function queryTransfers(params: TransferQueryParams) {
   };
 }
 
-export async function queryByTxHash(txHash: string) {
+export async function queryByTxHash(txHash: string, network?: Network) {
   return prisma.tokenTransfer.findMany({
-    where: { txHash },
+    where: { network: resolveNetwork(network), txHash },
     orderBy: { id: "asc" },
   });
 }
 
 // ─── Summary aggregate query ───────────────────────────────────────────────
 export type SummaryQueryParams = {
+  network?: Network;
   address: string;
   contractId?: string;
   fromDate?: Date;
@@ -391,9 +423,12 @@ type SummaryRow = {
  * Uses a raw SQL query because Prisma cannot SUM string-typed columns.
  */
 export async function querySummary(params: SummaryQueryParams): Promise<SummaryRow[]> {
-  const { address, contractId, fromDate, toDate } = params;
+  const { network, address, contractId, fromDate, toDate } = params;
 
+  // Raw SQL bypasses Prisma's where-builder, so the network predicate has to be
+  // added by hand here — a missing one would silently sum both chains together.
   const conditions: Prisma.Sql[] = [
+    Prisma.sql`"network" = ${resolveNetwork(network)}`,
     Prisma.sql`("toAddress" = ${address} OR "fromAddress" = ${address})`,
   ];
   if (contractId) conditions.push(Prisma.sql`"contractId" = ${contractId}`);
@@ -417,10 +452,14 @@ export async function querySummary(params: SummaryQueryParams): Promise<SummaryR
 
 // ─── NFT helpers ───────────────────────────────────────────────────────────
 
-export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<number> {
+export async function upsertNftTransfers(
+  records: NftTransferRecord[],
+  network?: Network
+): Promise<number> {
   if (records.length === 0) return 0;
+  const net = resolveNetwork(network);
   const result = await prisma.nftTransfer.createMany({
-    data: records,
+    data: records.map((r) => ({ ...r, network: net })),
     skipDuplicates: true,
   });
   return result.count;
@@ -428,10 +467,13 @@ export async function upsertNftTransfers(records: NftTransferRecord[]): Promise<
 
 export async function getNftMetadata(
   contractId: string,
-  tokenId: string
+  tokenId: string,
+  network?: Network
 ): Promise<{ name: string | null; tokenUri: string | null } | null> {
   return prisma.nftMetadata.findUnique({
-    where: { contractId_tokenId: { contractId, tokenId } },
+    where: {
+      network_contractId_tokenId: { network: resolveNetwork(network), contractId, tokenId },
+    },
     select: { name: true, tokenUri: true },
   });
 }
@@ -442,15 +484,22 @@ export async function getNftMetadata(
  * and atomically updates the indexer state to reflect the new tip.
  * Returns the number of deleted rows (sum across tables).
  */
-export async function rollbackToLedger(targetLedger: number): Promise<number> {
-  // Perform deletes and state update atomically.
+export async function rollbackToLedger(
+  targetLedger: number,
+  network?: Network
+): Promise<number> {
+  const net = resolveNetwork(network);
+
+  // Every delete is network-scoped. Ledger sequences are per-chain and testnet
+  // runs far ahead of mainnet, so an unscoped `ledger > target` would let a
+  // testnet reorg delete real mainnet history.
   const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
-    prisma.tokenTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
-    prisma.nftTransfer.deleteMany({ where: { ledger: { gt: targetLedger } } }),
-    prisma.hostFnLog.deleteMany({ where: { ledger: { gt: targetLedger } } }),
+    prisma.tokenTransfer.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
+    prisma.nftTransfer.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
+    prisma.hostFnLog.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
     prisma.indexerState.upsert({
-      where: { id: 1 },
-      create: { id: 1, lastIndexedLedger: targetLedger },
+      where: { network: net },
+      create: { network: net, lastIndexedLedger: targetLedger },
       update: { lastIndexedLedger: targetLedger },
     }),
   ]);
@@ -459,9 +508,9 @@ export async function rollbackToLedger(targetLedger: number): Promise<number> {
     (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
 
   if (totalDeleted > 0) {
-    console.log(`[reorg] Rolled back to ledger ${targetLedger}, deleted ${totalDeleted} rows`);
+    console.log(`[reorg] Rolled back ${net} to ledger ${targetLedger}, deleted ${totalDeleted} rows`);
   } else {
-    console.log(`[reorg] Rolled back to ledger ${targetLedger}, no rows deleted`);
+    console.log(`[reorg] Rolled back ${net} to ledger ${targetLedger}, no rows deleted`);
   }
 
   return totalDeleted;
@@ -470,16 +519,25 @@ export async function rollbackToLedger(targetLedger: number): Promise<number> {
 export async function upsertNftMetadata(
   contractId: string,
   tokenId: string,
-  data: NftMetadataPayload
+  data: NftMetadataPayload,
+  network?: Network
 ): Promise<void> {
+  const net = resolveNetwork(network);
   await prisma.nftMetadata.upsert({
-    where: { contractId_tokenId: { contractId, tokenId } },
-    create: { contractId, tokenId, name: data.name ?? null, tokenUri: data.tokenUri ?? null },
+    where: { network_contractId_tokenId: { network: net, contractId, tokenId } },
+    create: {
+      network: net,
+      contractId,
+      tokenId,
+      name: data.name ?? null,
+      tokenUri: data.tokenUri ?? null,
+    },
     update: { name: data.name ?? null, tokenUri: data.tokenUri ?? null, fetchedAt: new Date() },
   });
 }
 
 export type NftTransferQueryParams = {
+  network?: Network;
   contractId?: string;
   tokenId?: string;
   address?: string;
@@ -494,6 +552,7 @@ export type NftTransferQueryParams = {
 
 export async function queryNftTransfers(params: NftTransferQueryParams) {
   const {
+    network,
     contractId,
     tokenId,
     address,
@@ -507,6 +566,7 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
   } = params;
 
   const baseWhere: Prisma.NftTransferWhereInput = {
+    network: resolveNetwork(network),
     ...(contractId ? { contractId } : {}),
     ...(tokenId ? { tokenId } : {}),
     ...(address ? { OR: [{ fromAddress: address }, { toAddress: address }] } : {}),
@@ -568,10 +628,11 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
  */
 export async function getNftOwner(
   contractId: string,
-  tokenId: string
+  tokenId: string,
+  network?: Network
 ): Promise<string | null> {
   const latest = await prisma.nftTransfer.findFirst({
-    where: { contractId, tokenId, toAddress: { not: null } },
+    where: { network: resolveNetwork(network), contractId, tokenId, toAddress: { not: null } },
     orderBy: [{ ledger: "desc" }, { id: "desc" }],
     select: { toAddress: true },
   });
@@ -591,8 +652,14 @@ export async function getNftOwner(
  *
  * Using raw SQL because Prisma cannot do arithmetic on string-typed NUMERIC columns.
  */
-export async function upsertAccountSummaries(records: TransferRecord[]): Promise<void> {
+export async function upsertAccountSummaries(
+  records: TransferRecord[],
+  network?: Network
+): Promise<void> {
   if (records.length === 0) return;
+  // Deliberately not called `net` — this table already has a `net` column
+  // holding a balance, and the SQL below references both.
+  const networkName = resolveNetwork(network);
 
   // Accumulate deltas keyed by "address|contractId"
   const deltas = new Map<
@@ -624,12 +691,17 @@ export async function upsertAccountSummaries(records: TransferRecord[]): Promise
     const receivedStr = received.toString();
     const netStr      = (received - sent).toString();
 
+    // The ON CONFLICT target must name the same columns as the unique index,
+    // which #159 widened to (network, address, contractId). Leaving the old
+    // two-column target here would raise
+    // "no unique or exclusion constraint matching the ON CONFLICT specification"
+    // on every write, not merely mis-scope the aggregate.
     await prisma.$executeRaw`
       INSERT INTO wraith."AccountSummary"
-        (address, "contractId", "totalSent", "totalReceived", net, "txCount", "lastActivityAt", "updatedAt")
+        ("network", address, "contractId", "totalSent", "totalReceived", net, "txCount", "lastActivityAt", "updatedAt")
       VALUES
-        (${address}, ${contractId}, ${sentStr}, ${receivedStr}, ${netStr}, ${count}, ${lastAt}, NOW())
-      ON CONFLICT (address, "contractId") DO UPDATE SET
+        (${networkName}, ${address}, ${contractId}, ${sentStr}, ${receivedStr}, ${netStr}, ${count}, ${lastAt}, NOW())
+      ON CONFLICT ("network", address, "contractId") DO UPDATE SET
         "totalSent"      = (wraith."AccountSummary"."totalSent"::NUMERIC     + ${sentStr}::NUMERIC)::TEXT,
         "totalReceived"  = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC)::TEXT,
         net              = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC
@@ -645,9 +717,14 @@ export async function upsertAccountSummaries(records: TransferRecord[]): Promise
  * Return all asset rows for a given address, optionally filtered to one contract.
  * O(1) — reads directly from the materialized AccountSummary table.
  */
-export async function getAccountSummary(address: string, contractId?: string) {
+export async function getAccountSummary(
+  address: string,
+  contractId?: string,
+  network?: Network
+) {
   return prisma.accountSummary.findMany({
     where: {
+      network: resolveNetwork(network),
       address,
       ...(contractId ? { contractId } : {}),
     },
@@ -664,6 +741,7 @@ export async function getAccountSummary(address: string, contractId?: string) {
 }
 
 export type AccountSummaryQueryParams = {
+  network?: Network;
   address: string;
   contractId?: string;
   filter?: string;
@@ -674,9 +752,10 @@ export type AccountSummaryQueryParams = {
 };
 
 export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
-  const { address, contractId, filter, select, cursor, limit = 50, offset = 0 } = params;
+  const { network, address, contractId, filter, select, cursor, limit = 50, offset = 0 } = params;
 
   const baseWhere: Prisma.AccountSummaryWhereInput = {
+    network: resolveNetwork(network),
     address,
     ...(contractId ? { contractId } : {}),
   };
@@ -729,6 +808,7 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
 
 // ─── Combined address query ────────────────────────────────────────────────
 export type AllTransfersQueryParams = {
+  network?: Network;
   address: string;
   contractId?: string;
   token?: string;
@@ -746,6 +826,7 @@ export type AllTransfersQueryParams = {
 
 export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const {
+    network,
     address,
     contractId,
     token,
@@ -762,6 +843,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   } = params;
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
+    network: resolveNetwork(network),
     OR: [{ toAddress: address }, { fromAddress: address }],
     ...(contractId ? { contractId } : {}),
     ...(token ? { contractId: token } : {}),
@@ -832,6 +914,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
 
 // ─── Popular assets query ──────────────────────────────────────────────────
 export type PopularAssetsQueryParams = {
+  network?: Network;
   fromDate: Date;
   by: string;
   limit: number;
@@ -845,17 +928,20 @@ type PopularAssetRow = {
 };
 
 export async function queryPopularAssets(params: PopularAssetsQueryParams) {
-  const { fromDate, by, limit, offset } = params;
+  const { network, fromDate, by, limit, offset } = params;
+  const net = resolveNetwork(network);
   const cap = Math.min(limit, 100);
 
   const orderClause = by === "volume"
     ? Prisma.sql`SUM(CAST("amount" AS NUMERIC)) DESC`
     : Prisma.sql`COUNT(*) DESC`;
 
+  // Both halves filter on network. Leaving it off the count but not the page
+  // (or vice versa) would return a total that disagrees with the rows.
   const countResult = await prisma.$queryRaw<Array<{ total: bigint }>>`
     SELECT COUNT(DISTINCT "contractId")::INT8 AS "total"
     FROM "wraith"."TokenTransfer"
-    WHERE "ledgerClosedAt" >= ${fromDate}
+    WHERE "network" = ${net} AND "ledgerClosedAt" >= ${fromDate}
   `;
   const total = Number(countResult[0]?.total ?? 0);
 
@@ -865,7 +951,7 @@ export async function queryPopularAssets(params: PopularAssetsQueryParams) {
       COUNT(*)::INT8 AS "transferCount",
       COALESCE(SUM(CAST("amount" AS NUMERIC)), 0)::TEXT AS "volume"
     FROM "wraith"."TokenTransfer"
-    WHERE "ledgerClosedAt" >= ${fromDate}
+    WHERE "network" = ${net} AND "ledgerClosedAt" >= ${fromDate}
     GROUP BY "contractId"
     ORDER BY ${orderClause}
     LIMIT ${cap}

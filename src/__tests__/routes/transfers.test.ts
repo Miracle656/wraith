@@ -52,6 +52,7 @@ function makeTransfer(overrides: TransferOverrides = {}) {
 function baseTransfer() {
   return {
     id: 1,
+    network: "testnet",
     contractId: CONTRACT_A,
     eventType: "transfer",
     fromAddress: BOB,
