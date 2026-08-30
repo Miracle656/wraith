@@ -309,7 +309,8 @@ export function createApp(): express.Application {
       // were so existing consumers are unaffected; this reports each loop
       // separately, which is the only way to see one chain falling behind
       // while the other is healthy.
-      const networks: Network[] = runningNetworks().length > 0 ? runningNetworks() : enabledNetworks();
+      const active = runningNetworks();
+      const networks: Network[] = active.length > 0 ? active : enabledNetworks();
       const loopStats = getAllIndexerStats();
       const perNetwork = await Promise.all(
         networks.map(async (net) => {
@@ -361,6 +362,10 @@ export function createApp(): express.Application {
           latestLedger: null,
           lagLedgers: null,
           ...stats,
+          // Also reported when degraded — with two loops, "RPC is down" is
+          // usually true of one chain only, and the top-level nulls above
+          // cannot say which.
+          networks: byNetwork,
         });
       }
     } catch (err) {

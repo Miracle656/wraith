@@ -106,6 +106,13 @@ describe("Graceful stale reads during RPC outage (#164)", () => {
       expect(res.body.lastIndexedLedger).toBe(1000);
       expect(res.body.latestLedger).toBe(1050);
       expect(res.body.lagLedgers).toBe(50);
+      // #161: per-network progress alongside the aggregate view.
+      expect(res.body.networks).toBeDefined();
+      expect(res.body.networks.testnet).toMatchObject({
+        lastIndexedLedger: 1000,
+        latestLedger: 1050,
+        lagLedgers: 50,
+      });
     });
 
     it("returns status 'degraded' when RPC is down but DB is healthy", async () => {
@@ -118,6 +125,15 @@ describe("Graceful stale reads during RPC outage (#164)", () => {
       expect(res.body.status).toBe("degraded");
       expect(res.body.stale).toBe(true);
       expect(res.body.as_of_ledger).toBe(1000);
+      // Reported when degraded too. With two loops "RPC is down" is usually
+      // true of one chain only, and the top-level nulls cannot say which —
+      // so omitting this here would blind exactly the case it exists for.
+      expect(res.body.networks).toBeDefined();
+      expect(res.body.networks.testnet).toMatchObject({
+        lastIndexedLedger: 1000,
+        latestLedger: null,
+        lagLedgers: null,
+      });
       expect(res.body.latestLedger).toBeNull();
       expect(res.body.lagLedgers).toBeNull();
       expect(res.headers["x-data-stale"]).toBe("true");
