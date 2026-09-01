@@ -146,6 +146,41 @@ model NftMetadata {
   @@schema("wraith")
 }
 
+// ─── LP-Share Transfers ──────────────────────────────────────────────────────
+// Liquidity-pool deposits/withdrawals surfaced as LP-share movements. The shares
+// have no symbol of their own, so each row carries the pool whose shares moved
+// (poolId = the emitting pool contract). A deposit mints shares to toAddress
+// (no from); a withdrawal burns shares from fromAddress (no to).
+model LpShareTransfer {
+  id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
+  // The liquidity-pool contract whose shares moved (C...)
+  poolId         String
+  // "deposit" (shares minted to provider) | "withdraw" (shares burned from provider)
+  action         String
+  fromAddress    String?
+  toAddress      String?
+  // i128 share amount as a decimal string
+  shares         String
+  ledger         Int
+  ledgerClosedAt DateTime
+  txHash         String
+  eventId        String
+  createdAt      DateTime @default(now())
+
+  // Unique per network, not globally: ledger sequences and event ids are
+  // per-chain, and a global unique would let a testnet event's id suppress its
+  // mainnet namesake — silently, since createMany uses skipDuplicates.
+  @@unique([network, eventId])
+  @@index([network, poolId])
+  @@index([network, toAddress])
+  @@index([network, fromAddress])
+  @@index([network, ledger])
+  @@index([network, txHash])
+  @@index([network, poolId, action])
+  @@schema("wraith")
+}
+
 // ─── Account Summaries ────────────────────────────────────────────────────────
 model AccountSummary {
   id             Int      @id @default(autoincrement())
@@ -290,6 +325,7 @@ model ContractTombstone {
   @@index([network, detectedLedger])
   @@schema("wraith")
 }
+
 
 // ─── Backfill Cursor ───────────────────────────────────────────────────────────
 // Durable cursor so the backfill job can resume mid-range after a crash.

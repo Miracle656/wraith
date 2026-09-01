@@ -14,6 +14,12 @@ import {
 import { emitTransfer, emitHostFnLog } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
 import { tagSacTransfers } from "./indexer/sac-detect";
+import {
+  parseLpShareEvents,
+  upsertLpShareTransfers,
+  resolveLpPoolIds,
+  loadKnownLpPools,
+} from "./indexer/lp-shares";
 import { pollParallel } from "./indexer/parallel";
 import { tombstoneExpiredContracts } from "./indexer/tombstones";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
@@ -132,6 +138,16 @@ type LoopState = {
   totalIndexed: number;
   pollCycleCount: number;
   /**
+   * Contracts established as liquidity pools on this network.
+   *
+   * Bare SEP-41 mint/burn is only treated as an LP-share movement when it comes
+   * from a contract in here — otherwise every stablecoin mint on the chain
+   * would be recorded as a liquidity-pool deposit. Seeded from
+   * LP_POOL_CONTRACT_IDS and from pools already in the table, then grown as
+   * explicit deposit/withdraw events identify new ones.
+   */
+  knownLpPools: Set<string>;
+  /**
    * Separate from pollCycleCount, which the prune resets on its own schedule.
    * Sharing one counter would make whichever cadence is shorter starve the
    * other — the longer job would never reach its threshold.
@@ -167,6 +183,7 @@ function createLoopState(network: Network): LoopState {
     totalIndexed: 0,
     pollCycleCount: 0,
     tombstoneCycleCount: 0,
+    knownLpPools: new Set(resolveLpPoolIds(network)),
   };
 }
 
@@ -330,6 +347,22 @@ async function pollOnce(
     hostFnRecords.forEach((record) => emitHostFnLog(record, net));
   }
 
+  // ── LP-share path ──────────────────────────────────────────────────────────
+  // Decode pool deposits/withdrawals as LP-share transfers tagged with the pool
+  // ID. Best-effort and additive: deposit/withdraw events are ignored by the
+  // fungible path, while a pool's own share mint/burn is recorded here in
+  // addition to its token-transfer row.
+  const lpRecords  = parseLpShareEvents(events, loop.knownLpPools);
+  // A contract that produced an LP-share record has identified itself as a
+  // pool, so its bare mint/burn counts from here on. Learning this is what lets
+  // the bare dialect ever be accepted without an env allowlist.
+  for (const record of lpRecords) loop.knownLpPools.add(record.poolId);
+  const lpInserted = await upsertLpShareTransfers(lpRecords, net).catch((e) => {
+    console.error(`[indexer/${net}] LP-share upsert failed:`, e);
+    return 0;
+  });
+  loop.totalIndexed += lpInserted;
+
   // ── NFT path ─────────────────────────────────────────────────────────────────
   const nftParsed   = parseNftEvents(nftRawEvents);
   const nftRecords  = nftParsed.map((p) => p.record);
@@ -358,7 +391,7 @@ async function pollOnce(
   recordLedgerProgress(net, fromLedger, highestLedger);
 
   console.log(
-    `[indexer/${net}] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT records saved (ledger ${highestLedger})`
+    `[indexer/${net}] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT + ${lpInserted} LP-share records saved (ledger ${highestLedger})`
   );
 
   return highestLedger;
@@ -380,6 +413,15 @@ export async function startIndexer(network?: Network): Promise<void> {
 
   const loop = createLoopState(net);
   loops.set(net, loop);
+
+  // Seed the known-pool set from what is already recorded. Without this a
+  // restart forgets which contracts are pools and silently stops recording
+  // their bare mint/burn until the next explicit deposit comes through.
+  try {
+    for (const poolId of await loadKnownLpPools(net)) loop.knownLpPools.add(poolId);
+  } catch (e) {
+    console.error(`[indexer/${net}] Could not seed known LP pools:`, e);
+  }
 
   console.log(`[indexer/${net}] Starting Wraith indexer…`);
   console.log(

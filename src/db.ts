@@ -504,10 +504,11 @@ export async function rollbackToLedger(
   // Every delete is network-scoped. Ledger sequences are per-chain and testnet
   // runs far ahead of mainnet, so an unscoped `ledger > target` would let a
   // testnet reorg delete real mainnet history.
-  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, _state] = await prisma.$transaction([
+  const [deletedTransfers, deletedNftTransfers, deletedHostFnLogs, deletedLpTransfers, _state] = await prisma.$transaction([
     prisma.tokenTransfer.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
     prisma.nftTransfer.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
     prisma.hostFnLog.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
+    prisma.lpShareTransfer.deleteMany({ where: { network: net, ledger: { gt: targetLedger } } }),
     prisma.indexerState.upsert({
       where: { network: net },
       create: { network: net, lastIndexedLedger: targetLedger },
@@ -516,7 +517,7 @@ export async function rollbackToLedger(
   ]);
 
   const totalDeleted =
-    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0);
+    (deletedTransfers?.count ?? 0) + (deletedNftTransfers?.count ?? 0) + (deletedHostFnLogs?.count ?? 0) + (deletedLpTransfers?.count ?? 0);
 
   if (totalDeleted > 0) {
     console.log(`[reorg] Rolled back ${net} to ledger ${targetLedger}, deleted ${totalDeleted} rows`);

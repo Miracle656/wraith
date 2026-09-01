@@ -51,6 +51,7 @@ function recorder() {
     nftTransfer: model("nftTransfer"),
     nftMetadata: model("nftMetadata"),
     hostFnLog: model("hostFnLog"),
+    lpShareTransfer: model("lpShareTransfer"),
     accountSummary: model("accountSummary"),
     indexerState: model("indexerState", { findUnique: { lastIndexedLedger: 42 } }),
     backfillCursor: model("backfillCursor"),
@@ -225,7 +226,9 @@ describe("destructive operations cannot cross networks", () => {
     // during a testnet reorg.
     await db.rollbackToLedger(500, "testnet");
 
-    for (const model of ["tokenTransfer", "nftTransfer", "hostFnLog"]) {
+    // lpShareTransfer included: a reorg must roll back LP-share rows too, and
+    // scoped by network for the same reason the others are.
+    for (const model of ["tokenTransfer", "nftTransfer", "hostFnLog", "lpShareTransfer"]) {
       const where = lastWhere(model, "deleteMany");
       expect(where.network).toBe("testnet");
       expect(where.ledger).toEqual({ gt: 500 });
