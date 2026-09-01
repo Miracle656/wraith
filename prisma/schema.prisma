@@ -3,7 +3,7 @@
 
 generator client {
   provider        = "prisma-client-js"
-  binaryTargets   = ["native", "debian-openssl-3.0.x"]
+  binaryTargets   = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
   previewFeatures = ["multiSchema"]
 }
 
@@ -14,9 +14,28 @@ datasource db {
   schemas   = ["wraith"]
 }
 
+// ─── Network dimension ───────────────────────────────────────────────────────
+// Every table carries `network` ("testnet" | "mainnet") so one database can
+// hold both without collisions. Two properties make this mandatory rather than
+// cosmetic:
+//
+//   1. `eventId` is an RPC paging token. Those are only unique *within* a
+//      network, so the same token can legitimately appear on both chains — a
+//      global @unique silently overwrites one network row with the other.
+//   2. IndexerState and BackfillCursor used to be singleton rows (id = 1).
+//      One cursor cannot track two chains, so both are now keyed by network.
+//
+// The default is "testnet": every row that exists today was indexed from
+// testnet, so back-filling the column with that value is correct, not a guess.
+//
+// `network` also leads every composite index. Every query filters on it now,
+// and a trailing position would leave Postgres unable to use the index for
+// that filter — the column would be recorded but not exploited.
+
 // ─── Token Transfers ──────────────────────────────────────────────────────────
 model TokenTransfer {
-  id             Int       @id @default(autoincrement())
+  id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
   contractId     String
   eventType      String
   fromAddress    String?
@@ -25,19 +44,20 @@ model TokenTransfer {
   ledger         Int
   ledgerClosedAt DateTime
   txHash         String
-  eventId        String    @unique
+  eventId        String
   // True when the emitting contract is a Stellar Asset Contract (SAC) wrapping a
   // classic asset, as opposed to a native Soroban token. Set by sac-detect (#136).
-  isSac          Boolean   @default(false)
-  createdAt      DateTime  @default(now())
+  isSac          Boolean  @default(false)
+  createdAt      DateTime @default(now())
 
-  @@index([toAddress])
-  @@index([fromAddress])
-  @@index([contractId])
-  @@index([ledger])
-  @@index([txHash])
-  @@index([toAddress, contractId])
-  @@index([fromAddress, contractId])
+  @@unique([network, eventId])
+  @@index([network, toAddress])
+  @@index([network, fromAddress])
+  @@index([network, contractId])
+  @@index([network, ledger])
+  @@index([network, txHash])
+  @@index([network, toAddress, contractId])
+  @@index([network, fromAddress, contractId])
   @@schema("wraith")
 }
 
@@ -45,49 +65,54 @@ model TokenTransfer {
 // One row per contract event — includes token events and all other contracts.
 // Allows downstream consumers to interpret events from arbitrary contracts.
 model HostFnLog {
-  id           Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
+
+  // Which chain this event came from.
+  network String @default("testnet")
 
   // The contract that emitted the event (C...)
-  contractId   String
+  contractId String
 
   // topics[0] decoded as a symbol string (e.g. "transfer", "swap", "deposit")
   functionName String
 
   // topics[1..n] serialised via scValToNative — BigInt values become strings
-  args         Json
+  args Json
 
   // Event value serialised via scValToNative; null if the value is scvVoid
-  result       Json?
+  result Json?
 
   // Gas consumed by the invocation — populated externally when tx metadata is
   // available; null otherwise
-  gasUsed      BigInt?
+  gasUsed BigInt?
 
   // Ledger sequence number where the event was emitted
-  ledger       Int
+  ledger Int
 
   // UTC close time of the ledger
   ledgerClosedAt DateTime
 
   // Transaction hash (SHA-256 hex, no 0x prefix)
-  txHash       String
+  txHash String
 
-  // Stellar RPC paging token — unique per event, used for deduplication
-  eventId      String   @unique
+  // Stellar RPC paging token — unique per event *within a network*, used for
+  // deduplication. See the network note at the top of this file.
+  eventId String
 
-  createdAt    DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  @@index([contractId])
-  @@index([contractId, functionName])
-  @@index([ledger])
-  @@index([txHash])
-
+  @@unique([network, eventId])
+  @@index([network, contractId])
+  @@index([network, contractId, functionName])
+  @@index([network, ledger])
+  @@index([network, txHash])
   @@schema("wraith")
 }
 
 // ─── NFT Transfers ────────────────────────────────────────────────────────────
 model NftTransfer {
   id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
   contractId     String
   tokenId        String
   fromAddress    String?
@@ -95,33 +120,71 @@ model NftTransfer {
   ledger         Int
   ledgerClosedAt DateTime
   txHash         String
-  eventId        String   @unique
+  eventId        String
   createdAt      DateTime @default(now())
 
-  @@index([contractId])
-  @@index([tokenId])
-  @@index([toAddress])
-  @@index([fromAddress])
-  @@index([contractId, tokenId])
+  @@unique([network, eventId])
+  @@index([network, contractId])
+  @@index([network, tokenId])
+  @@index([network, toAddress])
+  @@index([network, fromAddress])
+  @@index([network, contractId, tokenId])
   @@schema("wraith")
 }
 
 // ─── NFT Metadata Cache ───────────────────────────────────────────────────────
 model NftMetadata {
   id         Int      @id @default(autoincrement())
+  network    String   @default("testnet")
   contractId String
   tokenId    String
   name       String?
   tokenUri   String?
   fetchedAt  DateTime @default(now())
 
-  @@unique([contractId, tokenId])
+  @@unique([network, contractId, tokenId])
+  @@schema("wraith")
+}
+
+// ─── LP-Share Transfers ──────────────────────────────────────────────────────
+// Liquidity-pool deposits/withdrawals surfaced as LP-share movements. The shares
+// have no symbol of their own, so each row carries the pool whose shares moved
+// (poolId = the emitting pool contract). A deposit mints shares to toAddress
+// (no from); a withdrawal burns shares from fromAddress (no to).
+model LpShareTransfer {
+  id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
+  // The liquidity-pool contract whose shares moved (C...)
+  poolId         String
+  // "deposit" (shares minted to provider) | "withdraw" (shares burned from provider)
+  action         String
+  fromAddress    String?
+  toAddress      String?
+  // i128 share amount as a decimal string
+  shares         String
+  ledger         Int
+  ledgerClosedAt DateTime
+  txHash         String
+  eventId        String
+  createdAt      DateTime @default(now())
+
+  // Unique per network, not globally: ledger sequences and event ids are
+  // per-chain, and a global unique would let a testnet event's id suppress its
+  // mainnet namesake — silently, since createMany uses skipDuplicates.
+  @@unique([network, eventId])
+  @@index([network, poolId])
+  @@index([network, toAddress])
+  @@index([network, fromAddress])
+  @@index([network, ledger])
+  @@index([network, txHash])
+  @@index([network, poolId, action])
   @@schema("wraith")
 }
 
 // ─── Account Summaries ────────────────────────────────────────────────────────
 model AccountSummary {
   id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
   address        String
   contractId     String
   totalSent      String   @default("0")
@@ -131,78 +194,93 @@ model AccountSummary {
   lastActivityAt DateTime
   updatedAt      DateTime @updatedAt
 
-  @@unique([address, contractId])
-  @@index([address])
-  @@index([lastActivityAt])
+  @@unique([network, address, contractId])
+  @@index([network, address])
+  @@index([network, lastActivityAt])
   @@schema("wraith")
 }
 
 // ─── Webhook Subscriptions ────────────────────────────────────────────────────
 // Each row is one subscriber endpoint. The secret is used to HMAC-sign payloads.
+// A subscription is scoped to one network: a testnet subscriber must not be
+// woken by mainnet value moving, and vice versa.
 model WebhookSubscription {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
+  network   String   @default("testnet")
   url       String
   secret    String
   filter    Json?
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   deliveries WebhookDelivery[]
 
-  @@index([active])
+  @@index([network, active])
   @@schema("wraith")
 }
 
 // ─── Webhook Deliveries ───────────────────────────────────────────────────────
 model WebhookDelivery {
-  id             Int                  @id @default(autoincrement())
+  id Int @id @default(autoincrement())
+  // Denormalised from the subscription so a delivery can be looked up by
+  // (network, eventId) without a join.
+  network        String              @default("testnet")
   subscriptionId Int
-  subscription   WebhookSubscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   eventId        String
   payload        Json
-  status         String               @default("pending")
-  attempts       Int                  @default(0)
+  status         String              @default("pending")
+  attempts       Int                 @default(0)
   nextRetryAt    DateTime?
   lastStatusCode Int?
   lastError      String?
   deliveredAt    DateTime?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
   @@index([subscriptionId])
+  // The retry sweeper drains every network queue in one pass, so this index
+  // deliberately stays network-agnostic.
   @@index([status, nextRetryAt])
-  @@index([eventId])
+  @@index([network, eventId])
   @@schema("wraith")
 }
 
 // ─── Indexer State ────────────────────────────────────────────────────────────
+// One row per network. This was a singleton (id = 1) — a single cursor cannot
+// describe how far two independent chains have been indexed.
 model IndexerState {
-  id                 Int      @id @default(1)
-  lastIndexedLedger  Int
-  updatedAt          DateTime @updatedAt
+  network           String   @id
+  lastIndexedLedger Int
+  updatedAt         DateTime @updatedAt
 
   @@schema("wraith")
 }
 
 // ─── Indexer Checkpoint ──────────────────────────────────────────────────────
 // Tracks the cursor position for exactly-once idempotent batch processing.
-// Each batch is keyed by batchId (e.g., "sac:6000-7000") to enable parallel
-// workers to checkpoint independently. Atomic upsert of events + cursor ensures
-// a crash mid-batch either completes or rolls back, never leaving a gap.
+// Each batch is keyed by (network, batchId) (e.g., "sac:6000-7000") to enable
+// parallel workers to checkpoint independently. Atomic upsert of events +
+// cursor ensures a crash mid-batch either completes or rolls back, never
+// leaving a gap. Batch ids are only unique within a network — the same ledger
+// range exists on both chains.
 model IndexerCheckpoint {
-  id            Int      @id @default(autoincrement())
-  batchId       String   @unique
-  lastLedger    Int
-  processedAt   DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          Int      @id @default(autoincrement())
+  network     String   @default("testnet")
+  batchId     String
+  lastLedger  Int
+  processedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
+  @@unique([network, batchId])
   @@schema("wraith")
 }
 
 // ─── Partition Retention Runs ───────────────────────────────────────────────
 model RetentionJobRun {
   id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
   startedAt      DateTime @default(now())
   finishedAt     DateTime @updatedAt
   compressed     Int      @default(0)
@@ -211,18 +289,53 @@ model RetentionJobRun {
   skipped        Int      @default(0)
   status         String   @default("completed")
 
+  @@index([network, startedAt])
   @@schema("wraith")
 }
 
+// ─── Contract Tombstones ────────────────────────────────────────────────────
+// A tombstone marks a contract whose persistent storage has expired (its
+// instance entry's liveUntilLedger fell behind the current ledger). Downstream
+// consumers watch this table for a "the contract is gone" signal. One row per
+// contract — the first expiry detection wins; re-detection is idempotent.
+model ContractTombstone {
+  id              Int      @id @default(autoincrement())
+
+  // Which chain the contract expired on. The same contract id can exist on both
+  // networks with different TTLs, so a tombstone is only meaningful per network
+  // — a global unique on contractId would let a testnet expiry suppress the
+  // mainnet one forever.
+  network         String   @default("testnet")
+
+  // The contract whose storage expired (C...)
+  contractId      String
+
+  // The contract instance's liveUntilLedger at the moment of expiry — the last
+  // ledger for which the entry was still live.
+  liveUntilLedger Int
+
+  // The ledger at which we observed the entry had expired
+  // (detectedLedger > liveUntilLedger).
+  detectedLedger  Int
+
+  createdAt       DateTime @default(now())
+
+  // First expiry detection wins, per network; re-detection is a no-op.
+  @@unique([network, contractId])
+  @@index([network, detectedLedger])
+  @@schema("wraith")
+}
+
+
 // ─── Backfill Cursor ───────────────────────────────────────────────────────────
 // Durable cursor so the backfill job can resume mid-range after a crash.
-// Always row ID 1 — singleton, one backfill at a time.
+// One row per network — one backfill at a time *per chain*, not globally.
 model BackfillCursor {
-  id             Int      @id @default(1)
-  startLedger    Int
-  endLedger      Int
-  nextLedger     Int
-  updatedAt      DateTime @updatedAt
+  network     String   @id
+  startLedger Int
+  endLedger   Int
+  nextLedger  Int
+  updatedAt   DateTime @updatedAt
 
   @@schema("wraith")
 }

@@ -1,7 +1,11 @@
 node_modules/
 dist/
-docs/
+# Generated docs output. docs/ itself is tracked (hand-written guides live
+# there); only the generated artefacts inside it are ignored.
+docs/openapi.json
+docs/api/
 .env
 *.env.local
 bench/results.json
 .aider*
+coverage/

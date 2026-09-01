@@ -15,6 +15,7 @@
 
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { Prisma } from "@prisma/client";
+import { resolveNetwork, type Network } from "../network";
 import { prisma } from "../db";
 import type { RawEvent } from "../rpc";
 
@@ -100,11 +101,19 @@ export function parseHostFnEvent(raw: RawEvent): HostFnRecord | null {
  * Idempotently persist a batch of host-fn log records.
  * Conflicts on `eventId` are silently ignored — safe to replay ledger ranges.
  */
-export async function upsertHostFnLogs(records: HostFnRecord[]): Promise<number> {
+export async function upsertHostFnLogs(
+  records: HostFnRecord[],
+  network?: Network,
+): Promise<number> {
   if (records.length === 0) return 0;
+
+  // Stamped explicitly: the column defaults to 'testnet', so omitting it
+  // compiles and files mainnet events under testnet.
+  const net = resolveNetwork(network);
 
   const result = await prisma.hostFnLog.createMany({
     data: records.map(r => ({
+      network:       net,
       contractId:    r.contractId,
       functionName:  r.functionName,
       args:          r.args as Prisma.InputJsonValue,
@@ -122,6 +131,7 @@ export async function upsertHostFnLogs(records: HostFnRecord[]): Promise<number>
 }
 
 export type HostFnQueryParams = {
+  network?: Network;
   contractId: string;
   functionName?: string;
   limit?: number;
@@ -135,10 +145,11 @@ export type HostFnQueryParams = {
 export async function queryHostFnLogs(
   params: HostFnQueryParams,
 ): Promise<{ total: number; logs: HostFnRecord[] }> {
-  const { contractId, functionName, limit = 50, offset = 0 } = params;
+  const { network, contractId, functionName, limit = 50, offset = 0 } = params;
   const cap = Math.min(limit, 200);
 
   const where = {
+    network: resolveNetwork(network),
     contractId,
     ...(functionName ? { functionName } : {}),
   };
