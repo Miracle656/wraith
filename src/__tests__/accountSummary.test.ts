@@ -26,6 +26,10 @@ jest.mock("../rpc", () => ({
 }));
 
 jest.mock("../indexer", () => ({
+  // #161: /status also reads per-network loop state. Listed explicitly
+  // because a partial mock silently 500s the route rather than failing loudly.
+  getAllIndexerStats: jest.fn().mockReturnValue({}),
+  runningNetworks: jest.fn().mockReturnValue([]),
   getIndexerStats: jest.fn().mockReturnValue({ startedAt: "2024-01-01T00:00:00Z", uptimeSeconds: 0, totalIndexed: 0 }),
 }));
 
@@ -80,7 +84,60 @@ describe("GET /accounts/:address/summary", () => {
 
     await supertest(app).get(`/accounts/${ALICE}/summary?contractId=${CONTRACT}`);
 
-    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT);
+    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT, "testnet");
+  });
+
+  it("returns account transfers and supports token filter", async () => {
+    const transfer = {
+      id: 1,
+      contractId: CONTRACT,
+      eventType: "transfer",
+      fromAddress: "GBOBADDRESSABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGH",
+      toAddress: ALICE,
+      amount: "10000000",
+      ledger: 1234,
+      ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
+      txHash: "txhash-123",
+      eventId: "evt-123",
+      createdAt: new Date("2025-01-01T00:00:01Z"),
+      direction: "incoming",
+    };
+
+    const { queryAllTransfers } = require("../db");
+    queryAllTransfers.mockResolvedValueOnce({
+      total: 1,
+      transfers: [transfer],
+      nextCursor: null,
+    });
+
+    const res = await supertest(app)
+      .get(`/accounts/${ALICE}/transfers`)
+      .query({ token: CONTRACT, limit: "10", offset: "2", cursor: "cursor-1", $select: "contractId,direction" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.transfers[0].displayAmount).toBe("1.0000000");
+    expect(queryAllTransfers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: ALICE,
+        token: CONTRACT,
+        limit: 10,
+        offset: 2,
+        cursor: "cursor-1",
+        select: ["contractId", "direction"],
+      })
+    );
+  });
+
+  it("returns 400 for invalid token filter on account transfers", async () => {
+    const { queryAllTransfers } = require("../db");
+
+    const res = await supertest(app)
+      .get(`/accounts/${ALICE}/transfers`)
+      .query({ token: "GINVALIDTOKENADDRESS" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid token address/i);
+    expect(queryAllTransfers).not.toHaveBeenCalled();
   });
 
   it("returns multiple asset rows for multi-token accounts", async () => {

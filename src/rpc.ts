@@ -1,60 +1,80 @@
 import { rpc as RPC, xdr, scValToNative, Contract, TransactionBuilder, Account, Networks } from "@stellar/stellar-sdk";
+import { resolveNetwork, currentNetwork, type Network } from "./network";
+import { recordRpcError } from "./metrics";
 
 // ─── Network config ───────────────────────────────────────────────────────────
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
 
 /**
- * Resolve the Soroban RPC endpoint from environment variables.
+ * Resolve the Soroban RPC endpoint for one network.
  *
- * Resolution order:
- *   1. SOROBAN_RPC_URL  (explicit — takes precedence)
- *   2. STELLAR_RPC_URL  (backward-compat alias)
- *   3. STELLAR_NETWORK=testnet  → default testnet URL
- *   4. STELLAR_NETWORK=mainnet  → requires explicit SOROBAN_RPC_URL; no free
- *                                  public mainnet RPC exists, so we fail fast
- *   5. Nothing set → throws with a clear configuration guide
+ * Resolution order, per network:
+ *   1. SOROBAN_RPC_URL_TESTNET / SOROBAN_RPC_URL_MAINNET (explicit, per network)
+ *   2. SOROBAN_RPC_URL / STELLAR_RPC_URL — but **only for the network this
+ *      process is configured as** (STELLAR_NETWORK). See below.
+ *   3. testnet → default public testnet endpoint
+ *   4. mainnet → throws; there is no free public mainnet Soroban RPC
+ *
+ * Step 2 is deliberately narrow. The unsuffixed variables predate multi-network
+ * support, so a deployment that sets `SOROBAN_RPC_URL` means "the endpoint for
+ * the network I run". Honouring it for *both* networks would silently point a
+ * mainnet indexer at a testnet endpoint — it would connect, index happily, and
+ * write testnet ledger data tagged `network='mainnet'`. Scoping the legacy
+ * variable to the configured network keeps every single-network deployment
+ * behaving exactly as before while making that mix-up impossible.
  */
-function resolveRpcUrl(): string {
-  const explicit = process.env.SOROBAN_RPC_URL ?? process.env.STELLAR_RPC_URL;
-  if (explicit) return explicit;
+function resolveRpcUrl(network: Network): string {
+  const suffix = network.toUpperCase();
+  const perNetwork =
+    process.env[`SOROBAN_RPC_URL_${suffix}`] || process.env[`STELLAR_RPC_URL_${suffix}`];
+  if (perNetwork) return perNetwork;
 
-  const network = (process.env.STELLAR_NETWORK ?? "").toLowerCase();
+  if (network === currentNetwork()) {
+    const legacy = process.env.SOROBAN_RPC_URL || process.env.STELLAR_RPC_URL;
+    if (legacy) return legacy;
+  }
 
   if (network === "testnet") return TESTNET_RPC_URL;
 
-  if (network === "mainnet") {
-    throw new Error(
-      "[wraith] SOROBAN_RPC_URL is required when STELLAR_NETWORK=mainnet. " +
-      "There is no free public Soroban RPC for mainnet — set SOROBAN_RPC_URL " +
-      "to your provider's endpoint (e.g. Validation Cloud, Ankr, self-hosted)."
-    );
-  }
-
   throw new Error(
-    "[wraith] RPC endpoint not configured. " +
-    "Set SOROBAN_RPC_URL to your Soroban RPC endpoint, or set STELLAR_NETWORK=testnet " +
-    "to use the default public testnet endpoint automatically."
+    `[wraith] SOROBAN_RPC_URL_MAINNET is required to index mainnet. ` +
+    "There is no free public Soroban RPC for mainnet — set it to your " +
+    "provider's endpoint (e.g. Validation Cloud, Ankr, self-hosted). " +
+    "Single-network deployments may still use SOROBAN_RPC_URL with " +
+    "STELLAR_NETWORK=mainnet."
   );
 }
 
 /**
- * Validate the network configuration at startup.
- * Call this before opening DB connections so configuration errors surface
- * immediately instead of on the first RPC call.
+ * Validate RPC configuration at startup for every network given (defaults to
+ * the configured one). Call before opening DB connections so a misconfigured
+ * endpoint surfaces immediately rather than on the first poll.
  */
-export function validateNetworkConfig(): void {
-  resolveRpcUrl(); // throws with a human-readable message if misconfigured
+export function validateNetworkConfig(networks: Network[] = [currentNetwork()]): void {
+  for (const network of networks) {
+    resolveRpcUrl(network); // throws with a human-readable message
+  }
 }
 
-// ─── RPC client singleton ─────────────────────────────────────────────────────
-let _rpc: RPC.Server | null = null;
+// ─── RPC clients, one per network ─────────────────────────────────────────────
+// Cached per network: repeated calls reuse a connection, and two networks can
+// never share one — which was impossible with the previous single singleton.
+const clients = new Map<Network, RPC.Server>();
 
-export function getRpc(): RPC.Server {
-  if (!_rpc) {
-    const url = resolveRpcUrl();
-    _rpc = new RPC.Server(url, { allowHttp: url.startsWith("http://") });
+export function getRpc(network?: Network): RPC.Server {
+  const net = resolveNetwork(network);
+  let client = clients.get(net);
+  if (!client) {
+    const url = resolveRpcUrl(net);
+    client = new RPC.Server(url, { allowHttp: url.startsWith("http://") });
+    clients.set(net, client);
   }
-  return _rpc;
+  return client;
+}
+
+/** Test-only: drops cached clients so a test can rebind env or mocks. */
+export function _resetRpcClients(): void {
+  clients.clear();
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,13 +100,15 @@ export interface RawEvent {
  * @param startLedger  First ledger to include (inclusive).
  * @param contractIds  Filter to specific contract IDs. Pass [] to skip filter.
  * @param limit        Max events per call (RPC hard-caps at 10 000).
+ * @param network      Which chain to read. Defaults to the configured network.
  */
 export async function fetchEvents(
   startLedger: number,
   contractIds: string[],
-  limit: number = 10_000
+  limit: number = 10_000,
+  network?: Network
 ): Promise<{ events: RawEvent[]; latestLedger: number }> {
-  const rpc = getRpc();
+  const rpc = getRpc(network);
 
   // Build the request using the correct Server.GetEventsRequest type.
   // Api.EventFilter allows: type, contractIds (string[]), topics (string[][]).
@@ -123,8 +145,8 @@ export async function fetchEvents(
 }
 
 // ─── Network tip helper ───────────────────────────────────────────────────────
-export async function getLatestLedger(): Promise<number> {
-  const rpc = getRpc();
+export async function getLatestLedger(network?: Network): Promise<number> {
+  const rpc = getRpc(network);
   const resp = await rpc.getLatestLedger();
   return resp.sequence;
 }
@@ -141,7 +163,11 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       attempt++;
-      if (attempt >= maxAttempts) throw err;
+      if (attempt >= maxAttempts) {
+        recordRpcError("exhausted");
+        throw err;
+      }
+      recordRpcError("retry");
       const delay = baseDelayMs * 2 ** (attempt - 1);
       console.warn(
         `[rpc] Attempt ${attempt} failed — retrying in ${delay}ms…`,
@@ -170,12 +196,13 @@ export async function fetchEventsSafe(
   endLedger: number,
   contractIds: string[],
   limit: number = 10_000,
-  _fetchFn: FetchFn = fetchEvents
+  _fetchFn: FetchFn = fetchEvents,
+  network?: Network
 ): Promise<{ events: RawEvent[]; highestLedger: number }> {
   // If the range is a single ledger and it fails, skip it.
   if (startLedger >= endLedger) {
     try {
-      const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit);
+      const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
       return { events, highestLedger: Math.max(startLedger, latestLedger) };
     } catch (err) {
       const msg = (err as Error).message ?? "";
@@ -188,7 +215,7 @@ export async function fetchEventsSafe(
   }
 
   try {
-    const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit);
+    const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
     return { events, highestLedger: latestLedger };
   } catch (err) {
     const msg = (err as Error).message ?? "";
@@ -198,8 +225,8 @@ export async function fetchEventsSafe(
     console.warn(`[rpc] XDR error in ledgers ${startLedger}–${endLedger}, bisecting…`);
     const mid = Math.floor((startLedger + endLedger) / 2);
 
-    const lower = await fetchEventsSafe(startLedger, mid, contractIds, limit, _fetchFn);
-    const upper = await fetchEventsSafe(mid + 1, endLedger, contractIds, limit, _fetchFn);
+    const lower = await fetchEventsSafe(startLedger, mid, contractIds, limit, _fetchFn, network);
+    const upper = await fetchEventsSafe(mid + 1, endLedger, contractIds, limit, _fetchFn, network);
 
     return {
       events: [...lower.events, ...upper.events],
@@ -213,15 +240,22 @@ export async function fetchEventsSafe(
  * Fetch token metadata (symbol, decimals, name) from a Soroban token contract.
  * Uses simulateTransaction to call the read-only getter methods.
  */
-export async function fetchTokenMetadata(contractId: string): Promise<{
+export async function fetchTokenMetadata(
+  contractId: string,
+  network?: Network,
+): Promise<{
   symbol: string;
   decimals: number;
   name: string;
 }> {
-  const rpc = getRpc();
+  // Both the RPC endpoint and the passphrase must come from the network being
+  // asked about, not from STELLAR_NETWORK. With a loop per network (#161),
+  // reading the process default here would simulate a mainnet contract call
+  // against testnet — returning either nothing or a different token entirely.
+  const net = resolveNetwork(network);
+  const rpc = getRpc(net);
   const contract = new Contract(contractId);
-  const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
-  const networkPassphrase = network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+  const networkPassphrase = net === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
   // Helper to call a zero-arg method and decode the result
   const callMethod = async (method: string): Promise<any> => {

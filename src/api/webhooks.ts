@@ -1,5 +1,13 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
+import { parseOr400 } from "../openapi/validation";
+import {
+  webhookCreateBodySchema,
+  webhookDeliveriesParamsSchema,
+  webhookDeliveriesQuerySchema,
+  webhookDeleteParamsSchema,
+} from "../openapi/schemas";
 
 /**
  * Webhooks router — mounts at /webhooks
@@ -31,36 +39,15 @@ export function createWebhooksRouter(): Router {
     "/",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { url, secret, filter, active } = req.body;
-
-        if (!url || typeof url !== "string") {
-          res.status(400).json({ error: "url is required and must be a string" });
-          return;
-        }
-        if (!secret || typeof secret !== "string") {
-          res.status(400).json({ error: "secret is required and must be a string" });
-          return;
-        }
-        if (!url.startsWith("https://") && !url.startsWith("http://")) {
-          res.status(400).json({ error: "url must start with http:// or https://" });
-          return;
-        }
-
-        // Validate optional filter shape
-        if (filter !== undefined && filter !== null) {
-          const allowed = new Set(["contract", "from", "to", "min_amount"]);
-          const unknown = Object.keys(filter).filter((k) => !allowed.has(k));
-          if (unknown.length) {
-            res.status(400).json({ error: `Unknown filter keys: ${unknown.join(", ")}` });
-            return;
-          }
-        }
+        const parsed = parseOr400(webhookCreateBodySchema, req.body, res);
+        if (!parsed) return;
+        const { url, secret, filter, active } = parsed;
 
         const sub = await prisma.webhookSubscription.create({
           data: {
             url,
             secret,
-            filter: filter ?? null,
+            filter: filter === undefined || filter === null ? Prisma.JsonNull : filter,
             active: active !== false,
           },
         });
@@ -139,11 +126,9 @@ export function createWebhooksRouter(): Router {
     "/:id",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = parseInt(req.params.id, 10);
-        if (isNaN(id)) {
-          res.status(400).json({ error: "id must be an integer" });
-          return;
-        }
+        const parsed = parseOr400(webhookDeleteParamsSchema, req.params, res);
+        if (!parsed) return;
+        const { id } = parsed;
 
         const existing = await prisma.webhookSubscription.findUnique({ where: { id } });
         if (!existing) {
@@ -174,11 +159,9 @@ export function createWebhooksRouter(): Router {
     "/:id/deliveries",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const id = parseInt(req.params.id, 10);
-        if (isNaN(id)) {
-          res.status(400).json({ error: "id must be an integer" });
-          return;
-        }
+        const params = parseOr400(webhookDeliveriesParamsSchema, req.params, res);
+        if (!params) return;
+        const { id } = params;
 
         const existing = await prisma.webhookSubscription.findUnique({ where: { id } });
         if (!existing) {
@@ -186,25 +169,19 @@ export function createWebhooksRouter(): Router {
           return;
         }
 
-        const { status, limit, offset } = req.query;
-        const lim = Math.min(parseInt(String(limit  ?? "50"),  10) || 50, 200);
-        const off =           parseInt(String(offset ?? "0"),  10) || 0;
+        const query = parseOr400(webhookDeliveriesQuerySchema, req.query, res);
+        if (!query) return;
+        const { status, limit, offset } = query;
 
-        const VALID_STATUSES = new Set(["pending", "success", "failed"]);
-        const statusFilter =
-          status && VALID_STATUSES.has(String(status))
-            ? { status: String(status) }
-            : {};
-
-        const where = { subscriptionId: id, ...statusFilter };
+        const where = { subscriptionId: id, ...(status ? { status } : {}) };
 
         const [total, deliveries] = await prisma.$transaction([
           prisma.webhookDelivery.count({ where }),
           prisma.webhookDelivery.findMany({
             where,
             orderBy: { id: "desc" },
-            take: lim,
-            skip: off,
+            take: limit,
+            skip: offset,
             select: {
               id:             true,
               eventId:        true,
@@ -219,7 +196,7 @@ export function createWebhooksRouter(): Router {
           }),
         ]);
 
-        res.json({ total, limit: lim, offset: off, deliveries });
+        res.json({ total, limit, offset, deliveries });
       } catch (err) {
         next(err);
       }

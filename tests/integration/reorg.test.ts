@@ -18,19 +18,22 @@
 
 import type { TransferRecord } from "../../src/db";
 
-// ── In-memory dedup store (declared before jest.mock hoisting) ───────────────
-// Using a module-scoped object so the factory closure can reference it safely.
-const _store: Map<string, TransferRecord> = new Map();
-const _createManyCalls: Array<{ data: TransferRecord[]; skipDuplicates: boolean }> = [];
+// ── In-memory dedup store ───────────────────────────────────────────────────
+// Hoisted alongside vi.mock (which vitest lifts above imports) so the mock
+// factory can safely close over these; vi.hoisted runs before the mock factory.
+const { _store, _createManyCalls } = vi.hoisted(() => ({
+  _store: new Map<string, TransferRecord>(),
+  _createManyCalls: [] as Array<{ data: TransferRecord[]; skipDuplicates: boolean }>,
+}));
 
 // ── Mock @prisma/client ───────────────────────────────────────────────────────
 // By mocking the constructor we intercept the module-level `prisma` singleton
 // created inside src/db.ts, which is what upsertTransfers closes over.
-jest.mock("@prisma/client", () => {
+vi.mock("@prisma/client", () => {
   return {
-    PrismaClient: jest.fn().mockImplementation(() => ({
+    PrismaClient: vi.fn().mockImplementation(() => ({
       tokenTransfer: {
-        createMany: jest.fn(async (args: { data: TransferRecord[]; skipDuplicates: boolean }) => {
+        createMany: vi.fn(async (args: { data: TransferRecord[]; skipDuplicates: boolean }) => {
           _createManyCalls.push(args);
 
           let count = 0;
@@ -45,13 +48,13 @@ jest.mock("@prisma/client", () => {
         }),
       },
       // Silence other Prisma calls used by db module initialisation
-      $queryRaw: jest.fn().mockResolvedValue([]),
-      $on: jest.fn(),
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      $on: vi.fn(),
     })),
     Prisma: {
       // Provide stub values for any Prisma namespace references used in db.ts
-      sql: jest.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
-      join: jest.fn((arr: unknown[]) => arr),
+      sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
+      join: vi.fn((arr: unknown[]) => arr),
       empty: "",
     },
   };

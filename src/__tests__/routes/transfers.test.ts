@@ -16,6 +16,10 @@ jest.mock("../../rpc", () => ({
 }));
 
 jest.mock("../../indexer", () => ({
+  // #161: /status also reads per-network loop state. Listed explicitly
+  // because a partial mock silently 500s the route rather than failing loudly.
+  getAllIndexerStats: jest.fn().mockReturnValue({}),
+  runningNetworks: jest.fn().mockReturnValue([]),
   getIndexerStats: jest
     .fn()
     .mockReturnValue({ startedAt: "2024-01-01T00:00:00.000Z", uptimeSeconds: 0, totalIndexed: 0 }),
@@ -52,6 +56,7 @@ function makeTransfer(overrides: TransferOverrides = {}) {
 function baseTransfer() {
   return {
     id: 1,
+    network: "testnet",
     contractId: CONTRACT_A,
     eventType: "transfer",
     fromAddress: BOB,
@@ -61,6 +66,7 @@ function baseTransfer() {
     ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
     txHash: "aaaa1111",
     eventId: "evt-001",
+    isSac: false,
     createdAt: new Date("2025-01-01T00:00:01Z"),
   };
 }
@@ -487,7 +493,7 @@ describe("Transfer route handlers", () => {
 
       await request(app).get("/transfers/tx/abc123def456");
 
-      expect(mockQueryByTxHash).toHaveBeenCalledWith("abc123def456");
+      expect(mockQueryByTxHash).toHaveBeenCalledWith("abc123def456", "testnet");
     });
   });
 
@@ -733,6 +739,27 @@ describe("Transfer route handlers", () => {
       );
     });
 
+    it("respects token filter for CSV export", async () => {
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+
+      await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ token: CONTRACT_A });
+
+      expect(mockQueryAllTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ token: CONTRACT_A })
+      );
+    });
+
+    it("returns 400 for invalid ?token= on CSV export", async () => {
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}/export.csv`)
+        .query({ token: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/Invalid token address/i);
+    });
+
     it("respects fromDate and toDate filters", async () => {
       mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
 
@@ -829,6 +856,89 @@ describe("Transfer route handlers", () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain('"CONTRACT,WITH,COMMAS"');
+    });
+  });
+
+  // ── JSON:API Content Negotiation ─────────────────────────────────────
+  describe("JSON:API content negotiation", () => {
+    it("returns JSON:API format for transfers/address/:address", async () => {
+      const t = { ...makeTransfer({ id: 1, toAddress: ALICE, fromAddress: BOB, eventType: "transfer", ledger: 1001, amount: "10000000" }), direction: "incoming" as const };
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers: [t], nextCursor: null });
+
+      const res = await request(app)
+        .get(`/transfers/address/${ALICE}`)
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/vnd.api+json");
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].type).toBe("transfer");
+      expect(res.body.data[0].id).toBe("evt-001");
+      expect(res.body.meta.total).toBe(1);
+    });
+
+    it("returns JSON:API format for transfers/incoming/:address", async () => {
+      const t = { ...makeTransfer({ id: 1, toAddress: ALICE, fromAddress: BOB }), direction: "incoming" as const };
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [t], nextCursor: null });
+
+      const res = await request(app)
+        .get(`/transfers/incoming/${ALICE}`)
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/vnd.api+json");
+      expect(res.body.data[0].type).toBe("transfer");
+    });
+
+    it("returns JSON:API format for transfers/tx/:txHash", async () => {
+      const txTransfers = [makeTransfer({ txHash: "txhash-multi", ledger: 1019 })];
+      mockQueryByTxHash.mockResolvedValue(txTransfers);
+
+      const res = await request(app)
+        .get("/transfers/tx/txhash-multi")
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/vnd.api+json");
+      expect(res.body.data[0].type).toBe("transfer");
+    });
+
+    it("returns JSON:API format for /summary/:address", async () => {
+      mockQuerySummary.mockResolvedValue([
+        { contractId: CONTRACT_A, totalReceived: "10000000", totalSent: "5000000", txCount: 2n },
+      ]);
+
+      const res = await request(app)
+        .get(`/summary/${ALICE}`)
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/vnd.api+json");
+      expect(res.body.data[0].type).toBe("token-summary");
+      expect(res.body.data[0].id).toBe(CONTRACT_A);
+      expect(res.body.meta.address).toBe(ALICE);
+    });
+
+    it("returns JSON:API format for /status", async () => {
+      const res = await request(app)
+        .get("/status")
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/vnd.api+json");
+      expect(res.body.data.type).toBe("status");
+      expect(res.body.data.attributes.ok).toBe(true);
+    });
+
+    it("returns error in JSON:API format for 404 responses", async () => {
+      const res = await request(app)
+        .get("/nonexistent")
+        .set("Accept", "application/vnd.api+json");
+
+      expect(res.status).toBe(404);
+      expect(res.body.errors).toHaveLength(1);
+      expect(res.body.errors[0].title).toBe("Error");
+      expect(res.body.errors[0].detail).toBe("Not found");
     });
   });
 });

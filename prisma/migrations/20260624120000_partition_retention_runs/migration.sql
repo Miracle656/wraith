@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS "wraith"."RetentionJobRun" (
+  "id" SERIAL PRIMARY KEY,
+  "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "finishedAt" TIMESTAMP(3) NOT NULL,
+  "compressed" INTEGER NOT NULL DEFAULT 0,
+  "archived" INTEGER NOT NULL DEFAULT 0,
+  "reclaimedBytes" BIGINT NOT NULL DEFAULT 0,
+  "skipped" INTEGER NOT NULL DEFAULT 0,
+  "status" TEXT NOT NULL DEFAULT 'completed'
+);

@@ -1,6 +1,12 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getAccountSummary } from "../db";
 import { toDisplayAmount } from "../api";
+import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
+import { parseOr400 } from "../openapi/validation";
+import { summaryQuerySchema } from "../openapi/schemas";
+import { requestNetwork } from "../middleware/network";
+
+type AccountSummaryRow = Awaited<ReturnType<typeof getAccountSummary>>[number];
 
 /**
  * Accounts router — mounts at /accounts
@@ -10,26 +16,30 @@ import { toDisplayAmount } from "../api";
  *     Returns one row per asset the address has ever sent or received.
  *     Reads from the materialized AccountSummary table — O(1) per query.
  *
+ *   GET /accounts/:address/transfers
+ *     Returns token transfers sent or received by the address.
+ *     Supports token-scoped filtering with ?token=C...
+ *
  *   Query params:
  *     contractId  — filter to a single token contract
  */
 export function createAccountsRouter(): Router {
-  const router = Router();
+  const router = Router({ mergeParams: true });
+
+  router.use("/:address/transfers", createAccountsTransfersRouter());
 
   // ── GET /accounts/:address/summary ─────────────────────────────────────────
   router.get(
     "/:address/summary",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const { contractId } = req.query;
+        const parsed = parseOr400(summaryQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId } = parsed;
 
-        const rows = await getAccountSummary(
-          address,
-          contractId as string | undefined
-        );
+        const rows = await getAccountSummary(address, contractId, requestNetwork(req));
 
-        const assets = rows.map((row) => {
+        const assets = rows.map((row: AccountSummaryRow) => {
           const net = BigInt(row.net);
           return {
             contractId:          row.contractId,
