@@ -19,6 +19,7 @@ import {
   readyzResponseSchema,
   searchQuerySchema,
   searchResponseSchema,
+  statusQuerySchema,
   statusResponseSchema,
   summaryQuerySchema,
   summaryResponseSchema,
@@ -93,6 +94,7 @@ registry.registerPath({
   method: "get",
   path: "/status",
   summary: "Indexer status",
+  request: { query: statusQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: statusResponseSchema } } },
     ...commonErrorResponses,

@@ -258,7 +258,7 @@ async function pollOnce(
 
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {
-    records.forEach(emitTransfer);
+    records.forEach((record) => emitTransfer(record, net));
   }
 
   // Log every event as a raw host-fn invocation for downstream consumers (#84)
@@ -269,7 +269,7 @@ async function pollOnce(
     await upsertHostFnLogs(hostFnRecords, net).catch((err: unknown) =>
       console.error(`[indexer/${net}] host-fn log error:`, err),
     );
-    hostFnRecords.forEach(emitHostFnLog);
+    hostFnRecords.forEach((record) => emitHostFnLog(record, net));
   }
 
   // ── NFT path ─────────────────────────────────────────────────────────────────

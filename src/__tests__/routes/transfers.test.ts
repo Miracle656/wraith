@@ -493,7 +493,7 @@ describe("Transfer route handlers", () => {
 
       await request(app).get("/transfers/tx/abc123def456");
 
-      expect(mockQueryByTxHash).toHaveBeenCalledWith("abc123def456");
+      expect(mockQueryByTxHash).toHaveBeenCalledWith("abc123def456", "testnet");
     });
   });
 

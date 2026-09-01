@@ -78,6 +78,7 @@ const makeTransfer = (overrides: Partial<TransferEvent> = {}): TransferEvent => 
   ledgerClosedAt: new Date("2024-01-01T00:00:00Z"),
   txHash:         "abc123",
   eventId:        "0001-0001",
+  network:        "testnet",
   ...overrides,
 });
 

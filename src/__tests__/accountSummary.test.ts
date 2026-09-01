@@ -84,7 +84,7 @@ describe("GET /accounts/:address/summary", () => {
 
     await supertest(app).get(`/accounts/${ALICE}/summary?contractId=${CONTRACT}`);
 
-    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT);
+    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT, "testnet");
   });
 
   it("returns account transfers and supports token filter", async () => {
