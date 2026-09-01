@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { queryAllTransfers } from "../../db";
 import { parseOr400 } from "../../openapi/validation";
 import { transferQuerySchema } from "../../openapi/schemas";
+import { requestNetwork } from "../../middleware/network";
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
 const STROOPS = 10_000_000n;
@@ -74,6 +75,7 @@ export function createAccountsTransfersRouter(): Router {
         };
 
         const result = await queryAllTransfers({
+          network: requestNetwork(req),
           address,
           contractId,
           token,
