@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
-import { getAccountSummary } from "../db";
+import { getAccountSummary, queryBalances } from "../db";
 import { toDisplayAmount } from "../api";
 import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
 import { parseOr400 } from "../openapi/validation";
@@ -27,6 +27,43 @@ export function createAccountsRouter(): Router {
   const router = Router({ mergeParams: true });
 
   router.use("/:address/transfers", createAccountsTransfersRouter());
+
+  // ── GET /accounts/:address/balance ─────────────────────────────────────────
+  /**
+   * Per-token balance for an address, derived from indexed transfers.
+   *
+   * `derivedFromLedger` and the note are part of the contract, not decoration:
+   * this is a sum over the indexed window, so an address that held a token
+   * before the indexer's start ledger reads low, and one that was net-negative
+   * over that window reads negative. A caller that mistakes this for an
+   * on-chain balance read will be wrong in a way the numbers do not reveal.
+   */
+  router.get(
+    "/:address/balance",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { address } = req.params;
+        const network = requestNetwork(req);
+        const rows = await queryBalances(address, network);
+
+        res.json({
+          address,
+          network,
+          balances: rows.map((row) => ({
+            contractId: row.contractId,
+            balance: row.balance,
+            displayBalance: toDisplayAmount(row.balance),
+          })),
+          derivedFromLedger: true,
+          note:
+            "Derived by summing indexed transfers, not read from chain. Excludes " +
+            "any history before the indexer's start ledger.",
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
 
   // ── GET /accounts/:address/summary ─────────────────────────────────────────
   router.get(

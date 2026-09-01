@@ -231,6 +231,52 @@ export async function setLastIndexedLedger(ledger: number, network?: Network): P
   );
 }
 
+// ─── Derived balances ─────────────────────────────────────────────────────────
+export type BalanceRow = {
+  contractId: string;
+  balance: string;
+};
+
+/**
+ * Per-token balance for an address, derived by summing what it received and
+ * subtracting what it sent across the indexed history.
+ *
+ * This is a *derived* figure, not an on-chain balance read. It is only correct
+ * from the ledger the indexer started at: anything the address held before
+ * that is invisible here, so the number can be lower than reality and, for an
+ * address that was net-negative over the indexed window, can even be negative.
+ * The route says so in its response rather than presenting it as authoritative.
+ *
+ * Scoped by network — summing two chains' transfers for the same address
+ * produces a figure that corresponds to no balance anywhere.
+ */
+export async function queryBalances(
+  address: string,
+  network?: Network
+): Promise<BalanceRow[]> {
+  const net = resolveNetwork(network);
+
+  return observeDbQuery("queryBalances", () =>
+    prisma.$queryRaw<BalanceRow[]>`
+      SELECT
+        "contractId",
+        (
+          COALESCE(SUM(CASE WHEN "toAddress"   = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+          COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+        )::TEXT AS "balance"
+      FROM "wraith"."TokenTransfer"
+      WHERE "network" = ${net}
+        AND ("toAddress" = ${address} OR "fromAddress" = ${address})
+      GROUP BY "contractId"
+      HAVING (
+        COALESCE(SUM(CASE WHEN "toAddress"   = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN "fromAddress" = ${address} THEN CAST("amount" AS NUMERIC) ELSE 0 END), 0)
+      ) <> 0
+      ORDER BY "contractId"
+    `
+  );
+}
+
 // ─── Backfill cursor helpers ───────────────────────────────────────────────
 export interface BackfillCursorState {
   startLedger: number;
