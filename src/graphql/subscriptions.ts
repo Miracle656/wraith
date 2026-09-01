@@ -46,6 +46,83 @@ export const SUBSCRIPTIONS_PATH = "/graphql/subscriptions";
 // simply misses the update rather than the server buffering it forever.
 const MAX_BUFFERED_BYTES = 1_000_000;
 
+// How long to wait before telling a client how many messages it missed. Long
+// enough that a burst of drops collapses into one notice.
+const BACKPRESSURE_NOTICE_MS = 250;
+
+/** The subset of a WebSocket the sender needs, so it can be tested without one. */
+export interface SendableSocket {
+  readyState: number;
+  bufferedAmount: number;
+  send(data: string): void;
+}
+
+/**
+ * Build the per-connection `send` used by every subscription on that socket.
+ *
+ * Dropping on a saturated socket is what keeps one slow consumer from growing
+ * server memory without bound. But dropping *silently* is its own bug: a
+ * subscriber whose stream has lost events cannot distinguish a quiet chain
+ * from a gap in its own data, and will treat an incomplete history as
+ * complete. So drops are counted and reported.
+ *
+ * The notice is debounced rather than sent per drop. A saturated socket drops
+ * in bursts, and one notice per dropped message would add to the very
+ * congestion it is reporting — and would itself be dropped. The notice is only
+ * emitted once the socket has actually drained below the threshold.
+ */
+export function createBackpressureSender(
+  ws: SendableSocket,
+  options: { maxBufferedBytes?: number; noticeMs?: number } = {},
+): (msg: Record<string, unknown>) => void {
+  const maxBufferedBytes = options.maxBufferedBytes ?? MAX_BUFFERED_BYTES;
+  const noticeMs = options.noticeMs ?? BACKPRESSURE_NOTICE_MS;
+
+  let droppedCount = 0;
+  let noticeQueued = false;
+
+  const isOpen = () => ws.readyState === WebSocket.OPEN;
+
+  const flushNotice = () => {
+    noticeQueued = false;
+    if (droppedCount === 0 || !isOpen()) return;
+    // Still saturated — the notice would be dropped too. Try again later.
+    if (ws.bufferedAmount > maxBufferedBytes) {
+      noticeQueued = true;
+      setTimeout(flushNotice, noticeMs);
+      return;
+    }
+    const dropped = droppedCount;
+    droppedCount = 0;
+    ws.send(
+      JSON.stringify({
+        type: "backpressure",
+        payload: {
+          droppedCount: dropped,
+          message:
+            `${dropped} message(s) were dropped because this connection could ` +
+            `not keep up. Re-query the REST API to fill the gap.`,
+        },
+      }),
+    );
+  };
+
+  return (msg: Record<string, unknown>) => {
+    if (!isOpen()) return;
+
+    if (ws.bufferedAmount > maxBufferedBytes) {
+      droppedCount++;
+      if (!noticeQueued) {
+        noticeQueued = true;
+        setTimeout(flushNotice, noticeMs);
+      }
+      return;
+    }
+
+    ws.send(JSON.stringify(msg));
+  };
+}
+
 const subscriptionTypeDefs = `#graphql
   scalar JSON
 
@@ -210,11 +287,7 @@ export function attachGraphQLSubscriptions(server: Server): void {
     // "complete" message or socket close can release its async iterator.
     const active = new Map<string, AsyncIterator<ExecutionResult>>();
 
-    const send = (msg: Record<string, unknown>) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      if (ws.bufferedAmount > MAX_BUFFERED_BYTES) return;
-      ws.send(JSON.stringify(msg));
-    };
+    const send = createBackpressureSender(ws);
 
     const stop = (id: string) => {
       const iterator = active.get(id);
