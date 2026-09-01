@@ -28,6 +28,15 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      # Regenerates docs/openapi.json, which is published alongside the
+      # TypeDoc output. Dropping it would leave the hosted site with a stale
+      # OpenAPI spec — silently, since nothing else reads that file.
+      - name: Generate OpenAPI document
+        run: npm run docs:openapi
+
+      # TypeDoc writes to docs/api (see typedoc.json). It empties its output
+      # directory first, so it must NOT point at docs/ itself — that is what
+      # deleted docs/cookbook in an earlier revision of this PR.
       - name: Build TypeDoc HTML
         run: npx typedoc
 

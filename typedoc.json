@@ -11,7 +11,7 @@
     "src/indexer.ts"
   ],
   "entryPointStrategy": "resolve",
-  "out": "docs",
+  "out": "docs/api",
   "theme": "default",
   "readme": "README.md",
   "includeVersion": true,
