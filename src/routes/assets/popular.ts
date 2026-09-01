@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { queryPopularAssets, toDisplayAmount } from "../../db";
 import { parseOr400 } from "../../openapi/validation";
 import { popularAssetsQuerySchema } from "../../openapi/schemas";
+import { requestNetwork } from "../../middleware/network";
 
 const VALID_WINDOWS = new Set(["1h", "24h", "7d"]);
 const VALID_SORT_BY = new Set(["transfers", "volume"]);
@@ -32,7 +33,13 @@ export function createPopularAssetsRouter(): Router {
         const { window, by, limit, offset } = parsed;
 
         const fromDate = windowToDate(window);
-        const { total, assets } = await queryPopularAssets({ fromDate, by, limit, offset });
+        const { total, assets } = await queryPopularAssets({
+          network: requestNetwork(req),
+          fromDate,
+          by,
+          limit,
+          offset,
+        });
 
         res.json({
           window,

@@ -20,6 +20,7 @@ export function toDisplayAmount(amount: string): string {
 }
 
 import { withReadReplicas } from "./db/router";
+import { observeDbQuery } from "./metrics";
 
 // ─── Singleton Prisma client ───────────────────────────────────────────────
 // Re-use one connection pool across the process.
@@ -180,10 +181,12 @@ export async function upsertTransfers(
   const net = resolveNetwork(network);
 
   // Prisma's createMany with skipDuplicates is the most efficient bulk path.
-  const result = await prisma.tokenTransfer.createMany({
-    data: records.map((r) => ({ ...r, network: net })),
-    skipDuplicates: true,
-  });
+  const result = await observeDbQuery("upsertTransfers", () =>
+    prisma.tokenTransfer.createMany({
+      data: records.map((r) => ({ ...r, network: net })),
+      skipDuplicates: true,
+    })
+  );
 
   return result.count;
 }
@@ -194,9 +197,11 @@ export async function upsertTransfers(
  * Returns null if no state row exists yet for this network.
  */
 export async function getLastIndexedLedger(network?: Network): Promise<number | null> {
-  const state = await prisma.indexerState.findUnique({
-    where: { network: resolveNetwork(network) },
-  });
+  const state = await observeDbQuery("getLastIndexedLedger", () =>
+    prisma.indexerState.findUnique({
+      where: { network: resolveNetwork(network) },
+    })
+  );
   return state?.lastIndexedLedger ?? null;
 }
 
@@ -217,11 +222,13 @@ export async function getLastIndexedState(
  */
 export async function setLastIndexedLedger(ledger: number, network?: Network): Promise<void> {
   const net = resolveNetwork(network);
-  await prisma.indexerState.upsert({
-    where: { network: net },
-    create: { network: net, lastIndexedLedger: ledger },
-    update: { lastIndexedLedger: ledger },
-  });
+  await observeDbQuery("setLastIndexedLedger", () =>
+    prisma.indexerState.upsert({
+      where: { network: net },
+      create: { network: net, lastIndexedLedger: ledger },
+      update: { lastIndexedLedger: ledger },
+    })
+  );
 }
 
 // ─── Backfill cursor helpers ───────────────────────────────────────────────
@@ -373,16 +380,18 @@ export async function queryTransfers(params: TransferQueryParams) {
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
 
-  const [total, transfers] = await prisma.$transaction([
-    prisma.tokenTransfer.count({ where }),
-    prisma.tokenTransfer.findMany({
-      where,
-      orderBy: [{ ledger: "desc" }, { id: "desc" }],
-      take: cap + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
-      ...(prismaSelect ? { select: prismaSelect } : {}),
-    }),
-  ]);
+  const [total, transfers] = await observeDbQuery("queryTransfers", () =>
+    prisma.$transaction([
+      prisma.tokenTransfer.count({ where }),
+      prisma.tokenTransfer.findMany({
+        where,
+        orderBy: [{ ledger: "desc" }, { id: "desc" }],
+        take: cap + 1,
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+        ...(prismaSelect ? { select: prismaSelect } : {}),
+      }),
+    ])
+  );
 
   const page = buildListPage(transfers as Array<{ id: number }>, cap);
 
@@ -458,10 +467,12 @@ export async function upsertNftTransfers(
 ): Promise<number> {
   if (records.length === 0) return 0;
   const net = resolveNetwork(network);
-  const result = await prisma.nftTransfer.createMany({
-    data: records.map((r) => ({ ...r, network: net })),
-    skipDuplicates: true,
-  });
+  const result = await observeDbQuery("upsertNftTransfers", () =>
+    prisma.nftTransfer.createMany({
+      data: records.map((r) => ({ ...r, network: net })),
+      skipDuplicates: true,
+    })
+  );
   return result.count;
 }
 

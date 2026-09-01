@@ -66,7 +66,7 @@ async function runPartitionWorker(
   const inserted = await upsertTransfers(records, network);
 
   if (inserted > 0) {
-    records.forEach(emitTransfer);
+    records.forEach((record) => emitTransfer(record, network));
   }
 
   return { inserted, highestLedger };

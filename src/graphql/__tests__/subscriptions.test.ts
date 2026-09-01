@@ -46,6 +46,7 @@ function makeHostFnLog(overrides: Partial<HostFnLogEvent> = {}): HostFnLogEvent 
     ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
     txHash: "txhash",
     eventId: "hfl-1",
+    network: "testnet",
     ...overrides,
   };
 }
@@ -143,7 +144,7 @@ describe("GraphQL subscriptions /graphql/subscriptions", () => {
     await new Promise((r) => setTimeout(r, 20));
 
     const pending = collectNext(ws, "1", 1);
-    emitTransfer(makeTransfer({ eventId: "ev-a" }));
+    emitTransfer(makeTransfer({ eventId: "ev-a" }), "testnet");
 
     const [msg] = await pending;
     const transfer = msg.transferAdded as Record<string, unknown>;
@@ -165,8 +166,8 @@ describe("GraphQL subscriptions /graphql/subscriptions", () => {
 
     const pending = collectNext(ws, "2", 1);
 
-    emitTransfer(makeTransfer({ contractId: "COTHER", eventId: "ev-skip" }));
-    emitTransfer(makeTransfer({ contractId: "CWANTED", eventId: "ev-match" }));
+    emitTransfer(makeTransfer({ contractId: "COTHER", eventId: "ev-skip" }), "testnet");
+    emitTransfer(makeTransfer({ contractId: "CWANTED", eventId: "ev-match" }), "testnet");
 
     const [msg] = await pending;
     expect((msg.transferAdded as Record<string, unknown>).eventId).toBe("ev-match");
@@ -180,7 +181,7 @@ describe("GraphQL subscriptions /graphql/subscriptions", () => {
     await new Promise((r) => setTimeout(r, 20));
 
     const pending = collectNext(ws, "3", 1);
-    emitHostFnLog(makeHostFnLog({ eventId: "hfl-a" }));
+    emitHostFnLog(makeHostFnLog({ eventId: "hfl-a" }), "testnet");
 
     const [msg] = await pending;
     expect((msg.hostFnLogAdded as Record<string, unknown>).eventId).toBe("hfl-a");
@@ -203,7 +204,7 @@ describe("GraphQL subscriptions /graphql/subscriptions", () => {
     ws.send(JSON.stringify({ id: "4", type: "complete" }));
     await new Promise((r) => setTimeout(r, 20));
 
-    emitTransfer(makeTransfer({ eventId: "ev-after-complete" }));
+    emitTransfer(makeTransfer({ eventId: "ev-after-complete" }), "testnet");
     await new Promise((r) => setTimeout(r, 30));
 
     expect(received).toBe(0);
@@ -219,7 +220,7 @@ describe("GraphQL subscriptions /graphql/subscriptions", () => {
     const pending = collectNext(ws, "5", COUNT);
 
     for (let i = 0; i < COUNT; i++) {
-      emitTransfer(makeTransfer({ eventId: `bp-${i}` }));
+      emitTransfer(makeTransfer({ eventId: `bp-${i}` }), "testnet");
     }
 
     const msgs = await pending;

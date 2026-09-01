@@ -131,6 +131,7 @@ export async function upsertHostFnLogs(
 }
 
 export type HostFnQueryParams = {
+  network?: Network;
   contractId: string;
   functionName?: string;
   limit?: number;
@@ -144,10 +145,11 @@ export type HostFnQueryParams = {
 export async function queryHostFnLogs(
   params: HostFnQueryParams,
 ): Promise<{ total: number; logs: HostFnRecord[] }> {
-  const { contractId, functionName, limit = 50, offset = 0 } = params;
+  const { network, contractId, functionName, limit = 50, offset = 0 } = params;
   const cap = Math.min(limit, 200);
 
   const where = {
+    network: resolveNetwork(network),
     contractId,
     ...(functionName ? { functionName } : {}),
   };

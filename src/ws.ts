@@ -2,9 +2,38 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
 import { transferEmitter, TransferEvent } from "./events";
 import { toDisplayAmount } from "./api";
+import { currentNetwork, enabledNetworks, isNetwork, NETWORKS, type Network } from "./network";
 
-// Matches /subscribe/<Stellar address>
-const SUBSCRIBE_RE = /^\/subscribe\/([A-Z0-9]+)$/;
+// Matches /subscribe/<Stellar address>, ignoring any query string (#163).
+const SUBSCRIBE_RE = /^\/subscribe\/([A-Z0-9]+)(?:\?.*)?$/;
+
+/**
+ * Resolve `?network=` on the upgrade URL.
+ *
+ * Returns the selected network, or a rejection reason to close the socket
+ * with. A subscriber cannot be told "your filter was invalid" after the fact —
+ * they would just sit on a silent socket — so an unusable selector closes the
+ * connection with a message instead of quietly defaulting.
+ */
+export function resolveSocketNetwork(url: string): { network: Network } | { error: string } {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const raw = new URLSearchParams(query).get("network");
+  if (raw === null || raw.trim() === "") return { network: currentNetwork() };
+
+  const normalised = raw.trim().toLowerCase();
+  if (!isNetwork(normalised)) {
+    return { error: `Invalid network: "${raw}". Valid values: ${NETWORKS.join(", ")}.` };
+  }
+
+  const enabled = enabledNetworks();
+  if (!enabled.includes(normalised)) {
+    return {
+      error: `Network "${normalised}" is not enabled on this deployment. Enabled networks: ${enabled.join(", ")}.`,
+    };
+  }
+
+  return { network: normalised };
+}
 
 type WsPayload = TransferEvent & { displayAmount: string };
 
@@ -50,8 +79,19 @@ export function attachWebSocketServer(server: Server): void {
     }
     const address = match[1];
 
+    const selection = resolveSocketNetwork(req.url ?? "");
+    if ("error" in selection) {
+      // 1008 = policy violation, the closest close code for a bad parameter.
+      ws.close(1008, selection.error);
+      return;
+    }
+    const network = selection.network;
+
     const handler = (transfer: TransferEvent) => {
       if (ws.readyState !== WebSocket.OPEN) return;
+      // A process indexing both chains emits both onto the same emitter, so a
+      // subscriber that asked for one must not be handed the other.
+      if (transfer.network !== network) return;
       if (transfer.toAddress !== address && transfer.fromAddress !== address) return;
       ws.send(JSON.stringify(buildPayload(transfer)));
     };

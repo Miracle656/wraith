@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import type { TransferRecord } from "./db";
 import type { HostFnRecord } from "./indexer/host-fn-log";
+import type { Network } from "./network";
 
 // Singleton emitter for real-time transfer notifications.
 // setMaxListeners(0) removes the default 10-listener cap — one listener per
@@ -8,10 +9,18 @@ import type { HostFnRecord } from "./indexer/host-fn-log";
 export const transferEmitter = new EventEmitter();
 transferEmitter.setMaxListeners(0);
 
-export type TransferEvent = TransferRecord;
+/**
+ * A transfer as broadcast to live subscribers.
+ *
+ * Carries the network it was indexed on (#163). `TransferRecord` does not have
+ * the column — the indexer adds it at write time — but a subscriber filtering
+ * by network has nothing else to filter on, and a process indexing both chains
+ * would otherwise push mainnet transfers to a testnet subscriber.
+ */
+export type TransferEvent = TransferRecord & { network: Network };
 
-export function emitTransfer(transfer: TransferEvent): void {
-  transferEmitter.emit("transfer:new", transfer);
+export function emitTransfer(transfer: TransferRecord, network: Network): void {
+  transferEmitter.emit("transfer:new", { ...transfer, network });
 }
 
 // Singleton emitter for real-time host-fn log notifications (GraphQL
@@ -19,10 +28,10 @@ export function emitTransfer(transfer: TransferEvent): void {
 export const hostFnLogEmitter = new EventEmitter();
 hostFnLogEmitter.setMaxListeners(0);
 
-export type HostFnLogEvent = HostFnRecord;
+export type HostFnLogEvent = HostFnRecord & { network: Network };
 
-export function emitHostFnLog(log: HostFnLogEvent): void {
-  hostFnLogEmitter.emit("hostfnlog:new", log);
+export function emitHostFnLog(log: HostFnRecord, network: Network): void {
+  hostFnLogEmitter.emit("hostfnlog:new", { ...log, network });
 }
 
 /**

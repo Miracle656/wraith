@@ -6,7 +6,7 @@ import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
 import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
-import { enabledNetworks, type Network } from "./network";
+import { currentNetwork, enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createGraphQLMiddleware } from "./graphql/server";
@@ -24,28 +24,34 @@ import {
   transferQuerySchema,
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
+import { networkMiddleware, requestNetwork } from "./middleware/network";
+import { renderMetrics, metricsContentType } from "./metrics";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
-let cachedRpcHealth: { healthy: boolean; timestamp: number } | null = null;
+// Keyed by network (#163): one cache entry would let a healthy testnet RPC
+// mark mainnet requests fresh, or a mainnet outage mark testnet reads stale.
+const cachedRpcHealth = new Map<Network, { healthy: boolean; timestamp: number }>();
 const RPC_HEALTH_CACHE_TTL_MS = 3000;
 
 export function clearRpcHealthCache(): void {
-  cachedRpcHealth = null;
+  cachedRpcHealth.clear();
 }
 
-export async function checkRpcHealth(): Promise<boolean> {
+export async function checkRpcHealth(network?: Network): Promise<boolean> {
+  const net = network ?? currentNetwork();
   const now = Date.now();
-  if (cachedRpcHealth && now - cachedRpcHealth.timestamp < RPC_HEALTH_CACHE_TTL_MS) {
-    return cachedRpcHealth.healthy;
+  const cached = cachedRpcHealth.get(net);
+  if (cached && now - cached.timestamp < RPC_HEALTH_CACHE_TTL_MS) {
+    return cached.healthy;
   }
 
   try {
-    const latest = await getLatestLedger();
+    const latest = await getLatestLedger(net);
     const healthy = typeof latest === "number" && latest > 0;
-    cachedRpcHealth = { healthy, timestamp: now };
+    cachedRpcHealth.set(net, { healthy, timestamp: now });
     return healthy;
   } catch {
-    cachedRpcHealth = { healthy: false, timestamp: now };
+    cachedRpcHealth.set(net, { healthy: false, timestamp: now });
     return false;
   }
 }
@@ -58,7 +64,9 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
-  skip: () => process.env.NODE_ENV === "test",
+  // /metrics is exempt: a scrape endpoint that starts 429ing goes blind exactly
+  // when load is high enough to matter, which is when you need the graphs.
+  skip: (req) => process.env.NODE_ENV === "test" || req.path === "/metrics",
 });
 
 // ─── Response cache (opt-in via CACHE_ENABLED) ─────────────────────────────
@@ -122,20 +130,26 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json());
   app.use(jsonApiMiddleware);
+  // Before every router: each request carries exactly one network, resolved and
+  // validated once here rather than re-parsed per handler (#163).
+  app.use(networkMiddleware);
   app.use(limiter);
 
   // ─── Stale read middleware ──────────────────────────────────────────
   // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`
   // body parameters when serving DB data during an RPC outage.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
-    if (req.method !== "GET" || req.path === "/healthz") {
+    // /metrics is served from in-process counters, so the RPC health probe
+    // below would add a network round-trip to every scrape and report nothing.
+    if (req.method !== "GET" || req.path === "/healthz" || req.path === "/metrics") {
       return next();
     }
 
     try {
-      const rpcHealthy = await checkRpcHealth();
+      const net = requestNetwork(req);
+      const rpcHealthy = await checkRpcHealth(net);
       if (!rpcHealthy) {
-        const lastIndexed = await getLastIndexedLedger().catch(() => null);
+        const lastIndexed = await getLastIndexedLedger(net).catch(() => null);
         res.setHeader("X-Data-Stale", "true");
         if (lastIndexed !== null) {
           res.setHeader("X-As-Of-Ledger", String(lastIndexed));
@@ -224,6 +238,23 @@ export function createApp(): express.Application {
     res.json({ ok: true, uptime: process.uptime() });
   });
 
+  // ─── GET /metrics — Prometheus scrape endpoint ──────────────────────────
+  /**
+   * Indexer and process metrics in Prometheus text exposition format.
+   *
+   * Reads only in-process counters — no DB, no RPC — so it stays answerable
+   * while the things it is reporting on are down, which is the point.
+   */
+  app.get("/metrics", async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body = await renderMetrics();
+      res.setHeader("Content-Type", metricsContentType);
+      res.send(body);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ─── GET /readyz — K8s/Render readiness probe ───────────────────────────
   /**
    * Returns 200 when database connection is alive.
@@ -234,38 +265,63 @@ export function createApp(): express.Application {
     const parsed = parseOr400(readyzQuerySchema, _req.query, res);
     if (!parsed) return;
     const { maxLag } = parsed;
-    const checks: Record<string, boolean> = {};
+    const selected = requestNetwork(_req);
 
+    // The DB is one process-wide connection, so it is checked once rather than
+    // per network — a dead database is not a per-chain condition.
+    let dbUp: boolean;
     try {
-      // DB check
       await prisma.$queryRaw`SELECT 1`;
-      checks.db = true;
+      dbUp = true;
     } catch {
-      checks.db = false;
+      dbUp = false;
     }
 
-    let latest: number | null = null;
-    try {
-      // RPC check
-      latest = await getLatestLedger();
-      checks.rpc = typeof latest === "number" && latest > 0;
-    } catch {
-      checks.rpc = false;
-    }
+    /** RPC reachability plus indexer lag for one network. */
+    const checkNetwork = async (net: Network) => {
+      let latest: number | null = null;
+      let rpc = false;
+      try {
+        latest = await getLatestLedger(net);
+        rpc = typeof latest === "number" && latest > 0;
+      } catch {
+        rpc = false;
+      }
 
-    let lastIndexed: number | null = null;
-    try {
-      lastIndexed = await getLastIndexedLedger();
-      const lag = (lastIndexed !== null && latest !== null) ? latest - lastIndexed : Infinity;
-      checks.indexerCaughtUp = lag <= maxLag;
-    } catch {
-      checks.indexerCaughtUp = false;
-    }
+      let lastIndexed: number | null = null;
+      let indexerCaughtUp = false;
+      try {
+        lastIndexed = await getLastIndexedLedger(net);
+        const lag = lastIndexed !== null && latest !== null ? latest - lastIndexed : Infinity;
+        indexerCaughtUp = lag <= maxLag;
+      } catch {
+        indexerCaughtUp = false;
+      }
 
+      return {
+        checks: { db: dbUp, rpc, indexerCaughtUp },
+        lastIndexedLedger: lastIndexed,
+        latestLedger: latest,
+        lagLedgers: latest !== null && lastIndexed !== null ? latest - lastIndexed : null,
+      };
+    };
+
+    // Report every enabled network, not just the selected one: an orchestrator
+    // probing readiness needs to see one chain falling behind while the other
+    // is fine, which a single merged verdict cannot express (#163).
+    const networks = enabledNetworks();
+    const results = await Promise.all(networks.map(async (net) => [net, await checkNetwork(net)] as const));
+    const byNetwork = Object.fromEntries(results);
+
+    // Top-level fields describe the selected network so existing single-network
+    // consumers see exactly the shape they saw before.
+    const selectedResult = byNetwork[selected] ?? (await checkNetwork(selected));
+    const checks = selectedResult.checks;
+    const lastIndexed = selectedResult.lastIndexedLedger;
     const allHealthy = Object.values(checks).every(Boolean);
 
     if (!checks.db) {
-      res.status(503).json({ ok: false, status: "down", checks });
+      res.status(503).json({ ok: false, status: "down", network: selected, checks, networks: byNetwork });
     } else {
       const status = allHealthy ? "healthy" : "degraded";
       if (!allHealthy) {
@@ -277,7 +333,9 @@ export function createApp(): express.Application {
       res.json({
         ok: true,
         status,
+        network: selected,
         checks,
+        networks: byNetwork,
         ...(lastIndexed !== null ? { as_of_ledger: lastIndexed } : {}),
         ...(allHealthy ? {} : { stale: true }),
       });
@@ -288,11 +346,12 @@ export function createApp(): express.Application {
   /**
    * Returns indexer health status: "healthy", "degraded", or "down".
    */
-  app.get("/status", async (_req: Request, res: Response, next: NextFunction) => {
+  app.get("/status", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const selected = requestNetwork(req);
       const [lastIndexedResult, latestLedgerResult] = await Promise.allSettled([
-        getLastIndexedLedger(),
-        getLatestLedger(),
+        getLastIndexedLedger(selected),
+        getLatestLedger(selected),
       ]);
 
       if (lastIndexedResult.status === "rejected") {
@@ -303,7 +362,7 @@ export function createApp(): express.Application {
       const lastIndexedLedger = lastIndexedResult.value;
       const rpcSuccess = latestLedgerResult.status === "fulfilled" && typeof latestLedgerResult.value === "number";
       const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
-      const stats = getIndexerStats();
+      const stats = getIndexerStats(selected);
 
       // Per-network progress (#161). The top-level fields above stay as they
       // were so existing consumers are unaffected; this reports each loop
@@ -342,7 +401,13 @@ export function createApp(): express.Application {
         res.json({
           ok: true,
           status: "healthy",
+          // Which network the top-level fields describe. `networks` below
+          // reports every loop regardless of the selector.
+          network: selected,
           lastIndexedLedger,
+          // snake_case alias alongside the camelCase field, for consumers that
+          // read the same name the metric is exported under. Both always agree.
+          last_indexed_ledger: lastIndexedLedger,
           latestLedger,
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
@@ -356,9 +421,11 @@ export function createApp(): express.Application {
         res.json({
           ok: true,
           status: "degraded",
+          network: selected,
           stale: true,
           as_of_ledger: lastIndexedLedger ?? undefined,
           lastIndexedLedger,
+          last_indexed_ledger: lastIndexedLedger,
           latestLedger: null,
           lagLedgers: null,
           ...stats,
@@ -410,6 +477,7 @@ export function createApp(): express.Application {
         };
 
         const result = await queryTransfers({
+          network: requestNetwork(req),
           address,
           direction: "incoming",
           contractId,
@@ -471,6 +539,7 @@ export function createApp(): express.Application {
         };
 
         const result = await queryTransfers({
+          network: requestNetwork(req),
           address,
           direction: "outgoing",
           contractId,
@@ -543,6 +612,7 @@ export function createApp(): express.Application {
         };
 
         const result = await queryAllTransfers({
+          network: requestNetwork(req),
           address,
           contractId,
           token,
@@ -614,6 +684,7 @@ export function createApp(): express.Application {
 
         // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
         const result = await queryAllTransfers({
+          network: requestNetwork(req),
           address,
           contractId,
           token,
@@ -677,7 +748,7 @@ export function createApp(): express.Application {
       try {
         const parsed = parseOr400(txHashParamsSchema, req.params, res);
         if (!parsed) return;
-        const transfers = await queryByTxHash(parsed.txHash);
+        const transfers = await queryByTxHash(parsed.txHash, requestNetwork(req));
         res.json({ transfers: transfers.map(withDisplay) });
       } catch (err) {
         next(err);
@@ -706,6 +777,7 @@ export function createApp(): express.Application {
         const { address, contractId, fromDate, toDate } = parsed;
 
         const rows = await querySummary({
+          network: requestNetwork(req),
           address,
           contractId,
           fromDate,
@@ -765,6 +837,7 @@ export function createApp(): express.Application {
         const { contractId, functionName, limit, offset } = parsed;
 
         const { total, logs } = await queryHostFnLogs({
+          network: requestNetwork(req),
           contractId,
           functionName,
           limit,
@@ -823,6 +896,7 @@ export function createApp(): express.Application {
         };
 
         const result = await queryNftTransfers({
+          network: requestNetwork(req),
           contractId: contract,
           tokenId: token_id,
           address,
@@ -862,9 +936,10 @@ export function createApp(): express.Application {
         if (!parsed) return;
         const { contract, token_id } = parsed;
 
+        const network = requestNetwork(req);
         const [owner, metadata] = await Promise.all([
-          getNftOwner(contract, token_id),
-          getNftMetadata(contract, token_id),
+          getNftOwner(contract, token_id, network),
+          getNftMetadata(contract, token_id, network),
         ]);
 
         if (owner === null) {

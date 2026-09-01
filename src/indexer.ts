@@ -18,6 +18,7 @@ import { pollParallel } from "./indexer/parallel";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig, type SourceSwitcher } from "./indexer/sources";
 import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from "./network";
+import { ledgersIndexedTotal, transfersStoredTotal, lastIndexedLedger } from "./metrics";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -26,7 +27,12 @@ import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from ".
  */
 export function resolveNftContractIds(network?: Network): string[] {
   const suffix = resolveNetwork(network).toUpperCase();
-  const raw = process.env[`NFT_CONTRACT_IDS_${suffix}`] ?? process.env.NFT_CONTRACT_IDS ?? "";
+  // `||`, not `??`: .env.example declares the per-network vars as empty
+  // placeholders, and an empty string must fall through to the shared var
+  // rather than shadow it. `??` only skips undefined, so copying the example
+  // file would silently blank the watch list.
+  const raw =
+    process.env[`NFT_CONTRACT_IDS_${suffix}`] || process.env.NFT_CONTRACT_IDS || "";
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
@@ -188,6 +194,20 @@ export function _resetIndexerLoops(): void {
   loops.clear();
 }
 
+/**
+ * Record one cursor advance for `network`.
+ *
+ * The counter takes the delta, not the absolute sequence: a resumed process
+ * starts from wherever the DB left it, and feeding that in as an increment
+ * would report a few million ledgers indexed in one second every restart.
+ * A non-advancing or backwards cursor contributes nothing.
+ */
+function recordLedgerProgress(network: Network, fromLedger: number, highestLedger: number): void {
+  const advanced = highestLedger - fromLedger;
+  if (advanced > 0) ledgersIndexedTotal.inc({ network }, advanced);
+  lastIndexedLedger.set({ network }, highestLedger);
+}
+
 // ─── Core poll step ───────────────────────────────────────────────────────────
 /**
  * Fetch one batch of events starting from `fromLedger`, parse and persist them.
@@ -209,6 +229,7 @@ async function pollOnce(
 
   if (events.length === 0) {
     await setLastIndexedLedger(highestLedger, net);
+    recordLedgerProgress(net, fromLedger, highestLedger);
     return highestLedger;
   }
 
@@ -226,6 +247,7 @@ async function pollOnce(
   );
   const inserted = await upsertTransfers(records, net);
   loop.totalIndexed += inserted;
+  transfersStoredTotal.inc({ network: net, type: "fungible" }, inserted);
 
   // Update materialized account summaries alongside transfer inserts
   if (inserted > 0) {
@@ -236,7 +258,7 @@ async function pollOnce(
 
   // Broadcast each new record to WebSocket subscribers
   if (inserted > 0) {
-    records.forEach(emitTransfer);
+    records.forEach((record) => emitTransfer(record, net));
   }
 
   // Log every event as a raw host-fn invocation for downstream consumers (#84)
@@ -247,7 +269,7 @@ async function pollOnce(
     await upsertHostFnLogs(hostFnRecords, net).catch((err: unknown) =>
       console.error(`[indexer/${net}] host-fn log error:`, err),
     );
-    hostFnRecords.forEach(emitHostFnLog);
+    hostFnRecords.forEach((record) => emitHostFnLog(record, net));
   }
 
   // ── NFT path ─────────────────────────────────────────────────────────────────
@@ -255,6 +277,7 @@ async function pollOnce(
   const nftRecords  = nftParsed.map((p) => p.record);
   const nftInserted = await upsertNftTransfers(nftRecords, net);
   loop.totalIndexed += nftInserted;
+  transfersStoredTotal.inc({ network: net, type: "nft" }, nftInserted);
 
   // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached
   if (nftParsed.length > 0) {
@@ -274,6 +297,7 @@ async function pollOnce(
   }
 
   await setLastIndexedLedger(highestLedger, net);
+  recordLedgerProgress(net, fromLedger, highestLedger);
 
   console.log(
     `[indexer/${net}] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT records saved (ledger ${highestLedger})`
@@ -359,6 +383,8 @@ export async function startIndexer(network?: Network): Promise<void> {
           net,
         );
         loop.totalIndexed += totalInserted;
+        transfersStoredTotal.inc({ network: net, type: "fungible" }, totalInserted);
+        recordLedgerProgress(net, currentLedger, highestLedger);
         currentLedger = highestLedger;
       } else {
         currentLedger = await pollOnce(loop, currentLedger, target);

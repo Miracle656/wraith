@@ -27,7 +27,7 @@ import {
 } from "graphql";
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
-import { typeDefs as baseTypeDefs, resolvers as baseResolvers, formatTransfer } from "./server";
+import { typeDefs as baseTypeDefs, resolvers as baseResolvers, formatTransfer, type GraphQLContext } from "./server";
 import { toDisplayAmount } from "../api";
 import {
   transferEmitter,
@@ -37,6 +37,8 @@ import {
   type TransferEvent,
   type HostFnLogEvent,
 } from "../events";
+import { resolveSocketNetwork } from "../ws";
+import type { Network } from "../network";
 
 export const SUBSCRIPTIONS_PATH = "/graphql/subscriptions";
 
@@ -59,10 +61,21 @@ const subscriptionTypeDefs = `#graphql
   }
 
   type Subscription {
-    transferAdded(contractId: String): Transfer!
-    hostFnLogAdded(contractId: String): HostFnLog!
+    transferAdded(contractId: String, network: Network): Transfer!
+    hostFnLogAdded(contractId: String, network: Network): HostFnLog!
   }
 `;
+
+/**
+ * The network one subscription streams: its own `network:` argument, else the
+ * one the socket connected with. Values reaching here are already validated —
+ * the argument by the schema enum, the socket's by {@link resolveSocketNetwork}
+ * at upgrade time.
+ */
+function subscriptionNetwork(arg: string | undefined, ctx: GraphQLContext | undefined): Network {
+  if (arg !== undefined) return arg.toLowerCase() as Network;
+  return ctx?.network ?? "testnet";
+}
 
 function formatHostFnLog(log: HostFnLogEvent) {
   return {
@@ -76,8 +89,11 @@ function formatHostFnLog(log: HostFnLogEvent) {
 
 type FieldResolverMap = Record<
   string,
-  | GraphQLFieldResolver<unknown, unknown>
-  | { subscribe?: GraphQLFieldResolver<unknown, unknown>; resolve?: GraphQLFieldResolver<unknown, unknown> }
+  | GraphQLFieldResolver<unknown, GraphQLContext | undefined>
+  | {
+      subscribe?: GraphQLFieldResolver<unknown, GraphQLContext | undefined>;
+      resolve?: GraphQLFieldResolver<unknown, GraphQLContext | undefined>;
+    }
 >;
 
 /**
@@ -113,11 +129,15 @@ function buildSubscriptionSchema(): GraphQLSchema {
   attachResolvers(schema, {
     Subscription: {
       transferAdded: {
-        subscribe: (_parent, args: { contractId?: string }) =>
-          filterAsyncIterator<TransferEvent>(
+        subscribe: (_parent, args: { contractId?: string; network?: string }, ctx) => {
+          // Both loops publish onto one emitter, so the stream must be filtered
+          // by network or a subscriber gets the other chain's rows (#163).
+          const net = subscriptionNetwork(args.network, ctx);
+          return filterAsyncIterator<TransferEvent>(
             eventsToAsyncIterator<TransferEvent>(transferEmitter, "transfer:new"),
-            (t) => !args.contractId || t.contractId === args.contractId
-          ),
+            (t) => t.network === net && (!args.contractId || t.contractId === args.contractId)
+          );
+        },
         resolve: (payload: unknown) => {
           const transfer = payload as TransferEvent;
           return {
@@ -127,11 +147,13 @@ function buildSubscriptionSchema(): GraphQLSchema {
         },
       },
       hostFnLogAdded: {
-        subscribe: (_parent, args: { contractId?: string }) =>
-          filterAsyncIterator<HostFnLogEvent>(
+        subscribe: (_parent, args: { contractId?: string; network?: string }, ctx) => {
+          const net = subscriptionNetwork(args.network, ctx);
+          return filterAsyncIterator<HostFnLogEvent>(
             eventsToAsyncIterator<HostFnLogEvent>(hostFnLogEmitter, "hostfnlog:new"),
-            (l) => !args.contractId || l.contractId === args.contractId
-          ),
+            (l) => l.network === net && (!args.contractId || l.contractId === args.contractId)
+          );
+        },
         resolve: (payload: unknown) => formatHostFnLog(payload as HostFnLogEvent),
       },
     },
@@ -172,7 +194,18 @@ export function attachGraphQLSubscriptions(server: Server): void {
     });
   });
 
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    // `?network=` on the upgrade URL applies to every subscription on this
+    // socket unless a field overrides it. Rejected here rather than per
+    // subscription: a socket opened against a network this process does not
+    // serve can never produce anything.
+    const selection = resolveSocketNetwork(req?.url ?? "");
+    if ("error" in selection) {
+      ws.close(1008, selection.error);
+      return;
+    }
+    const context: GraphQLContext = { network: selection.network };
+
     // One entry per active subscription id on this connection, so a
     // "complete" message or socket close can release its async iterator.
     const active = new Map<string, AsyncIterator<ExecutionResult>>();
@@ -222,7 +255,12 @@ export function attachGraphQLSubscriptions(server: Server): void {
           return;
         }
 
-        const result = await subscribe({ schema, document, variableValues: variables });
+        const result = await subscribe({
+          schema,
+          document,
+          variableValues: variables,
+          contextValue: context,
+        });
 
         if (!(Symbol.asyncIterator in result)) {
           send({

@@ -4,6 +4,7 @@ import { toDisplayAmount } from "../api";
 import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
 import { parseOr400 } from "../openapi/validation";
 import { summaryQuerySchema } from "../openapi/schemas";
+import { requestNetwork } from "../middleware/network";
 
 type AccountSummaryRow = Awaited<ReturnType<typeof getAccountSummary>>[number];
 
@@ -36,7 +37,7 @@ export function createAccountsRouter(): Router {
         if (!parsed) return;
         const { address, contractId } = parsed;
 
-        const rows = await getAccountSummary(address, contractId);
+        const rows = await getAccountSummary(address, contractId, requestNetwork(req));
 
         const assets = rows.map((row: AccountSummaryRow) => {
           const net = BigInt(row.net);
