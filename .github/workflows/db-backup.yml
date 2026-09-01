@@ -32,13 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check secret is configured
+      - name: Check secrets are configured
         id: check
         env:
           DATABASE_URL_TESTNET: ${{ secrets.DATABASE_URL_TESTNET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           if [[ -z "$DATABASE_URL_TESTNET" ]]; then
             echo "::warning::DATABASE_URL_TESTNET is not set — skipping testnet backup."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          elif [[ -z "$BACKUP_PASSPHRASE" ]]; then
+            # Skip rather than dump: this repository is public, so an
+            # unencrypted artifact would be world-readable. A missing backup is
+            # recoverable — Wraith re-derives its data by re-indexing — whereas
+            # a published one is not.
+            echo "::warning::BACKUP_PASSPHRASE is not set — skipping testnet backup rather than writing an unencrypted dump."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
@@ -53,6 +61,7 @@ jobs:
         env:
           NETWORK: testnet
           DATABASE_URL: ${{ secrets.DATABASE_URL_TESTNET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           chmod +x ops/backup/dump.sh
           ops/backup/dump.sh
@@ -62,7 +71,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wraith-db-backup-testnet-${{ github.run_id }}
-          path: backups/*.dump.gz
+          # Encrypted files only. The glob is deliberately not `*.dump.gz*` —
+          # if encryption ever fails to run, this must find nothing and fail the
+          # job, not quietly publish the cleartext dump.
+          path: backups/*.dump.gz.gpg
           retention-days: 14
           if-no-files-found: error
 
@@ -74,13 +86,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check secret is configured
+      - name: Check secrets are configured
         id: check
         env:
           DATABASE_URL_MAINNET: ${{ secrets.DATABASE_URL_MAINNET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           if [[ -z "$DATABASE_URL_MAINNET" ]]; then
             echo "::warning::DATABASE_URL_MAINNET is not set — skipping mainnet backup."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          elif [[ -z "$BACKUP_PASSPHRASE" ]]; then
+            # Skip rather than dump: this repository is public, so an
+            # unencrypted artifact would be world-readable. A missing backup is
+            # recoverable — Wraith re-derives its data by re-indexing — whereas
+            # a published one is not.
+            echo "::warning::BACKUP_PASSPHRASE is not set — skipping mainnet backup rather than writing an unencrypted dump."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
@@ -95,6 +115,7 @@ jobs:
         env:
           NETWORK: mainnet
           DATABASE_URL: ${{ secrets.DATABASE_URL_MAINNET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           chmod +x ops/backup/dump.sh
           ops/backup/dump.sh
@@ -104,6 +125,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wraith-db-backup-mainnet-${{ github.run_id }}
-          path: backups/*.dump.gz
+          # Encrypted files only. The glob is deliberately not `*.dump.gz*` —
+          # if encryption ever fails to run, this must find nothing and fail the
+          # job, not quietly publish the cleartext dump.
+          path: backups/*.dump.gz.gpg
           retention-days: 14
           if-no-files-found: error

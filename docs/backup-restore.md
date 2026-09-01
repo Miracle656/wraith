@@ -9,17 +9,46 @@ own Postgres instance (see [`docs/DUAL_NETWORK.md`](DUAL_NETWORK.md)).
 
 ## What it does
 
-For each network with a backup secret configured, the workflow:
+For each network with its backup secrets configured, the workflow:
 
 1. Runs `pg_dump --format=custom --no-owner --no-privileges` against that
    network's database (via [`ops/backup/dump.sh`](../ops/backup/dump.sh)).
 2. Gzips the dump.
-3. Uploads it as a GitHub Actions artifact named
+3. **Encrypts it** with AES-256 using `BACKUP_PASSPHRASE`, and deletes the
+   cleartext copy before the upload step runs.
+4. Uploads the `.dump.gz.gpg` as a GitHub Actions artifact named
    `wraith-db-backup-<network>-<run_id>`, retained for 14 days.
 
-A network without its secret set is skipped with a workflow warning rather
-than failing the run — this lets the workflow exist before both databases are
+A network missing either secret is skipped with a workflow warning rather than
+failing the run — this lets the workflow exist before both databases are
 provisioned.
+
+### Why the dump is encrypted
+
+**This repository is public, and Actions artifacts on a public repository are
+downloadable by anyone with the run URL — no login, no permissions.**
+
+A Wraith dump is not just indexed chain data. It contains the
+`WebhookSubscription` table, whose `secret` column holds the *plaintext HMAC
+signing key* for each subscriber, next to that subscriber's delivery URL.
+Published unencrypted, that artifact would let a stranger forge webhook
+deliveries that pass signature verification against every subscriber — and
+hand them the subscriber list on the way past. Fourteen days of retention,
+regenerated nightly.
+
+So encryption is mandatory rather than opt-in, in three places that each fail
+closed:
+
+- `dump.sh` refuses to run at all without `BACKUP_PASSPHRASE`;
+- it deletes the cleartext `.gz` and re-checks it is gone before exiting;
+- the upload glob is `*.dump.gz.gpg`, not `*.dump.gz*`, with
+  `if-no-files-found: error` — so if encryption ever silently fails, the job
+  fails instead of publishing the cleartext dump.
+
+The passphrase is the only thing standing between the artifact and a reader.
+Store it wherever the database credentials live; **if it is lost, every
+retained backup is unrecoverable** — which is survivable here only because
+Wraith can re-derive its data by re-indexing from chain.
 
 ## Required secrets
 
@@ -27,6 +56,7 @@ provisioned.
 |---|---|
 | `DATABASE_URL_TESTNET` | Connection string for the testnet database |
 | `DATABASE_URL_MAINNET` | Connection string for the mainnet database |
+| `BACKUP_PASSPHRASE` | Symmetric passphrase the dumps are encrypted with. Required — a network is skipped without it. Shared across both networks. |
 
 These are backup-only credentials, separate from the `DATABASE_URL` a given
 deployment runs with (each deployment only knows about its own network's
@@ -46,10 +76,15 @@ before a risky migration or deploy.
 
 1. Download the artifact from the workflow run (**Actions** → the run →
    **Artifacts**), or via `gh run download <run-id> -n wraith-db-backup-<network>-<run_id>`.
-2. Decompress it:
+2. Decrypt it, then decompress:
    ```bash
+   # Reads the passphrase from stdin so it never lands in your shell history
+   # or in `ps` output.
+   gpg --batch --quiet --decrypt --passphrase-fd 0      --output wraith-<network>-<timestamp>.dump.gz      wraith-<network>-<timestamp>.dump.gz.gpg
    gunzip wraith-<network>-<timestamp>.dump.gz
    ```
+   The decrypted dump contains live webhook signing secrets. Restore it and
+   delete it; do not leave it sitting in a Downloads folder.
 3. Provision (or reuse) a target Postgres instance — e.g. a fresh Neon
    database — and restore into it:
    ```bash
@@ -80,5 +115,8 @@ current data with the other's stale snapshot rather than merging anything.
 Before relying on this in production, run the restore steps above once
 against a scratch Postgres instance using a real nightly artifact, and
 confirm the restored data matches what `/status` reports for that network.
+That dry run is also the only thing that proves `BACKUP_PASSPHRASE` is the
+passphrase the artifacts were actually encrypted with — an untested backup and
+no backup differ only in how confident you are.
 This should be re-verified whenever the Prisma schema changes in a way that
 affects `pg_restore` compatibility (e.g. extensions, custom types).
