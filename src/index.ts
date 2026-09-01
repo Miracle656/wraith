@@ -49,6 +49,15 @@ async function main() {
   // ── Start partition retention scheduler ───────────────────────────────────
   startPartitionRetentionJob();
 
+  // API-only mode. The integration harness starts the service to exercise HTTP
+  // routes against a seeded database; letting the indexer loop run there would
+  // make every request race an ingest that is also writing to the same tables,
+  // and would need live RPC the harness has no reason to depend on.
+  if (process.env.SKIP_INDEXER === "true") {
+    console.log("[wraith] SKIP_INDEXER=true — API-only mode, indexer not started.");
+    return;
+  }
+
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
   // so the API stays responsive while indexing happens concurrently.
