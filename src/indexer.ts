@@ -26,7 +26,12 @@ import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from ".
  */
 export function resolveNftContractIds(network?: Network): string[] {
   const suffix = resolveNetwork(network).toUpperCase();
-  const raw = process.env[`NFT_CONTRACT_IDS_${suffix}`] ?? process.env.NFT_CONTRACT_IDS ?? "";
+  // `||`, not `??`: .env.example declares the per-network vars as empty
+  // placeholders, and an empty string must fall through to the shared var
+  // rather than shadow it. `??` only skips undefined, so copying the example
+  // file would silently blank the watch list.
+  const raw =
+    process.env[`NFT_CONTRACT_IDS_${suffix}`] || process.env.NFT_CONTRACT_IDS || "";
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 

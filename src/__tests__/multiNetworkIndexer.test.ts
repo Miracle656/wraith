@@ -116,6 +116,19 @@ describe("per-network watch lists", () => {
     expect(resolveNftContractIds("testnet")).toEqual(["CNFT_T"]);
     expect(resolveNftContractIds("mainnet")).toEqual(["CNFT_SHARED"]);
   });
+
+  it("treats an empty per-network var as unset, not as an empty watch list", () => {
+    // .env.example declares SAC_CONTRACT_IDS_TESTNET= / NFT_CONTRACT_IDS_TESTNET=
+    // as blank placeholders (#174). Anyone who copies it and fills in only the
+    // shared var would otherwise get an empty list for every network.
+    process.env.SAC_CONTRACT_IDS = "CSHARED";
+    process.env.SAC_CONTRACT_IDS_TESTNET = "";
+    process.env.NFT_CONTRACT_IDS = "CNFT_SHARED";
+    process.env.NFT_CONTRACT_IDS_TESTNET = "";
+
+    expect(resolveSacContractIds("testnet")).toEqual(["CSHARED"]);
+    expect(resolveNftContractIds("testnet")).toEqual(["CNFT_SHARED"]);
+  });
 });
 
 describe("per-network RPC clients (#160)", () => {
