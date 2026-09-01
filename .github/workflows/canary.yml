@@ -1,8 +1,11 @@
 name: Canary Deployment
 
+# Manual/dispatch only. This workflow deploys a canary and polls it for a 5m
+# observation window (canary-monitor -> ops/canary/monitor.sh against
+# secrets.CANARY_URL); without a live deployment target + CANARY_URL secret the
+# monitor always fails and trips the rollback job. Re-add `push: branches:[main]`
+# once the production canary environment and CANARY_URL secret are configured.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:

@@ -5,3 +5,4 @@ docs/
 *.env.local
 bench/results.json
 .aider*
+coverage/
