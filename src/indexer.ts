@@ -15,6 +15,7 @@ import { emitTransfer, emitHostFnLog } from "./events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
 import { tagSacTransfers } from "./indexer/sac-detect";
 import { pollParallel } from "./indexer/parallel";
+import { tombstoneExpiredContracts } from "./indexer/tombstones";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig, type SourceSwitcher } from "./indexer/sources";
 import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from "./network";
@@ -98,6 +99,16 @@ const TIP_LAG = 2;
 // Prune old data every ~1 hour (600 poll cycles × 6s = 3600s)
 const PRUNE_EVERY_CYCLES = 600;
 
+// How often to check watched contracts for expired storage (#137). Each check
+// costs one RPC call per unique watched contract, so this is deliberately far
+// rarer than a poll: a contract's TTL is measured in weeks, and detecting an
+// expiry ten minutes late costs nothing. Doing it every cycle would multiply
+// the indexer's RPC budget by the size of the watch list for no benefit.
+const TOMBSTONE_EVERY_CYCLES = parseInt(
+  process.env.TOMBSTONE_CHECK_EVERY_CYCLES ?? "100",
+  10,
+);
+
 // ─── Per-network loop state ───────────────────────────────────────────────────
 /**
  * Everything one indexer loop owns.
@@ -120,6 +131,12 @@ type LoopState = {
   startedAt: number;
   totalIndexed: number;
   pollCycleCount: number;
+  /**
+   * Separate from pollCycleCount, which the prune resets on its own schedule.
+   * Sharing one counter would make whichever cadence is shorter starve the
+   * other — the longer job would never reach its threshold.
+   */
+  tombstoneCycleCount: number;
 };
 
 const loops = new Map<Network, LoopState>();
@@ -149,6 +166,7 @@ function createLoopState(network: Network): LoopState {
     startedAt: Date.now(),
     totalIndexed: 0,
     pollCycleCount: 0,
+    tombstoneCycleCount: 0,
   };
 }
 
@@ -206,6 +224,46 @@ function recordLedgerProgress(network: Network, fromLedger: number, highestLedge
   const advanced = highestLedger - fromLedger;
   if (advanced > 0) ledgersIndexedTotal.inc({ network }, advanced);
   lastIndexedLedger.set({ network }, highestLedger);
+}
+
+/**
+ * Periodic contract-liveness check (#137), run on its own cadence inside the
+ * poll loop.
+ *
+ * Soroban persistent storage is not permanent: once the ledger passes a
+ * contract instance's `liveUntilLedger` the entry is archived and the contract
+ * effectively disappears. Downstream consumers that cached its events need that
+ * signal, so we record a tombstone the first time we observe it.
+ *
+ * Exported so the wiring is testable. The check itself is cheap to get wrong in
+ * a way nothing notices — a detector that never runs looks exactly like a chain
+ * on which nothing has expired.
+ */
+export async function maybeTombstoneExpiredContracts(
+  loop: LoopState,
+  currentLedger: number,
+): Promise<boolean> {
+  loop.tombstoneCycleCount++;
+
+  if (TOMBSTONE_EVERY_CYCLES <= 0) return false;
+  if (loop.tombstoneCycleCount < TOMBSTONE_EVERY_CYCLES) return false;
+  if (loop.allContractIds.length === 0) return false;
+
+  loop.tombstoneCycleCount = 0;
+
+  // Caught rather than allowed to reject: an RPC hiccup during a liveness
+  // check must not stall indexing. A missed check is retried next cycle; a
+  // stalled indexer is not self-healing.
+  await tombstoneExpiredContracts(
+    loop.allContractIds,
+    currentLedger,
+    undefined,
+    loop.network,
+  ).catch((e: unknown) =>
+    console.error(`[indexer/${loop.network}] Tombstone check failed:`, e)
+  );
+
+  return true;
 }
 
 // ─── Core poll step ───────────────────────────────────────────────────────────
@@ -398,6 +456,8 @@ export async function startIndexer(network?: Network): Promise<void> {
           console.error(`[indexer/${net}] Prune failed:`, e)
         );
       }
+
+      await maybeTombstoneExpiredContracts(loop, currentLedger);
     } catch (err) {
       console.error(`[indexer/${net}] Unhandled error in poll loop:`, err);
       // Back off before retrying to avoid hammering the RPC on persistent errors
