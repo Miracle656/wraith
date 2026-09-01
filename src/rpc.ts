@@ -1,4 +1,4 @@
-import { rpc as RPC, xdr } from "@stellar/stellar-sdk";
+import { rpc as RPC, xdr, scValToNative, Contract, TransactionBuilder, Account, Networks } from "@stellar/stellar-sdk";
 import { resolveNetwork, currentNetwork, type Network } from "./network";
 import { recordRpcError } from "./metrics";
 
@@ -233,4 +233,59 @@ export async function fetchEventsSafe(
       highestLedger: Math.max(lower.highestLedger, upper.highestLedger),
     };
   }
+}
+
+// ─── Token Metadata ──────────────────────────────────────────────────────────
+/**
+ * Fetch token metadata (symbol, decimals, name) from a Soroban token contract.
+ * Uses simulateTransaction to call the read-only getter methods.
+ */
+export async function fetchTokenMetadata(
+  contractId: string,
+  network?: Network,
+): Promise<{
+  symbol: string;
+  decimals: number;
+  name: string;
+}> {
+  // Both the RPC endpoint and the passphrase must come from the network being
+  // asked about, not from STELLAR_NETWORK. With a loop per network (#161),
+  // reading the process default here would simulate a mainnet contract call
+  // against testnet — returning either nothing or a different token entirely.
+  const net = resolveNetwork(network);
+  const rpc = getRpc(net);
+  const contract = new Contract(contractId);
+  const networkPassphrase = net === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+
+  // Helper to call a zero-arg method and decode the result
+  const callMethod = async (method: string): Promise<any> => {
+    // Build a dummy transaction for simulation. Source account and sequence 
+    // don't matter for read-only simulation.
+    const tx = new TransactionBuilder(
+      new Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "0"),
+      { fee: "100", networkPassphrase }
+    )
+      .addOperation(contract.call(method))
+      .setTimeout(0)
+      .build();
+
+    const resp = await rpc.simulateTransaction(tx);
+    if (RPC.Api.isSimulationSuccess(resp)) {
+      const scVal = resp.result!.retval;
+      return scValToNative(scVal);
+    }
+    throw new Error(`RPC simulation failed for ${method}: ${JSON.stringify(resp)}`);
+  };
+
+  const [symbol, decimals, name] = await Promise.all([
+    callMethod("symbol"),
+    callMethod("decimals"),
+    callMethod("name"),
+  ]);
+
+  return {
+    symbol: String(symbol),
+    decimals: Number(decimals),
+    name: String(name),
+  };
 }

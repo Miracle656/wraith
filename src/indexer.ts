@@ -87,6 +87,7 @@ export function resolveSacContractIds(network?: Network): string[] {
   // both loops at the same chain's SAC.
   return [net === "mainnet" ? DEFAULT_XLM_SAC_MAINNET : DEFAULT_XLM_SAC_TESTNET];
 }
+import { initTokenCache, getTokenMetadata } from "./tokenCache";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 // These stay process-wide: they describe how hard to poll, not which chain.
@@ -321,6 +322,17 @@ async function pollOnce(
     console.error(`[indexer/${net}] SAC detection failed:`, e)
   );
   const inserted = await upsertTransfers(records, net);
+
+  // Resolve metadata for every distinct token in this batch. Only a cache miss
+  // reaches RPC, and a miss happens once per contract for the life of the
+  // database — so this is one extra call the first time a token is seen and
+  // free thereafter. Best-effort: a token whose metadata cannot be read is
+  // still worth indexing transfers for.
+  await Promise.all(
+    [...new Set(records.map((r) => r.contractId))].map((contractId) =>
+      getTokenMetadata(contractId, net).catch(() => undefined)
+    )
+  );
   loop.totalIndexed += inserted;
   transfersStoredTotal.inc({ network: net, type: "fungible" }, inserted);
 
@@ -413,6 +425,10 @@ export async function startIndexer(network?: Network): Promise<void> {
 
   const loop = createLoopState(net);
   loops.set(net, loop);
+
+  // Warm the token metadata cache from the database so the first batch does
+  // not pay an RPC round-trip per contract it has already seen before.
+  await initTokenCache(net);
 
   // Seed the known-pool set from what is already recorded. Without this a
   // restart forgets which contracts are pools and silently stops recording

@@ -339,3 +339,22 @@ model BackfillCursor {
 
   @@schema("wraith")
 }
+
+// ─── Token Metadata ───────────────────────────────────────────────────────────
+// Caches token symbol, name, and decimals to avoid redundant RPC calls.
+model TokenMetadata {
+  // A contract id is only unique within a chain. Keyed on contractId alone, a
+  // testnet token at the same address as a mainnet one would serve the wrong
+  // symbol and the wrong decimals — and a wrong decimals silently rescales
+  // every amount rendered from it by orders of magnitude.
+  network    String   @default("testnet")
+  contractId String
+  symbol     String
+  name       String
+  decimals   Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([network, contractId])
+  @@schema("wraith")
+}

@@ -26,6 +26,7 @@ import {
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType } from "./metrics";
+import { getAllCachedTokens } from "./tokenCache";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -253,6 +254,19 @@ export function createApp(): express.Application {
     } catch (err) {
       next(err);
     }
+  });
+  
+  // ── GET /tokens ─────────────────────────────────────────────────────────────
+  /**
+   * Returns a list of all tokens encountered and cached by the indexer.
+   */
+  app.get("/tokens", (req: Request, res: Response) => {
+    // Scoped to the selected network. Returning both chains' tokens from one
+    // endpoint would put two different assets under the same contract id in a
+    // single list, with no way for a caller to tell which is which.
+    const network = requestNetwork(req);
+    const tokens = getAllCachedTokens(network);
+    res.json({ ok: true, network, tokens });
   });
 
   // ─── GET /readyz — K8s/Render readiness probe ───────────────────────────
