@@ -1,5 +1,6 @@
 import { rpc as RPC, xdr } from "@stellar/stellar-sdk";
 import { resolveNetwork, currentNetwork, type Network } from "./network";
+import { recordRpcError } from "./metrics";
 
 // ─── Network config ───────────────────────────────────────────────────────────
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
@@ -162,7 +163,11 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       attempt++;
-      if (attempt >= maxAttempts) throw err;
+      if (attempt >= maxAttempts) {
+        recordRpcError("exhausted");
+        throw err;
+      }
+      recordRpcError("retry");
       const delay = baseDelayMs * 2 ** (attempt - 1);
       console.warn(
         `[rpc] Attempt ${attempt} failed — retrying in ${delay}ms…`,

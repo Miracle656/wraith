@@ -76,6 +76,22 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/metrics",
+  summary: "Prometheus metrics",
+  description:
+    "Indexer and process metrics in Prometheus text exposition format. Served from " +
+    "in-process counters only — no database or RPC call — so it keeps answering while " +
+    "the subsystems it reports on are down.",
+  responses: {
+    200: {
+      description: "Prometheus text exposition format",
+      content: { "text/plain": { schema: { type: "string" as const } } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/status",
   summary: "Indexer status",
   request: { query: statusQuerySchema },

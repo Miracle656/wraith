@@ -25,6 +25,7 @@ import {
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
+import { renderMetrics, metricsContentType } from "./metrics";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -63,7 +64,9 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
-  skip: () => process.env.NODE_ENV === "test",
+  // /metrics is exempt: a scrape endpoint that starts 429ing goes blind exactly
+  // when load is high enough to matter, which is when you need the graphs.
+  skip: (req) => process.env.NODE_ENV === "test" || req.path === "/metrics",
 });
 
 // ─── Response cache (opt-in via CACHE_ENABLED) ─────────────────────────────
@@ -136,7 +139,9 @@ export function createApp(): express.Application {
   // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`
   // body parameters when serving DB data during an RPC outage.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
-    if (req.method !== "GET" || req.path === "/healthz") {
+    // /metrics is served from in-process counters, so the RPC health probe
+    // below would add a network round-trip to every scrape and report nothing.
+    if (req.method !== "GET" || req.path === "/healthz" || req.path === "/metrics") {
       return next();
     }
 
@@ -231,6 +236,23 @@ export function createApp(): express.Application {
    */
   app.get("/healthz", (_req: Request, res: Response) => {
     res.json({ ok: true, uptime: process.uptime() });
+  });
+
+  // ─── GET /metrics — Prometheus scrape endpoint ──────────────────────────
+  /**
+   * Indexer and process metrics in Prometheus text exposition format.
+   *
+   * Reads only in-process counters — no DB, no RPC — so it stays answerable
+   * while the things it is reporting on are down, which is the point.
+   */
+  app.get("/metrics", async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const body = await renderMetrics();
+      res.setHeader("Content-Type", metricsContentType);
+      res.send(body);
+    } catch (err) {
+      next(err);
+    }
   });
 
   // ─── GET /readyz — K8s/Render readiness probe ───────────────────────────
@@ -383,6 +405,9 @@ export function createApp(): express.Application {
           // reports every loop regardless of the selector.
           network: selected,
           lastIndexedLedger,
+          // snake_case alias alongside the camelCase field, for consumers that
+          // read the same name the metric is exported under. Both always agree.
+          last_indexed_ledger: lastIndexedLedger,
           latestLedger,
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
@@ -400,6 +425,7 @@ export function createApp(): express.Application {
           stale: true,
           as_of_ledger: lastIndexedLedger ?? undefined,
           lastIndexedLedger,
+          last_indexed_ledger: lastIndexedLedger,
           latestLedger: null,
           lagLedgers: null,
           ...stats,

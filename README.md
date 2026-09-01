@@ -393,6 +393,7 @@ curl http://localhost:3000/status
   "ok": true,
   "network": "testnet",
   "lastIndexedLedger": 5842100,
+  "last_indexed_ledger": 5842100,
   "latestLedger": 5842102,
   "lagLedgers": 2,
   "startedAt": "2025-10-01T10:00:00.000Z",
@@ -404,9 +405,46 @@ curl http://localhost:3000/status
 }
 ```
 
+`last_indexed_ledger` is a snake_case alias of `lastIndexedLedger` — the same
+name the Prometheus gauge is exported under. Both always carry the same value.
+
 `network` names which chain the top-level fields describe — it follows the
 selector. `networks` reports every running loop regardless of the selector, so a
 single response shows one chain falling behind while the other is healthy.
+
+***
+
+### `GET /metrics`
+
+Indexer and process metrics in Prometheus text exposition format, for scraping,
+dashboards, and alerting.
+
+```bash
+curl http://localhost:3000/metrics
+```
+
+```
+# HELP ledgers_indexed_total Ledgers advanced through by the indexer, per network
+# TYPE ledgers_indexed_total counter
+ledgers_indexed_total{network="mainnet"} 48213
+# HELP last_indexed_ledger Highest ledger sequence committed by the indexer, per network
+# TYPE last_indexed_ledger gauge
+last_indexed_ledger{network="mainnet"} 5842100
+```
+
+| Metric | Type | Labels | What it says |
+| ------ | ---- | ------ | ------------ |
+| `ledgers_indexed_total` | counter | `network` | Ledgers the indexer has advanced through. A flat `rate()` on a network whose loop should be running means it has stalled. |
+| `transfers_stored_total` | counter | `network`, `type` | Rows persisted, split `fungible` / `nft` — one parse path can break while the other keeps working. |
+| `rpc_errors_total` | counter | `outcome` | Failed RPC attempts. `retry` counts attempts `withRetry` absorbed, `exhausted` counts calls that gave up — a degrading endpoint shows up in `retry` long before it fails a call. |
+| `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
+| `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
+
+Standard `process_*` and `nodejs_*` metrics are exported alongside these.
+
+The endpoint reads in-process counters only — no DB, no RPC — so it keeps
+answering while the subsystems it reports on are down, and it is exempt from the
+API rate limit so scrapes do not go dark under load.
 
 ***
 
@@ -622,6 +660,8 @@ curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123
 | `GET /status` | `status` |
 | `GET /healthz` | `health` |
 | `GET /readyz` | `readiness` |
+
+`GET /metrics` is not a JSON:API resource — it serves Prometheus text format.
 
 ***
 
