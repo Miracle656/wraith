@@ -1,21 +1,81 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "./db";
+import { jsonApiMiddleware } from "./middleware/jsonapi";
+import { queryHostFnLogs } from "./indexer/host-fn-log";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
-import { getIndexerStats } from "./indexer";
+import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
+import { currentNetwork, enabledNetworks, type Network } from "./network";
+import { createAccountsRouter } from "./api/accounts";
+import { createWebhooksRouter } from "./api/webhooks";
+import { createGraphQLMiddleware } from "./graphql/server";
+import { createPopularAssetsRouter } from "./routes/assets/popular";
+import { createExportsRouter } from "./routes/exports";
+import { createSearchRouter } from "./routes/search";
+import { cacheMiddleware } from "./cache/redis";
+import {
+  hostFnQuerySchema,
+  nftOwnerParamsSchema,
+  nftTransfersQuerySchema,
+  txHashParamsSchema,
+  readyzQuerySchema,
+  summaryQuerySchema,
+  transferQuerySchema,
+} from "./openapi/schemas";
+import { parseOr400 } from "./openapi/validation";
+import { networkMiddleware, requestNetwork } from "./middleware/network";
+import { renderMetrics, metricsContentType } from "./metrics";
 import { getAllCachedTokens } from "./tokenCache";
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// ─── RPC Health Check Cache ───────────────────────────────────────────────
+// Keyed by network (#163): one cache entry would let a healthy testnet RPC
+// mark mainnet requests fresh, or a mainnet outage mark testnet reads stale.
+const cachedRpcHealth = new Map<Network, { healthy: boolean; timestamp: number }>();
+const RPC_HEALTH_CACHE_TTL_MS = 3000;
+
+export function clearRpcHealthCache(): void {
+  cachedRpcHealth.clear();
+}
+
+export async function checkRpcHealth(network?: Network): Promise<boolean> {
+  const net = network ?? currentNetwork();
+  const now = Date.now();
+  const cached = cachedRpcHealth.get(net);
+  if (cached && now - cached.timestamp < RPC_HEALTH_CACHE_TTL_MS) {
+    return cached.healthy;
+  }
+
+  try {
+    const latest = await getLatestLedger(net);
+    const healthy = typeof latest === "number" && latest > 0;
+    cachedRpcHealth.set(net, { healthy, timestamp: now });
+    return healthy;
+  } catch {
+    cachedRpcHealth.set(net, { healthy: false, timestamp: now });
+    return false;
+  }
+}
+
+// ─── Rate limiting ─────────────────────────────────────────────────────────
+// Skip rate limiting in test environment to avoid 429 errors during tests
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10),
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
-  standardHeaders: true,   // Sends `RateLimit-*` headers
-  legacyHeaders: false,    // Disables `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
+  // /metrics is exempt: a scrape endpoint that starts 429ing goes blind exactly
+  // when load is high enough to matter, which is when you need the graphs.
+  skip: (req) => process.env.NODE_ENV === "test" || req.path === "/metrics",
 });
 
-// ── Amount formatting ─────────────────────────────────────────────────────────
+// ─── Response cache (opt-in via CACHE_ENABLED) ─────────────────────────────
+// Per-route TTLs: popular-asset rollups tolerate more staleness than search.
+const POPULAR_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_POPULAR_MS ?? "60000", 10);
+const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000", 10);
+
+// ─── Amount formatting ────────────────────────────────────────────────────
 const STROOPS = 10_000_000n;
 
 /**
@@ -37,16 +97,101 @@ const withDisplay = <T extends { amount: string }>(t: T) => ({
   displayAmount: toDisplayAmount(t.amount),
 });
 
+function parseSelectQuery(value: unknown): string[] | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
+
+// ─── CSV utilities ─────────────────────────────────────────────────────────
+/**
+ * Escape a value for CSV output.
+ * If the value contains comma, quote, or newline, wrap in quotes and escape inner quotes.
+ */
+function escapeCSVValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/**
+ * Format a row of values as a CSV line.
+ */
+function formatCSVRow(values: unknown[]): string {
+  return values.map(escapeCSVValue).join(",");
+}
 
 export function createApp(): express.Application {
   const app = express();
 
   app.use(cors());
   app.use(express.json());
+  app.use(jsonApiMiddleware);
+  // Before every router: each request carries exactly one network, resolved and
+  // validated once here rather than re-parsed per handler (#163).
+  app.use(networkMiddleware);
   app.use(limiter);
 
-  // ── Helpers ──────────────────────────────────────────────────────────────────
+  // ─── Stale read middleware ──────────────────────────────────────────
+  // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`
+  // body parameters when serving DB data during an RPC outage.
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    // /metrics is served from in-process counters, so the RPC health probe
+    // below would add a network round-trip to every scrape and report nothing.
+    if (req.method !== "GET" || req.path === "/healthz" || req.path === "/metrics") {
+      return next();
+    }
+
+    try {
+      const net = requestNetwork(req);
+      const rpcHealthy = await checkRpcHealth(net);
+      if (!rpcHealthy) {
+        const lastIndexed = await getLastIndexedLedger(net).catch(() => null);
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexed !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexed));
+        }
+
+        const originalJson = res.json.bind(res);
+        res.json = (body: any) => {
+          if (body && typeof body === "object" && !Array.isArray(body) && body.error === undefined) {
+            if (body.stale === undefined) {
+              body.stale = true;
+            }
+            if (body.as_of_ledger === undefined && lastIndexed !== null) {
+              body.as_of_ledger = lastIndexed;
+            }
+          }
+          return originalJson(body);
+        };
+      }
+    } catch {
+      // Fall through cleanly
+    }
+    next();
+  });
+
+  // ─── Accounts routes ─────────────────────────────────────────────────────
+  app.use("/accounts", createAccountsRouter());
+
+  // ─── Webhook subscription management ─────────────────────────────────────
+  app.use("/webhooks", createWebhooksRouter());
+  app.use("/graphql", createGraphQLMiddleware());
+
+  // ─── Assets routes ───────────────────────────────────────────────────────
+  app.use("/assets", cacheMiddleware({ ttlMs: POPULAR_CACHE_TTL_MS }), createPopularAssetsRouter());
+
+  // ─── Export routes ───────────────────────────────────────────────────────
+  app.use("/", createExportsRouter());
+
+  // ─── Fuzzy search across accounts, assets, and contracts ──────────────────
+  app.use("/search", cacheMiddleware({ ttlMs: SEARCH_CACHE_TTL_MS }), createSearchRouter());
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
   const parseIntParam = (val: unknown, fallback: number): number => {
     const n = parseInt(String(val), 10);
     return isNaN(n) ? fallback : n;
@@ -85,7 +230,7 @@ export function createApp(): express.Application {
     return d;
   };
 
-  // ── GET /healthz — K8s/Render liveness probe ─────────────────────────────────
+  // ─── GET /healthz — K8s/Render liveness probe ───────────────────────────
   /**
    * Returns 200 as long as the process is alive.
    * Used by orchestrators to decide whether to restart the container.
@@ -94,80 +239,18 @@ export function createApp(): express.Application {
     res.json({ ok: true, uptime: process.uptime() });
   });
 
-  // ── GET /readyz — K8s/Render readiness probe ─────────────────────────────────
+  // ─── GET /metrics — Prometheus scrape endpoint ──────────────────────────
   /**
-   * Returns 200 only when:
-   *   - Database connection is alive
-   *   - Stellar RPC is reachable
-   *   - Indexer lag is within acceptable threshold
+   * Indexer and process metrics in Prometheus text exposition format.
    *
-   * Query params:
-   *   maxLag  — max acceptable ledger lag (default: 100)
-   *
-   * Returns 503 if any check fails.
+   * Reads only in-process counters — no DB, no RPC — so it stays answerable
+   * while the things it is reporting on are down, which is the point.
    */
-  app.get("/readyz", async (_req: Request, res: Response) => {
-    const maxLag = parseInt(String(_req.query.maxLag), 10) || 100;
-    const checks: Record<string, boolean> = {};
-
+  app.get("/metrics", async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      // DB check
-      await prisma.$queryRaw`SELECT 1`;
-      checks.db = true;
-    } catch {
-      checks.db = false;
-    }
-
-    try {
-      // RPC check
-      const latest = await getLatestLedger();
-      checks.rpc = latest > 0;
-    } catch {
-      checks.rpc = false;
-    }
-
-    try {
-      // Indexer lag check
-      const [lastIndexed, latest] = await Promise.all([
-        getLastIndexedLedger(),
-        getLatestLedger(),
-      ]);
-      const lag = lastIndexed !== null ? latest - lastIndexed : Infinity;
-      checks.indexerCaughtUp = lag <= maxLag;
-    } catch {
-      checks.indexerCaughtUp = false;
-    }
-
-    const allHealthy = Object.values(checks).every(Boolean);
-
-    if (!allHealthy) {
-      res.status(503).json({ ok: false, checks });
-    } else {
-      res.json({ ok: true, checks });
-    }
-  });
-
-  // ── GET /status ─────────────────────────────────────────────────────────────
-  /**
-   * Returns the indexer health status.
-   *
-   * Response:
-   *   { lastIndexedLedger, latestLedger, lagLedgers, uptimeSeconds, totalIndexed }
-   */
-  app.get("/status", async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const [lastIndexedLedger, latestLedger] = await Promise.all([
-        getLastIndexedLedger(),
-        getLatestLedger(),
-      ]);
-      const stats = getIndexerStats();
-      res.json({
-        ok: true,
-        lastIndexedLedger,
-        latestLedger,
-        lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
-        ...stats,
-      });
+      const body = await renderMetrics();
+      res.setHeader("Content-Type", metricsContentType);
+      res.send(body);
     } catch (err) {
       next(err);
     }
@@ -177,12 +260,201 @@ export function createApp(): express.Application {
   /**
    * Returns a list of all tokens encountered and cached by the indexer.
    */
-  app.get("/tokens", (_req: Request, res: Response) => {
-    const tokens = getAllCachedTokens();
-    res.json({ ok: true, tokens });
+  app.get("/tokens", (req: Request, res: Response) => {
+    // Scoped to the selected network. Returning both chains' tokens from one
+    // endpoint would put two different assets under the same contract id in a
+    // single list, with no way for a caller to tell which is which.
+    const network = requestNetwork(req);
+    const tokens = getAllCachedTokens(network);
+    res.json({ ok: true, network, tokens });
   });
 
-  // ── GET /transfers/incoming/:address ────────────────────────────────────────
+  // ─── GET /readyz — K8s/Render readiness probe ───────────────────────────
+  /**
+   * Returns 200 when database connection is alive.
+   * Degrades to 200 with status "degraded" when only RPC/indexer is down.
+   * Returns 503 with status "down" only when DB is dead.
+   */
+  app.get("/readyz", async (_req: Request, res: Response) => {
+    const parsed = parseOr400(readyzQuerySchema, _req.query, res);
+    if (!parsed) return;
+    const { maxLag } = parsed;
+    const selected = requestNetwork(_req);
+
+    // The DB is one process-wide connection, so it is checked once rather than
+    // per network — a dead database is not a per-chain condition.
+    let dbUp: boolean;
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      dbUp = true;
+    } catch {
+      dbUp = false;
+    }
+
+    /** RPC reachability plus indexer lag for one network. */
+    const checkNetwork = async (net: Network) => {
+      let latest: number | null = null;
+      let rpc = false;
+      try {
+        latest = await getLatestLedger(net);
+        rpc = typeof latest === "number" && latest > 0;
+      } catch {
+        rpc = false;
+      }
+
+      let lastIndexed: number | null = null;
+      let indexerCaughtUp = false;
+      try {
+        lastIndexed = await getLastIndexedLedger(net);
+        const lag = lastIndexed !== null && latest !== null ? latest - lastIndexed : Infinity;
+        indexerCaughtUp = lag <= maxLag;
+      } catch {
+        indexerCaughtUp = false;
+      }
+
+      return {
+        checks: { db: dbUp, rpc, indexerCaughtUp },
+        lastIndexedLedger: lastIndexed,
+        latestLedger: latest,
+        lagLedgers: latest !== null && lastIndexed !== null ? latest - lastIndexed : null,
+      };
+    };
+
+    // Report every enabled network, not just the selected one: an orchestrator
+    // probing readiness needs to see one chain falling behind while the other
+    // is fine, which a single merged verdict cannot express (#163).
+    const networks = enabledNetworks();
+    const results = await Promise.all(networks.map(async (net) => [net, await checkNetwork(net)] as const));
+    const byNetwork = Object.fromEntries(results);
+
+    // Top-level fields describe the selected network so existing single-network
+    // consumers see exactly the shape they saw before.
+    const selectedResult = byNetwork[selected] ?? (await checkNetwork(selected));
+    const checks = selectedResult.checks;
+    const lastIndexed = selectedResult.lastIndexedLedger;
+    const allHealthy = Object.values(checks).every(Boolean);
+
+    if (!checks.db) {
+      res.status(503).json({ ok: false, status: "down", network: selected, checks, networks: byNetwork });
+    } else {
+      const status = allHealthy ? "healthy" : "degraded";
+      if (!allHealthy) {
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexed !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexed));
+        }
+      }
+      res.json({
+        ok: true,
+        status,
+        network: selected,
+        checks,
+        networks: byNetwork,
+        ...(lastIndexed !== null ? { as_of_ledger: lastIndexed } : {}),
+        ...(allHealthy ? {} : { stale: true }),
+      });
+    }
+  });
+
+  // ─── GET /status ─────────────────────────────────────────────────────────
+  /**
+   * Returns indexer health status: "healthy", "degraded", or "down".
+   */
+  app.get("/status", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const selected = requestNetwork(req);
+      const [lastIndexedResult, latestLedgerResult] = await Promise.allSettled([
+        getLastIndexedLedger(selected),
+        getLatestLedger(selected),
+      ]);
+
+      if (lastIndexedResult.status === "rejected") {
+        res.status(503).json({ ok: false, status: "down", error: "Database unavailable" });
+        return;
+      }
+
+      const lastIndexedLedger = lastIndexedResult.value;
+      const rpcSuccess = latestLedgerResult.status === "fulfilled" && typeof latestLedgerResult.value === "number";
+      const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
+      const stats = getIndexerStats(selected);
+
+      // Per-network progress (#161). The top-level fields above stay as they
+      // were so existing consumers are unaffected; this reports each loop
+      // separately, which is the only way to see one chain falling behind
+      // while the other is healthy.
+      const active = runningNetworks();
+      const networks: Network[] = active.length > 0 ? active : enabledNetworks();
+      const loopStats = getAllIndexerStats();
+      const perNetwork = await Promise.all(
+        networks.map(async (net) => {
+          const [indexed, tip] = await Promise.allSettled([
+            getLastIndexedLedger(net),
+            getLatestLedger(net),
+          ]);
+          const indexedLedger = indexed.status === "fulfilled" ? indexed.value : null;
+          const tipLedger =
+            tip.status === "fulfilled" && typeof tip.value === "number" ? tip.value : null;
+          return [
+            net,
+            {
+              lastIndexedLedger: indexedLedger,
+              latestLedger: tipLedger,
+              lagLedgers:
+                tipLedger !== null ? tipLedger - (indexedLedger ?? tipLedger) : null,
+              // A loop that has not started reports no stats rather than zeroes
+              // pretending to be progress.
+              running: loopStats[net] !== undefined,
+              ...(loopStats[net] ?? {}),
+            },
+          ] as const;
+        })
+      );
+      const byNetwork = Object.fromEntries(perNetwork);
+
+      if (rpcSuccess && latestLedger !== null) {
+        res.json({
+          ok: true,
+          status: "healthy",
+          // Which network the top-level fields describe. `networks` below
+          // reports every loop regardless of the selector.
+          network: selected,
+          lastIndexedLedger,
+          // snake_case alias alongside the camelCase field, for consumers that
+          // read the same name the metric is exported under. Both always agree.
+          last_indexed_ledger: lastIndexedLedger,
+          latestLedger,
+          lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
+          ...stats,
+          networks: byNetwork,
+        });
+      } else {
+        res.setHeader("X-Data-Stale", "true");
+        if (lastIndexedLedger !== null) {
+          res.setHeader("X-As-Of-Ledger", String(lastIndexedLedger));
+        }
+        res.json({
+          ok: true,
+          status: "degraded",
+          network: selected,
+          stale: true,
+          as_of_ledger: lastIndexedLedger ?? undefined,
+          lastIndexedLedger,
+          last_indexed_ledger: lastIndexedLedger,
+          latestLedger: null,
+          lagLedgers: null,
+          ...stats,
+          // Also reported when degraded — with two loops, "RPC is down" is
+          // usually true of one chain only, and the top-level nulls above
+          // cannot say which.
+          networks: byNetwork,
+        });
+      }
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── GET /transfers/incoming/:address ────────────────────────────────────
   /**
    * All token transfers received by `address`.
    *
@@ -200,40 +472,60 @@ export function createApp(): express.Application {
     "/transfers/incoming/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+          token?: string;
+        };
 
         const result = await queryTransfers({
+          network: requestNetwork(req),
           address,
           direction: "incoming",
-          contractId: contractId as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
+          contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit,
+          offset,
         });
 
-        res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+        res.json({
+          ...result,
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
+          limit,
+          offset,
+        });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  // ── GET /transfers/outgoing/:address ────────────────────────────────────────
+  // ─── GET /transfers/outgoing/:address ────────────────────────────────────
   /**
    * All token transfers sent by `address`.
    * Same query params & response shape as /incoming/:address.
@@ -242,40 +534,60 @@ export function createApp(): express.Application {
     "/transfers/outgoing/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, cursor, $filter, $select, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+          token?: string;
+        };
 
         const result = await queryTransfers({
+          network: requestNetwork(req),
           address,
           direction: "outgoing",
-          contractId: contractId as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
+          contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit,
+          offset,
         });
 
-        res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+        res.json({
+          ...result,
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
+          limit,
+          offset,
+        });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  // ── GET /transfers/address/:address ─────────────────────────────────────────
+  // ─── GET /transfers/address/:address ─────────────────────────────────────
   /**
    * All token transfers sent or received by `address`, merged and sorted by
    * ledger descending. Each record includes a `direction` field
@@ -295,39 +607,149 @@ export function createApp(): express.Application {
     "/transfers/address/:address",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const { contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
-        const eventTypes = parseEventTypes(eventType, res);
-        if (eventTypes === null) return;
-
-        const lim = parseIntParam(limit, 50);
-        const off = parseIntParam(offset, 0);
+        const parsed = parseOr400(transferQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, limit, offset, token, cursor, $filter, $select } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          limit: number;
+          offset: number;
+          token?: string;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+        };
 
         const result = await queryAllTransfers({
+          network: requestNetwork(req),
           address,
-          contractId: contractId as string | undefined,
-          fromLedger: fromLedger ? parseIntParam(fromLedger, 0) : undefined,
-          toLedger: toLedger ? parseIntParam(toLedger, 0) : undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
-          eventTypes,
-          limit: lim,
-          offset: off,
+          contractId,
+          token,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit,
+          offset,
         });
 
-        res.json({ ...result, transfers: result.transfers.map(withDisplay), limit: lim, offset: off });
+        res.json({
+          ...result,
+          transfers: result.transfers.map((transfer) => {
+            if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
+              return withDisplay(transfer as { amount: string });
+            }
+            return transfer;
+          }),
+          limit,
+          offset,
+        });
       } catch (err) {
         next(err);
       }
     }
   );
 
-  // ── GET /transfers/tx/:txHash ────────────────────────────────────────────────
+  // ─── GET /transfers/address/:address/export.csv ───────────────────────────
+  /**
+   * Export all token transfers for `address` as a downloadable CSV file.
+   * Re-uses the same filtering logic as /transfers/address/:address but returns
+   * a CSV file instead of JSON. Caps at 10,000 rows to avoid memory issues.
+   *
+   * Query params (same as /transfers/address/:address):
+   *   contractId  — filter to a specific token contract
+   *   fromLedger  — inclusive lower bound
+   *   toLedger    — inclusive upper bound
+   *   fromDate    — ISO 8601 inclusive lower bound on ledgerClosedAt
+   *   toDate      — ISO 8601 inclusive upper bound on ledgerClosedAt
+   *   eventType   — comma-separated event types (transfer, mint, burn, clawback)
+   *
+   * Response: CSV file with columns: date, type, from, to, amount, token, ledger
+   */
+  app.get(
+    "/transfers/address/:address/export.csv",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseOr400(
+          transferQuerySchema.omit({ limit: true, offset: true, cursor: true, $filter: true, $select: true }),
+          { ...req.params, ...req.query },
+          res,
+        );
+        if (!parsed) return;
+        const { address, contractId, fromLedger, toLedger, fromDate, toDate, eventType, token } = parsed as {
+          address: string;
+          contractId?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          fromDate?: Date;
+          toDate?: Date;
+          eventType?: string[];
+          token?: string;
+        };
+
+        // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
+        const result = await queryAllTransfers({
+          network: requestNetwork(req),
+          address,
+          contractId,
+          token,
+          fromLedger,
+          toLedger,
+          fromDate,
+          toDate,
+          eventTypes: eventType as string[] | undefined,
+          limit: 10000,
+          offset: 0,
+        });
+
+        // Build CSV content
+        const csvLines: string[] = [];
+
+        // Add CSV header
+        csvLines.push(formatCSVRow(["date", "type", "from", "to", "amount", "token", "ledger"]));
+
+        // Add data rows
+        for (const transfer of result.transfers) {
+          const t = transfer as Record<string, unknown>;
+          const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
+          const closedAt = t.ledgerClosedAt instanceof Date
+            ? t.ledgerClosedAt
+            : new Date(String(t.ledgerClosedAt ?? 0));
+          csvLines.push(
+            formatCSVRow([
+              closedAt.toISOString(),
+              t.eventType,
+              t.fromAddress || "",
+              t.toAddress || "",
+              displayAmount,
+              t.contractId,
+              t.ledger,
+            ])
+          );
+        }
+
+        const csvContent = csvLines.join("\n");
+
+        // Set response headers for CSV download
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="transfers-${address}.csv"`);
+        res.send(csvContent);
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ─── GET /transfers/tx/:txHash ───────────────────────────────────────────
   /**
    * All token events emitted within a given transaction.
    *
@@ -338,7 +760,9 @@ export function createApp(): express.Application {
     "/transfers/tx/:txHash",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const transfers = await queryByTxHash(req.params.txHash);
+        const parsed = parseOr400(txHashParamsSchema, req.params, res);
+        if (!parsed) return;
+        const transfers = await queryByTxHash(parsed.txHash, requestNetwork(req));
         res.json({ transfers: transfers.map(withDisplay) });
       } catch (err) {
         next(err);
@@ -346,7 +770,7 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── GET /summary/:address ────────────────────────────────────────────────────
+  // ─── GET /summary/:address ───────────────────────────────────────────────
   /**
    * Aggregate token stats for `address`, grouped by contractId.
    *
@@ -360,23 +784,18 @@ export function createApp(): express.Application {
    *     totalReceived, totalSent, netFlow,
    *     displayTotalReceived, displayTotalSent, displayNetFlow, txCount }] }
    */
-  app.get(
-    "/summary/:address",
-    async (req: Request, res: Response, next: NextFunction) => {
+  const summaryHandler = async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
-        const { contractId, fromDate, toDate } = req.query;
-
-        const fromDateVal = parseDateParam(fromDate, res);
-        if (fromDateVal === null) return;
-        const toDateVal = parseDateParam(toDate, res);
-        if (toDateVal === null) return;
+        const parsed = parseOr400(summaryQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { address, contractId, fromDate, toDate } = parsed;
 
         const rows = await querySummary({
+          network: requestNetwork(req),
           address,
-          contractId: contractId as string | undefined,
-          fromDate: fromDateVal,
-          toDate: toDateVal,
+          contractId,
+          fromDate,
+          toDate,
         });
 
         const tokens = rows.map((row) => {
@@ -398,10 +817,56 @@ export function createApp(): express.Application {
         res.json({
           address,
           window: {
-            fromDate: fromDateVal?.toISOString() ?? null,
-            toDate: toDateVal?.toISOString() ?? null,
+            fromDate: fromDate?.toISOString() ?? null,
+            toDate: toDate?.toISOString() ?? null,
           },
           tokens,
+        });
+      } catch (err) {
+        next(err);
+      }
+    };
+
+  app.get("/summary/:address", summaryHandler);
+  app.get("/accounts/:address/summary", summaryHandler);
+
+  // ─── GET /host-fn/:contractId ────────────────────────────────────────────
+  /**
+   * Query raw host-function invocation logs for a contract.
+   *
+   * Every contract event indexed by Wraith is stored here — not just SEP-41
+   * token events — so downstream consumers can interpret arbitrary contracts.
+   *
+   * Query params:
+   *   functionName  — filter by function name (e.g. "swap")
+   *   limit         — max rows (default 50, hard cap 200)
+   *   offset        — pagination offset (default 0)
+   */
+  app.get(
+    "/host-fn/:contractId",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseOr400(hostFnQuerySchema, { ...req.params, ...req.query }, res);
+        if (!parsed) return;
+        const { contractId, functionName, limit, offset } = parsed;
+
+        const { total, logs } = await queryHostFnLogs({
+          network: requestNetwork(req),
+          contractId,
+          functionName,
+          limit,
+          offset,
+        });
+
+        res.json({
+          contractId,
+          total,
+          limit,
+          offset,
+          logs: logs.map((log) => ({
+            ...log,
+            gasUsed: log.gasUsed === null ? null : log.gasUsed.toString(),
+          })),
         });
       } catch (err) {
         next(err);
@@ -409,12 +874,115 @@ export function createApp(): express.Application {
     }
   );
 
-  // ── 404 handler ──────────────────────────────────────────────────────────────
+  // ─── GET /nfts/transfers ─────────────────────────────────────────────────
+  /**
+   * Query CAP-46 NFT transfer events.
+   *
+   * Query params:
+   *   contract    — filter to a specific NFT contract (C...)
+   *   token_id    — filter to a specific token identifier
+   *   address     — filter to transfers where from OR to equals this address
+   *   fromLedger  — inclusive lower ledger bound
+   *   toLedger    — inclusive upper ledger bound
+   *   limit       — page size (max 200, default 50)
+   *   offset      — pagination offset (default 0)
+   *
+   * Response:
+   *   { total, limit, offset, transfers: [...] }
+   */
+  app.get(
+    "/nfts/transfers",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseOr400(nftTransfersQuerySchema, req.query, res);
+        if (!parsed) return;
+        const { contract, token_id, address, fromLedger, toLedger, limit, offset, cursor, $filter, $select } = parsed as {
+          contract?: string;
+          token_id?: string;
+          address?: string;
+          fromLedger?: number;
+          toLedger?: number;
+          limit: number;
+          offset: number;
+          cursor?: string;
+          $filter?: string;
+          $select?: string[];
+        };
+
+        const result = await queryNftTransfers({
+          network: requestNetwork(req),
+          contractId: contract,
+          tokenId: token_id,
+          address,
+          filter: $filter,
+          select: $select as string[] | undefined,
+          cursor,
+          fromLedger,
+          toLedger,
+          limit,
+          offset,
+        });
+
+        res.json({ ...result, limit, offset });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ─── GET /nfts/owners/:contract/:token_id ────────────────────────────────
+  /**
+   * Return the current owner of an NFT (the toAddress of its most recent transfer).
+   * Also includes any cached metadata for the token.
+   *
+   * Path params:
+   *   contract  — NFT contract address (C...)
+   *   token_id  — Token identifier
+   *
+   * Response:
+   *   { contract, token_id, owner, metadata: { name, tokenUri } | null }
+   */
+  app.get(
+    "/nfts/owners/:contract/:token_id",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const parsed = parseOr400(nftOwnerParamsSchema, req.params, res);
+        if (!parsed) return;
+        const { contract, token_id } = parsed;
+
+        const network = requestNetwork(req);
+        const [owner, metadata] = await Promise.all([
+          getNftOwner(contract, token_id, network),
+          getNftMetadata(contract, token_id, network),
+        ]);
+
+        if (owner === null) {
+          res.status(404).json({
+            error: "Token not found. No transfers indexed for this contract/token_id.",
+          });
+          return;
+        }
+
+        res.json({
+          contract,
+          token_id,
+          owner,
+          metadata: metadata
+            ? { name: metadata.name, tokenUri: metadata.tokenUri }
+            : null,
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // ─── 404 handler ─────────────────────────────────────────────────────────
   app.use((_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found" });
   });
 
-  // ── Global error handler ─────────────────────────────────────────────────────
+  // ─── Global error handler ────────────────────────────────────────────────
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     console.error("[api] Unhandled error:", err);
     res.status(500).json({ error: err.message ?? "Internal server error" });

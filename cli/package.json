@@ -1,0 +1,22 @@
+{
+  "name": "@veil/wraith-cli",
+  "version": "1.0.0",
+  "description": "Command-line interface for Wraith token transfer indexer",
+  "type": "module",
+  "main": "./bin/wraith.js",
+  "bin": {
+    "wraith": "./bin/wraith.js"
+  },
+  "scripts": {
+    "start": "node ./bin/wraith.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.4",
+    "commander": "^12.1.0",
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

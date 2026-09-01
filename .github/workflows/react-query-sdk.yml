@@ -1,0 +1,41 @@
+name: React Query SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/react-query/**'
+      - 'openapi.json'
+      - '.github/workflows/react-query-sdk.yml'
+  pull_request:
+    paths:
+      - 'clients/react-query/**'
+      - 'openapi.json'
+      - '.github/workflows/react-query-sdk.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: clients/react-query
+
+jobs:
+  test:
+    name: Generate, typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+
+      # Regenerate the typed schema from the spec and fail if the committed
+      # copy is stale — this keeps the client in lockstep with openapi.json.
+      - name: Regenerate schema from OpenAPI spec
+        run: npm run generate
+      - name: Verify schema is up to date
+        run: git diff --exit-code src/schema.d.ts
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

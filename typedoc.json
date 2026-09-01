@@ -1,0 +1,27 @@
+{
+  "name": "Wraith — API Reference",
+  "entryPoints": [
+    "src/index.ts",
+    "src/api.ts",
+    "src/db.ts",
+    "src/rpc.ts",
+    "src/ws.ts",
+    "src/decoder.ts",
+    "src/events.ts",
+    "src/indexer.ts"
+  ],
+  "entryPointStrategy": "resolve",
+  "out": "docs/api",
+  "theme": "default",
+  "readme": "README.md",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeProtected": false,
+  "excludeExternals": true,
+  "hideGenerator": false,
+  "sort": "source-order",
+  "searchInComments": true,
+  "navigationLinks": {
+    "GitHub": "https://github.com/Miracle656/wraith"
+  }
+}

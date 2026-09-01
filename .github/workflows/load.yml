@@ -1,0 +1,57 @@
+name: Load test
+
+on:
+  # Weekly scheduled run against staging — Mondays at 06:00 UTC.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Allow manual runs with optional overrides.
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Staging base URL to test against (overrides STAGING_BASE_URL)"
+        required: false
+        default: ""
+      rps:
+        description: "Target requests per second"
+        required: false
+        default: "1000"
+      duration:
+        description: "Test duration (e.g. 2m, 30s)"
+        required: false
+        default: "2m"
+
+jobs:
+  load:
+    name: k6 load test (transfers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Resolve target URL
+        id: target
+        env:
+          INPUT_URL: ${{ github.event.inputs.base_url }}
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+        run: |
+          URL="${INPUT_URL:-$STAGING_BASE_URL}"
+          if [[ -z "$URL" ]]; then
+            echo "::error::No staging URL configured. Set the STAGING_BASE_URL secret or pass base_url via workflow_dispatch."
+            exit 1
+          fi
+          echo "base_url=${URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Run k6 load test
+        uses: grafana/run-k6-action@v1
+        with:
+          path: tests/load/transfers.k6.js
+        env:
+          BASE_URL: ${{ steps.target.outputs.base_url }}
+          # Optional: a staging account with realistic transfer volume.
+          ADDRESS: ${{ secrets.LOAD_TEST_ADDRESS }}
+          RPS: ${{ github.event.inputs.rps || '1000' }}
+          DURATION: ${{ github.event.inputs.duration || '2m' }}
