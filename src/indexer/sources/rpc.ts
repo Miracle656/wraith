@@ -1,4 +1,5 @@
 import { fetchEventsSafe, getLatestLedger, type RawEvent } from "../../rpc";
+import type { Network } from "../../network";
 
 export interface EventSource {
   name: string;
@@ -12,20 +13,24 @@ export interface EventSource {
   ): Promise<{ events: RawEvent[]; highestLedger: number }>;
 }
 
-export function createRpcSource(): EventSource {
+/**
+ * @param network Which chain this source reads. Omitted means the configured
+ *   network, which is what every single-network deployment gets.
+ */
+export function createRpcSource(network?: Network): EventSource {
   return {
     name: "rpc",
     async isHealthy() {
       try {
-        await getLatestLedger();
+        await getLatestLedger(network);
         return true;
       } catch {
         return false;
       }
     },
-    getLatestLedger,
+    getLatestLedger: () => getLatestLedger(network),
     fetchEvents(startLedger, endLedger, contractIds, limit) {
-      return fetchEventsSafe(startLedger, endLedger, contractIds, limit);
+      return fetchEventsSafe(startLedger, endLedger, contractIds, limit, undefined, network);
     },
   };
 }

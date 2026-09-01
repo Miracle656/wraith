@@ -36,7 +36,7 @@ export async function seedIntegrationFixtures(): Promise<void> {
     await prisma.tokenTransfer.deleteMany();
     await prisma.indexerState.deleteMany();
     await prisma.tokenTransfer.createMany({ data: seedTransfers });
-    await prisma.indexerState.create({ data: { id: 1, lastIndexedLedger: 2006 } });
+    await prisma.indexerState.create({ data: { network: 'testnet', lastIndexedLedger: 2006 } });
   } finally {
     await prisma.$disconnect();
   }
