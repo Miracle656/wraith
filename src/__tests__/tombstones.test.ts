@@ -133,7 +133,10 @@ describe("insertTombstones", () => {
     const inserted = await insertTombstones(records);
 
     expect(inserted).toBe(1);
-    expect(createMany).toHaveBeenCalledWith({ data: records, skipDuplicates: true });
+    expect(createMany).toHaveBeenCalledWith({
+      data: [{ ...records[0], network: "testnet" }],
+      skipDuplicates: true,
+    });
   });
 
   it("skips the DB entirely for an empty batch", async () => {
@@ -158,7 +161,14 @@ describe("tombstoneExpiredContracts", () => {
     ]);
     expect(inserted).toBe(1);
     expect(createMany).toHaveBeenCalledWith({
-      data: [{ contractId: "CEXPIRED", liveUntilLedger: 999, detectedLedger: CURRENT_LEDGER }],
+      data: [
+        {
+          contractId: "CEXPIRED",
+          liveUntilLedger: 999,
+          detectedLedger: CURRENT_LEDGER,
+          network: "testnet",
+        },
+      ],
       skipDuplicates: true,
     });
   });
@@ -173,5 +183,38 @@ describe("tombstoneExpiredContracts", () => {
     expect(tombstones).toEqual([]);
     expect(inserted).toBe(0);
     expect(createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("network scoping", () => {
+  it("stamps the tombstone with the network it was detected on", async () => {
+    createMany.mockResolvedValue({ count: 1 });
+
+    await tombstoneExpiredContracts(
+      ["CEXPIRED"],
+      CURRENT_LEDGER,
+      fixtureFetcher,
+      "mainnet",
+    );
+
+    const [args] = createMany.mock.calls[0] as [{ data: Array<{ network: string }> }];
+    expect(args.data[0].network).toBe("mainnet");
+  });
+
+  it("asks the TTL fetcher for the same network it will tag the row with", async () => {
+    // The bug this prevents: reading a mainnet contract's TTL off the testnet
+    // RPC. The lookup fails, fetchLiveUntilLedger returns null, isExpired
+    // treats null as "not expired" — and the mainnet loop silently never
+    // tombstones anything. No error, no row, nothing to notice.
+    createMany.mockResolvedValue({ count: 0 });
+    const seen: Array<string | undefined> = [];
+    const spy: TtlFetcher = async (_id, network) => {
+      seen.push(network);
+      return null;
+    };
+
+    await tombstoneExpiredContracts(["CANY"], CURRENT_LEDGER, spy, "mainnet");
+
+    expect(seen).toEqual(["mainnet"]);
   });
 });

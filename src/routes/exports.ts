@@ -4,12 +4,14 @@ import { prisma, toDisplayAmount } from "../db";
 import os from "os";
 import path from "path";
 import fs from "fs";
+import { requestNetwork } from "../middleware/network";
+import type { Network } from "../network";
 
 // How many rows we fetch per DB round-trip. Keeps memory flat.
 const BATCH_SIZE = 500;
 
 // ── Shared: parse query params into a Prisma where clause ────────────────────
-function buildWhere(query: Record<string, unknown>) {
+function buildWhere(query: Record<string, unknown>, network: Network) {
   const {
     address,
     contractId,
@@ -20,7 +22,9 @@ function buildWhere(query: Record<string, unknown>) {
     eventType,
   } = query;
 
-  const where: Record<string, unknown> = {};
+  // Network first: an export must not leak rows from a chain the caller did
+  // not ask for, and every filter below narrows within it.
+  const where: Record<string, unknown> = { network };
 
   if (address) {
     where.OR = [{ fromAddress: address }, { toAddress: address }];
@@ -70,7 +74,7 @@ async function* streamTransfers(where: Record<string, unknown>) {
 // ── CSV endpoint ─────────────────────────────────────────────────────────────
 async function handleCsvExport(req: Request, res: Response, next: NextFunction) {
   try {
-    const where = buildWhere(req.query as Record<string, unknown>);
+    const where = buildWhere(req.query as Record<string, unknown>, requestNetwork(req));
 
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", "attachment; filename=\"transfers.csv\"");
@@ -112,7 +116,7 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
   const tmpFile = path.join(os.tmpdir(), `transfers-${Date.now()}-${Math.random().toString(36).slice(2)}.parquet`);
 
   try {
-    const where = buildWhere(req.query as Record<string, unknown>);
+    const where = buildWhere(req.query as Record<string, unknown>, requestNetwork(req));
 
     const schema = new parquet.ParquetSchema({
       id:             { type: "INT64" },

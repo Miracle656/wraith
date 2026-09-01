@@ -32,15 +32,69 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { prisma } from "../db";
 import type { RawEvent } from "../rpc";
+import { resolveNetwork, type Network } from "../network";
 
 const { xdr, Address, scValToNative } = StellarSdk;
 
 // ─── Recognised event types ─────────────────────────────────────────────────
-// Symbols (topic[0]) that denote a change in a provider's LP-share balance.
-// "deposit"/"withdraw" are the explicit AMM dialect; "mint"/"burn" are the
-// SEP-41 share-token dialect emitted by pools that surface the token directly.
-const DEPOSIT_EVENTS = new Set(["deposit", "mint"]);
-const WITHDRAW_EVENTS = new Set(["withdraw", "burn"]);
+// Two dialects, and they are NOT equally safe to accept.
+//
+// "deposit"/"withdraw" are pool-specific: a contract emitting them is telling
+// you it is a pool, so they can be accepted from any contract.
+//
+// "mint"/"burn" are generic SEP-41 — every stablecoin issuer, every ordinary
+// SAC, every token in existence emits them. Accepting those unconditionally
+// would write every USDC mint into LpShareTransfer with poolId = the USDC
+// contract, double-storing it beside its own token-transfer row and defeating
+// the point of a table meant to surface liquidity-pool shares. So the bare
+// dialect is only honoured from a contract already known to be a pool.
+const EXPLICIT_DEPOSIT_EVENTS = new Set(["deposit"]);
+const EXPLICIT_WITHDRAW_EVENTS = new Set(["withdraw"]);
+const BARE_DEPOSIT_EVENTS = new Set(["mint"]);
+const BARE_WITHDRAW_EVENTS = new Set(["burn"]);
+
+const DEPOSIT_EVENTS = new Set([...EXPLICIT_DEPOSIT_EVENTS, ...BARE_DEPOSIT_EVENTS]);
+const WITHDRAW_EVENTS = new Set([...EXPLICIT_WITHDRAW_EVENTS, ...BARE_WITHDRAW_EVENTS]);
+
+/** True for the pool-specific dialect, which self-identifies as a pool event. */
+export function isExplicitPoolSymbol(sym: string): boolean {
+  return EXPLICIT_DEPOSIT_EVENTS.has(sym) || EXPLICIT_WITHDRAW_EVENTS.has(sym);
+}
+
+/** True for the generic SEP-41 dialect, which every token emits. */
+function isBareTokenSymbol(sym: string): boolean {
+  return BARE_DEPOSIT_EVENTS.has(sym) || BARE_WITHDRAW_EVENTS.has(sym);
+}
+
+/**
+ * Pools named explicitly in the environment, so a deployment can index a pool
+ * that only ever emits bare mint/burn without waiting to observe a deposit.
+ * Per-network suffix first, then the shared name.
+ */
+export function resolveLpPoolIds(network?: Network): string[] {
+  const suffix = resolveNetwork(network).toUpperCase();
+  const raw =
+    process.env[`LP_POOL_CONTRACT_IDS_${suffix}`] ||
+    process.env.LP_POOL_CONTRACT_IDS ||
+    "";
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Every contract already recorded as a pool on this network, used to seed the
+ * known-pool set when a loop starts. Without this, a restart would forget which
+ * contracts are pools and silently stop recording their bare mint/burn events
+ * until the next explicit deposit came through.
+ */
+export async function loadKnownLpPools(network?: Network): Promise<string[]> {
+  const net = resolveNetwork(network);
+  const rows = await prisma.lpShareTransfer.findMany({
+    where: { network: net },
+    select: { poolId: true },
+    distinct: ["poolId"],
+  });
+  return rows.map((r) => r.poolId);
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -133,10 +187,13 @@ function absString(v: bigint): string {
  * moves LP shares: a recognised symbol, at least one address topic, and a
  * decodable share amount.
  */
-export function isLpShareEvent(raw: RawEvent): boolean {
+export function isLpShareEvent(raw: RawEvent, knownPools?: ReadonlySet<string>): boolean {
   const sym = eventSymbol(raw);
   if (sym === null) return false;
   if (!DEPOSIT_EVENTS.has(sym) && !WITHDRAW_EVENTS.has(sym)) return false;
+  // A generic token mint/burn only counts if we already know this contract is
+  // a pool. Everything else is an ordinary SEP-41 token doing ordinary things.
+  if (isBareTokenSymbol(sym) && !knownPools?.has(raw.contractId)) return false;
   if (extractShares(raw.value) === null) return false;
   return providerAddress(raw, sym) !== null;
 }
@@ -161,13 +218,20 @@ function providerAddress(raw: RawEvent, sym: string): string | null {
  * Decode a single raw event into an LpShareTransferRecord, or null if it is not
  * a recognised LP deposit/withdraw. Never throws.
  */
-export function parseLpShareEvent(raw: RawEvent): LpShareTransferRecord | null {
+export function parseLpShareEvent(
+  raw: RawEvent,
+  knownPools?: ReadonlySet<string>,
+): LpShareTransferRecord | null {
   const sym = eventSymbol(raw);
   if (sym === null) return null;
 
   const isDeposit = DEPOSIT_EVENTS.has(sym);
   const isWithdraw = WITHDRAW_EVENTS.has(sym);
   if (!isDeposit && !isWithdraw) return null;
+
+  // See the dialect note above: bare mint/burn is only an LP-share movement
+  // when the emitting contract is already established as a pool.
+  if (isBareTokenSymbol(sym) && !knownPools?.has(raw.contractId)) return null;
 
   const shares = extractShares(raw.value);
   if (shares === null) return null;
@@ -195,10 +259,23 @@ export function parseLpShareEvent(raw: RawEvent): LpShareTransferRecord | null {
  * Decode a batch of raw events into LP-share transfers, skipping any that are
  * not recognised LP deposits/withdrawals.
  */
-export function parseLpShareEvents(rawEvents: RawEvent[]): LpShareTransferRecord[] {
+export function parseLpShareEvents(
+  rawEvents: RawEvent[],
+  knownPools: ReadonlySet<string> = new Set(),
+): LpShareTransferRecord[] {
+  // First pass: a contract that emits the explicit dialect anywhere in this
+  // batch is a pool, so its bare mint/burn in the *same* batch counts too.
+  // Without this, a pool's first-ever deposit and the mint it emits alongside
+  // would be split across the ordering of a single batch.
+  const pools = new Set(knownPools);
+  for (const raw of rawEvents) {
+    const sym = eventSymbol(raw);
+    if (sym !== null && isExplicitPoolSymbol(sym)) pools.add(raw.contractId);
+  }
+
   const records: LpShareTransferRecord[] = [];
   for (const raw of rawEvents) {
-    const record = parseLpShareEvent(raw);
+    const record = parseLpShareEvent(raw, pools);
     if (record) records.push(record);
   }
   return records;
@@ -213,11 +290,13 @@ export function parseLpShareEvents(rawEvents: RawEvent[]): LpShareTransferRecord
  */
 export async function upsertLpShareTransfers(
   records: LpShareTransferRecord[],
+  network?: Network,
 ): Promise<number> {
   if (records.length === 0) return 0;
 
+  const net = resolveNetwork(network);
   const result = await prisma.lpShareTransfer.createMany({
-    data: records,
+    data: records.map((record) => ({ ...record, network: net })),
     skipDuplicates: true,
   });
 

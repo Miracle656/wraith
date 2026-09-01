@@ -9,9 +9,9 @@ jobs:
     name: Generate & publish API docs
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
+      # peaceiris/actions-gh-pages pushes to the gh-pages branch, which needs
+      # write access to repo contents. The default GITHUB_TOKEN is read-only.
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

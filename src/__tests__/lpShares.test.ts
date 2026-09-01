@@ -37,6 +37,12 @@ const POOL = "CBC42KFZO33TYVFDOUXFRWXYYXHFGH7W5GM4IJQSXKGFINKL2XPP4XTE";
 // A second valid contract address to stand in for a pool's admin in mint events.
 const POOL_ADMIN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
+/**
+ * Contracts already established as pools. The bare SEP-41 mint/burn dialect is
+ * only honoured for these — see the dialect note in lp-shares.ts.
+ */
+const KNOWN_POOLS = new Set([POOL]);
+
 const COMMON: Omit<RawEvent, "topic" | "value"> = {
   id: "0000000000000000001-00001",
   type: "contract",
@@ -147,9 +153,24 @@ describe("isLpShareEvent", () => {
     expect(isLpShareEvent(makeWithdrawEvent())).toBe(true);
   });
 
-  it("accepts a SEP-41 share mint and burn", () => {
-    expect(isLpShareEvent(makeShareMintEvent())).toBe(true);
-    expect(isLpShareEvent(makeShareBurnEvent())).toBe(true);
+  it("accepts a SEP-41 share mint and burn from a contract known to be a pool", () => {
+    expect(isLpShareEvent(makeShareMintEvent(), KNOWN_POOLS)).toBe(true);
+    expect(isLpShareEvent(makeShareBurnEvent(), KNOWN_POOLS)).toBe(true);
+  });
+
+  it("rejects a SEP-41 mint and burn from a contract that is not a known pool", () => {
+    // The over-capture this prevents: mint/burn are generic SEP-41 events that
+    // every token emits. Accepting them unconditionally writes every USDC mint
+    // into LpShareTransfer with poolId = the USDC contract, double-storing it
+    // beside its own token-transfer row.
+    expect(isLpShareEvent(makeShareMintEvent())).toBe(false);
+    expect(isLpShareEvent(makeShareBurnEvent())).toBe(false);
+    expect(isLpShareEvent(makeShareMintEvent(), new Set(["COTHERPOOL"]))).toBe(false);
+  });
+
+  it("accepts the explicit deposit/withdraw dialect from any contract", () => {
+    // These are pool-specific: emitting them is itself the claim to be a pool.
+    expect(isLpShareEvent(makeDepositEvent())).toBe(true);
   });
 
   it("rejects an unrelated event symbol", () => {
@@ -205,7 +226,7 @@ describe("parseLpShareEvent", () => {
   });
 
   it("decodes a SEP-41 share mint to the recipient (topics[2]), not the admin", () => {
-    const r = parseLpShareEvent(makeShareMintEvent(750n));
+    const r = parseLpShareEvent(makeShareMintEvent(750n), KNOWN_POOLS);
     expect(r?.action).toBe("deposit");
     expect(r?.toAddress).toBe(ALICE);
     expect(r?.fromAddress).toBeNull();
@@ -213,7 +234,7 @@ describe("parseLpShareEvent", () => {
   });
 
   it("decodes a SEP-41 share burn from the holder (topics[1])", () => {
-    const r = parseLpShareEvent(makeShareBurnEvent(250n));
+    const r = parseLpShareEvent(makeShareBurnEvent(250n), KNOWN_POOLS);
     expect(r?.action).toBe("withdraw");
     expect(r?.fromAddress).toBe(ALICE);
     expect(r?.toAddress).toBeNull();
@@ -266,7 +287,10 @@ describe("upsertLpShareTransfers", () => {
     const inserted = await upsertLpShareTransfers(records);
 
     expect(inserted).toBe(2);
-    expect(createMany).toHaveBeenCalledWith({ data: records, skipDuplicates: true });
+    expect(createMany).toHaveBeenCalledWith({
+      data: records.map((r) => ({ ...r, network: "testnet" })),
+      skipDuplicates: true,
+    });
   });
 
   it("skips the DB entirely for an empty batch", async () => {
@@ -279,5 +303,41 @@ describe("upsertLpShareTransfers", () => {
     createMany.mockResolvedValue({ count: 1 });
     const records: LpShareTransferRecord[] = parseLpShareEvents([makeDepositEvent(5n, "dup")]);
     expect(await upsertLpShareTransfers(records)).toBe(1);
+  });
+});
+
+describe("pool-signal gating (#136)", () => {
+  it("does not record a plain token mint as a liquidity-pool deposit", () => {
+    // The whole point of the table is to surface LP shares specifically. A
+    // stablecoin mint recorded here is not merely noise — it is a row claiming
+    // a liquidity position that does not exist.
+    expect(parseLpShareEvents([makeShareMintEvent()])).toEqual([]);
+  });
+
+  it("accepts a pool's bare mint once the same batch shows it is a pool", () => {
+    // A pool's first-ever deposit and the share mint it emits alongside can
+    // land in either order within one batch, so the batch is scanned for the
+    // explicit dialect before anything is decoded.
+    const records = parseLpShareEvents([makeShareMintEvent(5n, "evt-mint"), makeDepositEvent(5n, "evt-dep")]);
+
+    expect(records).toHaveLength(2);
+    expect(records.every((r) => r.poolId === POOL)).toBe(true);
+  });
+
+  it("keeps honouring a pool carried over from a previous batch", () => {
+    const records = parseLpShareEvents([makeShareMintEvent(9n)], KNOWN_POOLS);
+
+    expect(records).toHaveLength(1);
+    expect(records[0].action).toBe("deposit");
+  });
+
+  it("stamps inserted rows with the network they were seen on", async () => {
+    createMany.mockResolvedValue({ count: 1 });
+    const [record] = parseLpShareEvents([makeDepositEvent()]);
+
+    await upsertLpShareTransfers([record], "mainnet");
+
+    const [args] = createMany.mock.calls[0] as [{ data: Array<{ network: string }> }];
+    expect(args.data[0].network).toBe("mainnet");
   });
 });
