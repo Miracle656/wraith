@@ -9,6 +9,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { RawEvent } from "../rpc";
 import { getRpc } from "../rpc";
+import { resolveNetwork, type Network } from "../network";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -117,11 +118,15 @@ export function parseNftEvents(
  */
 export async function fetchNftMetadata(
   contractId: string,
-  tokenIdScVal: xdr.ScVal
+  tokenIdScVal: xdr.ScVal,
+  network?: Network
 ): Promise<NftMetadataPayload> {
-  const network = (process.env.STELLAR_NETWORK ?? "testnet").toLowerCase();
-  const networkPassphrase =
-    network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+  // Read from the caller's network rather than the process-wide env var: with
+  // one loop per network, a module-level lookup would sign every simulation
+  // with whichever passphrase happened to be configured, so a mainnet metadata
+  // read would be built against the testnet passphrase and simulate wrongly.
+  const net = resolveNetwork(network);
+  const networkPassphrase = net === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
   // Any valid address works as a simulation source — it doesn't need funds.
   const dummy = new Account(
@@ -129,7 +134,7 @@ export async function fetchNftMetadata(
     "0"
   );
   const contract = new Contract(contractId);
-  const rpc = getRpc();
+  const rpc = getRpc(net);
   const result: NftMetadataPayload = {};
 
   // Try token_uri(token_id)
