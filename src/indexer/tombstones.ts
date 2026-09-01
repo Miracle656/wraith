@@ -22,6 +22,7 @@
 import { xdr } from "@stellar/stellar-sdk";
 import { getRpc } from "../rpc";
 import { prisma } from "../db";
+import { resolveNetwork, type Network } from "../network";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,11 +81,20 @@ export function tombstoneFor(
  * Resolve the `liveUntilLedger` of a contract's instance entry, or null if the
  * contract has no instance entry / the lookup fails. Injectable for testing.
  */
-export type TtlFetcher = (contractId: string) => Promise<number | null>;
+export type TtlFetcher = (
+  contractId: string,
+  network?: Network,
+) => Promise<number | null>;
 
-async function fetchLiveUntilLedger(contractId: string): Promise<number | null> {
+async function fetchLiveUntilLedger(
+  contractId: string,
+  network?: Network,
+): Promise<number | null> {
   try {
-    const entry = await getRpc().getContractData(
+    // getRpc(network), not getRpc(): each loop must ask its own chain. Reading
+    // a mainnet contract's TTL off the testnet RPC would report it missing and,
+    // via the null guard below, silently never tombstone anything.
+    const entry = await getRpc(resolveNetwork(network)).getContractData(
       contractId,
       xdr.ScVal.scvLedgerKeyContractInstance(),
     );
@@ -102,12 +112,13 @@ async function fetchLiveUntilLedger(contractId: string): Promise<number | null> 
 export async function fetchLiveness(
   contractIds: Iterable<string>,
   fetchTtl: TtlFetcher = fetchLiveUntilLedger,
+  network?: Network,
 ): Promise<ContractLiveness[]> {
   const unique = [...new Set(contractIds)];
   return Promise.all(
     unique.map(async (contractId) => ({
       contractId,
-      liveUntilLedger: await fetchTtl(contractId),
+      liveUntilLedger: await fetchTtl(contractId, network),
     })),
   );
 }
@@ -123,8 +134,9 @@ export async function detectExpiredContracts(
   contractIds: Iterable<string>,
   currentLedger: number,
   fetchTtl: TtlFetcher = fetchLiveUntilLedger,
+  network?: Network,
 ): Promise<TombstoneRecord[]> {
-  const liveness = await fetchLiveness(contractIds, fetchTtl);
+  const liveness = await fetchLiveness(contractIds, fetchTtl, network);
   return liveness
     .map((l) => tombstoneFor(l, currentLedger))
     .filter((t): t is TombstoneRecord => t !== null);
@@ -139,11 +151,13 @@ export async function detectExpiredContracts(
  */
 export async function insertTombstones(
   records: TombstoneRecord[],
+  network?: Network,
 ): Promise<number> {
   if (records.length === 0) return 0;
 
+  const net = resolveNetwork(network);
   const result = await prisma.contractTombstone.createMany({
-    data: records,
+    data: records.map((record) => ({ ...record, network: net })),
     skipDuplicates: true,
   });
 
@@ -159,17 +173,20 @@ export async function tombstoneExpiredContracts(
   contractIds: Iterable<string>,
   currentLedger: number,
   fetchTtl: TtlFetcher = fetchLiveUntilLedger,
+  network?: Network,
 ): Promise<{ tombstones: TombstoneRecord[]; inserted: number }> {
+  const net = resolveNetwork(network);
   const tombstones = await detectExpiredContracts(
     contractIds,
     currentLedger,
     fetchTtl,
+    net,
   );
-  const inserted = await insertTombstones(tombstones);
+  const inserted = await insertTombstones(tombstones, net);
 
   if (inserted > 0) {
     console.log(
-      `[tombstone] ${inserted} contract(s) tombstoned at ledger ${currentLedger}`,
+      `[tombstone/${net}] ${inserted} contract(s) tombstoned at ledger ${currentLedger}`,
     );
   }
 

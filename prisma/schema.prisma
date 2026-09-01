@@ -266,8 +266,14 @@ model RetentionJobRun {
 model ContractTombstone {
   id              Int      @id @default(autoincrement())
 
+  // Which chain the contract expired on. The same contract id can exist on both
+  // networks with different TTLs, so a tombstone is only meaningful per network
+  // — a global unique on contractId would let a testnet expiry suppress the
+  // mainnet one forever.
+  network         String   @default("testnet")
+
   // The contract whose storage expired (C...)
-  contractId      String   @unique
+  contractId      String
 
   // The contract instance's liveUntilLedger at the moment of expiry — the last
   // ledger for which the entry was still live.
@@ -279,7 +285,9 @@ model ContractTombstone {
 
   createdAt       DateTime @default(now())
 
-  @@index([detectedLedger])
+  // First expiry detection wins, per network; re-detection is a no-op.
+  @@unique([network, contractId])
+  @@index([network, detectedLedger])
   @@schema("wraith")
 }
 
