@@ -250,8 +250,18 @@ model WebhookDelivery {
 // ─── Indexer State ────────────────────────────────────────────────────────────
 // One row per network. This was a singleton (id = 1) — a single cursor cannot
 // describe how far two independent chains have been indexed.
+//
+// The default on a primary key looks redundant, and for new rows it is: every
+// writer passes `network` explicitly. It exists for `prisma db push`, which
+// deploys this schema. Promoting `network` to the id means adding a required
+// column to a table that already holds the pre-split singleton row, and push
+// cannot invent a value for it — it aborts the whole migration rather than
+// guess. The default is that value. "testnet" is correct because it is what
+// the singleton was: DEFAULT_NETWORK in src/network.ts, and the only chain
+// wraith indexed before the split. Without it the only way forward is
+// --force-reset, which drops the cursor and re-indexes from genesis.
 model IndexerState {
-  network           String   @id
+  network           String   @id @default("testnet")
   lastIndexedLedger Int
   updatedAt         DateTime @updatedAt
 
@@ -330,8 +340,10 @@ model ContractTombstone {
 // ─── Backfill Cursor ───────────────────────────────────────────────────────────
 // Durable cursor so the backfill job can resume mid-range after a crash.
 // One row per network — one backfill at a time *per chain*, not globally.
+// The default on the id is for `prisma db push` over existing rows; see the
+// note on IndexerState.
 model BackfillCursor {
-  network     String   @id
+  network     String   @id @default("testnet")
   startLedger Int
   endLedger   Int
   nextLedger  Int
