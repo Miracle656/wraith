@@ -9,6 +9,8 @@ import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer"
 import { currentNetwork, enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
+import { createLinqWebhookRouter } from "./api/linqWebhook";
+import { createOfframpRouter } from "./api/offramp";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
@@ -129,6 +131,14 @@ export function createApp(): express.Application {
   const app = express();
 
   app.use(cors());
+
+  // BEFORE express.json(). Linq signs the raw request body, so a parser that
+  // consumes and re-serialises it makes every signature unverifiable - the
+  // bytes differ even when the value does not. Their docs call this out
+  // specifically, and it is silent when wrong: the route works, the signature
+  // simply never matches.
+  app.use("/webhooks/linq", createLinqWebhookRouter());
+
   app.use(express.json());
   app.use(jsonApiMiddleware);
   // Before every router: each request carries exactly one network, resolved and
@@ -180,6 +190,7 @@ export function createApp(): express.Application {
 
   // ─── Webhook subscription management ─────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
+  app.use("/offramp", createOfframpRouter());
   app.use("/graphql", createGraphQLMiddleware());
 
   // ─── Assets routes ───────────────────────────────────────────────────────
