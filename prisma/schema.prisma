@@ -370,3 +370,55 @@ model TokenMetadata {
   @@id([network, contractId])
   @@schema("wraith")
 }
+
+// ─── Offramp Orders (Linq) ───────────────────────────────────────────────────
+// A USDC-to-NGN offramp order placed with Linq. We keep our own record because
+// the webhook is the only place a settled figure ever appears, and it arrives
+// once: without a durable row there is nothing to reconcile a payout against,
+// and nothing to make a redelivery idempotent.
+//
+// Deliberately holds no bank details beyond what is needed to show the user
+// which payout this was. Account numbers and names go to Linq and are not ours
+// to keep.
+model OfframpOrder {
+  id             Int      @id @default(autoincrement())
+  network        String   @default("testnet")
+
+  // Linq's order id — the join key for webhooks and status polls.
+  orderId        String
+  // Ours, sent as idempotencyKey. Never regenerated on retry, or the retry
+  // becomes a second order that also has to be paid for.
+  idempotencyKey String
+  // Which wallet placed it, so a user can be shown their own orders.
+  walletAddress  String
+
+  chain          String   @default("stellar")
+  coin           String   @default("usdc")
+  // Where the user must send USDC. Linq creates it with a trustline in place.
+  depositAddress String
+  // Requested at creation; on a manualDeposit order the settled figures below
+  // are what actually happened and can differ.
+  amountStableCoin String
+  amountNGN        String
+  rate             String
+  // Linq's status string, stored verbatim rather than mapped to an enum — it
+  // is their vocabulary ("processing: in bank queue") and inventing our own
+  // would lose detail we cannot recover.
+  status         String   @default("initiated")
+  // Set from the settled webhook, so a reconciled payout is distinguishable
+  // from the requested one.
+  settledStableCoin String?
+  settledNGN        String?
+  depositTxHash     String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Per network: an order id is unique within a chain, and the same wallet can
+  // offramp on both.
+  @@unique([network, orderId])
+  @@unique([network, idempotencyKey])
+  @@index([network, walletAddress])
+  @@index([network, status])
+  @@schema("wraith")
+}
