@@ -27,12 +27,25 @@ function isConfigured(): boolean {
   return !!process.env.LINQ_API_KEY?.trim();
 }
 
+/**
+ * The payout provider is not named to users.
+ *
+ * Their own messages are kept, because they explain a rejected account or an
+ * amount limit better than a generic line would, but with the provider's name
+ * taken out: a user-facing error is the one place it still leaked.
+ */
+export function withoutProviderName(message: string): string {
+  if (/LINQ_API_KEY/i.test(message)) return "Cash-out is not available right now";
+  const replaced = message.replace(/linq(?:'s)?/gi, "the payout service");
+  return replaced.charAt(0).toUpperCase() + replaced.slice(1);
+}
+
 /** Map a LinqError onto the response, preserving their message and status. */
 function sendLinqError(res: Response, err: unknown): void {
   if (err instanceof LinqError) {
     // A 5xx from Linq is ours to own as a 502: the caller did nothing wrong.
     const status = err.status >= 500 ? 502 : err.status;
-    res.status(status).json({ error: err.message });
+    res.status(status).json({ error: withoutProviderName(err.message) });
     return;
   }
   res.status(500).json({ error: "Offramp request failed" });
