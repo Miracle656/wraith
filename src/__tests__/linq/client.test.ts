@@ -4,6 +4,7 @@
  * wrong and invisible when they are.
  */
 import {
+  retryOnProviderFailure,
   createOfframpOrder,
   checkStellarTrustline,
   LinqError,
@@ -134,5 +135,31 @@ describe("checkStellarTrustline", () => {
       .fn()
       .mockResolvedValue(ERR(400, "Not a Stellar public key")) as unknown as typeof fetch;
     await expect(checkStellarTrustline("nope")).rejects.toThrow("Not a Stellar public key");
+  });
+});
+
+describe("retryOnProviderFailure", () => {
+  it("retries once when the provider fails on its side", async () => {
+    const request = jest
+      .fn()
+      .mockRejectedValueOnce(new LinqError("Wallet generation failed", 500))
+      .mockResolvedValueOnce({ id: "ord_1" });
+
+    await expect(retryOnProviderFailure(request, 0)).resolves.toEqual({ id: "ord_1" });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after one retry", async () => {
+    const request = jest.fn().mockRejectedValue(new LinqError("Wallet generation failed", 500));
+
+    await expect(retryOnProviderFailure(request, 0)).rejects.toThrow("Wallet generation failed");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries a rejection of the request itself", async () => {
+    const request = jest.fn().mockRejectedValue(new LinqError("Invalid account", 400));
+
+    await expect(retryOnProviderFailure(request, 0)).rejects.toThrow("Invalid account");
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

@@ -35,6 +35,11 @@ function isConfigured(): boolean {
  * taken out: a user-facing error is the one place it still leaked.
  */
 export function withoutProviderName(message: string): string {
+  if (/wallet generation failed/i.test(message)) {
+    // The provider could not mint the order's deposit address: their fault,
+    // transient, and meaningless to a user in its own words.
+    return "The payout service couldn't set up this order. Try again in a minute.";
+  }
   if (/LINQ_API_KEY/i.test(message)) return "Cash-out is not available right now";
   const replaced = message.replace(/linq(?:'s)?/gi, "the payout service");
   return replaced.charAt(0).toUpperCase() + replaced.slice(1);

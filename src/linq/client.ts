@@ -198,7 +198,8 @@ export async function createOfframpOrder(
       400,
     );
   }
-  return call<OfframpOrderResponse>("/b2b/offramp", {
+  const request = () =>
+  call<OfframpOrderResponse>("/b2b/offramp", {
     method: "POST",
     body: {
       ...params,
@@ -208,6 +209,29 @@ export async function createOfframpOrder(
       manualDeposit: true,
     },
   });
+  return retryOnProviderFailure(request);
+}
+
+/**
+ * One retry when the provider fails on its side: a 5xx, or no response.
+ *
+ * Order creation can fail transiently at the provider — "Wallet generation
+ * failed" is it not managing to mint the deposit address — and the user was
+ * shown that and left to try again by hand. A 4xx is about the request and
+ * is never retried. The retry sends the identical body, idempotencyKey
+ * included, so the provider can recognise it as the same order.
+ */
+export async function retryOnProviderFailure<T>(
+  request: () => Promise<T>,
+  delayMs = 1500,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (err) {
+    if (!(err instanceof LinqError) || err.status < 500) throw err;
+    await new Promise((r) => setTimeout(r, delayMs));
+    return request();
+  }
 }
 
 export interface OfframpStatus {
