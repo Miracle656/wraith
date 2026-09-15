@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 
 import { prisma } from "../db";
 import { requestNetwork } from "../middleware/network";
+import { statusForClients } from "../linq/statusForClients";
 import {
   LinqError,
   checkStellarTrustline,
@@ -164,7 +165,8 @@ export function createOfframpRouter(): Router {
         amountStableCoin: Number(existing.amountStableCoin),
         amountNGN: Number(existing.amountNGN),
         rate: Number(existing.rate),
-        status: existing.status,
+        status: statusForClients(existing.status),
+        providerStatus: existing.status,
         replayed: true,
       });
       return;
@@ -238,13 +240,20 @@ export function createOfframpRouter(): Router {
           },
         });
       }
-      res.json({ ...live, depositAddress: row.depositAddress, source: "linq" });
+      res.json({
+        ...live,
+        status: statusForClients(live.status),
+        providerStatus: live.status,
+        depositAddress: row.depositAddress,
+        source: "linq",
+      });
     } catch {
       // Linq unreachable: our row is stale but true as of the last update, and
       // saying so beats failing the request outright.
       res.json({
         id: row.orderId,
-        status: row.status,
+        status: statusForClients(row.status),
+        providerStatus: row.status,
         amountStableCoin: Number(row.settledStableCoin ?? row.amountStableCoin),
         amountNGN: Number(row.settledNGN ?? row.amountNGN),
         depositAddress: row.depositAddress,
