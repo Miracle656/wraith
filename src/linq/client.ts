@@ -33,10 +33,38 @@ function apiKey(): string {
   return key;
 }
 
-async function call<T>(
-  path: string,
-  init: { method?: string; body?: unknown; auth?: boolean } = {},
-): Promise<T> {
+/** A provider 429 is retried this many times before it reaches the user. */
+const RATE_LIMIT_RETRIES = 2;
+const MAX_RETRY_DELAY_MS = 3_000;
+
+type CallInit = { method?: string; body?: unknown; auth?: boolean };
+type RateLimited = LinqError & { retryAfterMs?: number };
+
+/**
+ * Every provider request, with rate limits absorbed.
+ *
+ * All Veil users share one provider key, and the provider limits it. A user
+ * creating a cash-out got "rate limit exceeded, please wait" and succeeded on
+ * a second tap: the limit had cleared within a second or two, so the app should
+ * have waited, not the user. A 429 means the request was refused before any
+ * work was done, so repeating it (order creation included, with the same
+ * idempotencyKey) cannot create anything twice.
+ */
+async function call<T>(path: string, init: CallInit = {}): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callOnce<T>(path, init);
+    } catch (err) {
+      if (!(err instanceof LinqError) || err.status !== 429 || attempt >= RATE_LIMIT_RETRIES) {
+        throw err;
+      }
+      const wait = (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (attempt + 1), MAX_RETRY_DELAY_MS);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
+async function callOnce<T>(path: string, init: CallInit): Promise<T> {
   const { method = "GET", body, auth = true } = init;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -51,11 +79,26 @@ async function call<T>(
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const text = await res.text();
-    const parsed = text ? (JSON.parse(text) as unknown) : {};
+    // An error body is not always JSON. A plain-text "Rate limit exceeded"
+    // used to throw inside JSON.parse, turning a retryable 429 into a 502
+    // whose message was the parser's complaint about the text.
+    let parsed: unknown = {};
+    try {
+      parsed = text ? (JSON.parse(text) as unknown) : {};
+    } catch {
+      if (res.ok) throw new LinqError("Linq returned a malformed response", 502);
+      parsed = { message: text.trim() };
+    }
     if (!res.ok) {
       const message =
-        (parsed as { message?: string })?.message ?? `Linq returned ${res.status}`;
-      throw new LinqError(message, res.status);
+        (parsed as { message?: string })?.message || `Linq returned ${res.status}`;
+      const header = res.headers?.get?.("retry-after");
+      const seconds = header == null ? Number.NaN : Number(header);
+      throw Object.assign(new LinqError(message, res.status), {
+        retryAfterMs: Number.isFinite(seconds)
+          ? Math.min(Math.max(0, seconds) * 1_000, MAX_RETRY_DELAY_MS)
+          : undefined,
+      });
     }
     return parsed as T;
   } catch (err) {

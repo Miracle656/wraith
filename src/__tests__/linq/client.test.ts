@@ -4,6 +4,7 @@
  * wrong and invisible when they are.
  */
 import {
+  getRate,
   retryOnProviderFailure,
   createOfframpOrder,
   checkStellarTrustline,
@@ -161,5 +162,37 @@ describe("retryOnProviderFailure", () => {
 
     await expect(retryOnProviderFailure(request, 0)).rejects.toThrow("Invalid account");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("provider rate limits", () => {
+  const limited = (body: string) => ({
+    ok: false,
+    status: 429,
+    headers: { get: (h: string) => (h.toLowerCase() === "retry-after" ? "0" : null) },
+    text: async () => body,
+  });
+
+  it("waits and retries a 429 instead of handing it to the user", async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(limited("Rate limit exceeded, please wait"))
+      .mockResolvedValueOnce(OK({ rate: 1363.4 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(getRate()).resolves.toEqual({ rate: 1363.4 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a plain-text error body as the message, with its real status", async () => {
+    const fetchMock = jest.fn().mockResolvedValue(limited("Rate limit exceeded, please wait"));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(getRate()).rejects.toMatchObject({
+      status: 429,
+      message: "Rate limit exceeded, please wait",
+    });
+    // The first attempt plus two retries, then it gives up.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

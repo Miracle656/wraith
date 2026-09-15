@@ -130,6 +130,14 @@ function formatCSVRow(values: unknown[]): string {
 export function createApp(): express.Application {
   const app = express();
 
+  // Render terminates the connection and forwards it, so without this every
+  // request's IP is the proxy's and the limiter below (60 per minute) is one
+  // bucket shared by every user of the app. A cash-out screen polls about ten
+  // times a minute; a handful of people at once emptied the bucket and the next
+  // person got "too many requests" for no reason of their own. One hop: trust
+  // Render's X-Forwarded-For, nothing further back.
+  app.set("trust proxy", 1);
+
   app.use(cors());
 
   // BEFORE express.json(). Linq signs the raw request body, so a parser that

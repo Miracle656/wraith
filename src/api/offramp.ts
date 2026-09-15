@@ -36,6 +36,9 @@ function isConfigured(): boolean {
  * taken out: a user-facing error is the one place it still leaked.
  */
 export function withoutProviderName(message: string): string {
+  if (/rate.?limit|too many requests/i.test(message)) {
+    return "The payout service is busy right now. Try again in a few seconds.";
+  }
   if (/wallet generation failed/i.test(message)) {
     // The provider could not mint the order's deposit address: their fault,
     // transient, and meaningless to a user in its own words.
@@ -71,13 +74,25 @@ export function createOfframpRouter(): Router {
     next();
   });
 
+  // Every cash-out screen asks for the rate when it opens, and each ask spends
+  // the provider allowance all users share. The rate is indicative (the binding
+  // one is locked into the order), so a few seconds of reuse costs nothing.
+  const RATE_CACHE_MS = 20_000;
+  let rateCache: { at: number; body: unknown } | null = null;
+
   router.get("/rate", async (_req: Request, res: Response) => {
+    if (rateCache && Date.now() - rateCache.at < RATE_CACHE_MS) {
+      res.json(rateCache.body);
+      return;
+    }
     try {
       const rate = await getRate();
       // Flagged indicative on purpose: the binding rate is the one locked into
       // an order at creation, and a client that caches this one quotes a
       // number the payout will not honour.
-      res.json({ ...rate, indicative: true });
+      const body = { ...rate, indicative: true };
+      rateCache = { at: Date.now(), body };
+      res.json(body);
     } catch (err) {
       sendLinqError(res, err);
     }
