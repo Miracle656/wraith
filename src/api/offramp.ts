@@ -260,6 +260,11 @@ export function createOfframpRouter(): Router {
         status: statusForClients(live.status),
         providerStatus: live.status,
         depositAddress: row.depositAddress,
+        // The rate and the creation time live in our row, not in the provider's
+        // status. Without them a wallet that reopens an order in flight shows
+        // "₦0 / USDC" and a countdown with no start, which reads as expired.
+        rate: Number(row.rate),
+        createdAt: row.createdAt.toISOString(),
         source: "linq",
       });
     } catch {
@@ -272,6 +277,8 @@ export function createOfframpRouter(): Router {
         amountStableCoin: Number(row.settledStableCoin ?? row.amountStableCoin),
         amountNGN: Number(row.settledNGN ?? row.amountNGN),
         depositAddress: row.depositAddress,
+        rate: Number(row.rate),
+        createdAt: row.createdAt.toISOString(),
         source: "cache",
       });
     }
