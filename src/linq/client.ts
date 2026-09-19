@@ -37,7 +37,32 @@ function apiKey(): string {
 const RATE_LIMIT_RETRIES = 2;
 const MAX_RETRY_DELAY_MS = 3_000;
 
-type CallInit = { method?: string; body?: unknown; auth?: boolean };
+/**
+ * Everything one logical provider operation may spend, retries included.
+ *
+ * Without this the budgets multiplied: three 15s attempts plus two 3s waits
+ * is 51s inside `call`, and `retryOnProviderFailure` could run that whole
+ * sequence twice — about 103 seconds on an order creation. The mobile client
+ * gives up after 20s, so users were told "cash out is unavailable" while this
+ * server was still working, and the order it went on to create never appeared
+ * in the app. A server that answers a person has to finish before they are
+ * told it failed, so this ceiling stays below every client timeout.
+ */
+const TOTAL_BUDGET_MS = 35_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type CallInit = {
+  method?: string;
+  body?: unknown;
+  auth?: boolean;
+  /**
+   * Absolute time (ms since epoch) this operation must be finished by.
+   * Defaults to {@link TOTAL_BUDGET_MS} from the first attempt. Pass one
+   * explicitly to share a single budget across several calls.
+   */
+  deadline?: number;
+};
 type RateLimited = LinqError & { retryAfterMs?: number };
 
 /**
@@ -51,23 +76,38 @@ type RateLimited = LinqError & { retryAfterMs?: number };
  * idempotencyKey) cannot create anything twice.
  */
 async function call<T>(path: string, init: CallInit = {}): Promise<T> {
+  const deadline = init.deadline ?? Date.now() + TOTAL_BUDGET_MS;
+
   for (let attempt = 0; ; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new LinqError("The payout service did not respond in time", 504);
+    }
+
     try {
-      return await callOnce<T>(path, init);
+      // Never wait past the deadline, even on the first attempt: a call made
+      // late in a shared budget gets what is left of it, not a fresh 15s.
+      return await callOnce<T>(path, init, Math.min(TIMEOUT_MS, remaining));
     } catch (err) {
       if (!(err instanceof LinqError) || err.status !== 429 || attempt >= RATE_LIMIT_RETRIES) {
         throw err;
       }
       const wait = (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (attempt + 1), MAX_RETRY_DELAY_MS);
-      await new Promise((r) => setTimeout(r, wait));
+      // A wait that would end after the deadline buys nothing; surface the 429.
+      if (Date.now() + wait >= deadline) throw err;
+      await sleep(wait);
     }
   }
 }
 
-async function callOnce<T>(path: string, init: CallInit): Promise<T> {
+async function callOnce<T>(
+  path: string,
+  init: CallInit,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<T> {
   const { method = "GET", body, auth = true } = init;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
       method,
@@ -241,9 +281,13 @@ export async function createOfframpOrder(
       400,
     );
   }
+  // One deadline for the attempt AND its retry, so the two budgets add up to
+  // TOTAL_BUDGET_MS rather than multiplying.
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
   const request = () =>
   call<OfframpOrderResponse>("/b2b/offramp", {
     method: "POST",
+    deadline,
     body: {
       ...params,
       chain: "stellar",
@@ -252,7 +296,7 @@ export async function createOfframpOrder(
       manualDeposit: true,
     },
   });
-  return retryOnProviderFailure(request);
+  return retryOnProviderFailure(request, 1_500, deadline);
 }
 
 /**
@@ -263,16 +307,22 @@ export async function createOfframpOrder(
  * shown that and left to try again by hand. A 4xx is about the request and
  * is never retried. The retry sends the identical body, idempotencyKey
  * included, so the provider can recognise it as the same order.
+ *
+ * `deadline` bounds the pair. Without it the retry doubled the caller's whole
+ * budget, which is how a 35s ceiling silently became 70.
  */
 export async function retryOnProviderFailure<T>(
   request: () => Promise<T>,
   delayMs = 1500,
+  deadline?: number,
 ): Promise<T> {
   try {
     return await request();
   } catch (err) {
     if (!(err instanceof LinqError) || err.status < 500) throw err;
-    await new Promise((r) => setTimeout(r, delayMs));
+    // No point sleeping into a deadline we cannot then do work before.
+    if (deadline !== undefined && Date.now() + delayMs >= deadline) throw err;
+    await sleep(delayMs);
     return request();
   }
 }
