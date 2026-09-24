@@ -9,9 +9,9 @@ import {
 
 const API_BASE_URL = process.env.INTEGRATION_API_URL ?? "http://localhost:3300";
 
-async function getJson(path: string) {
+async function getJson(path: string): Promise<Record<string, any>> {
   const response = await fetch(`${API_BASE_URL}${path}`);
-  const body = await response.json();
+  const body = (await response.json()) as Record<string, any>;
 
   expect(response.status, JSON.stringify(body)).toBe(200);
   return body;
