@@ -20,7 +20,7 @@ import {
   resolveLpPoolIds,
   loadKnownLpPools,
 } from "./indexer/lp-shares";
-import { pollParallel } from "./indexer/parallel";
+import { pollParallel, type ParallelFetchFn } from "./indexer/parallel";
 import { tombstoneExpiredContracts } from "./indexer/tombstones";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig, type SourceSwitcher } from "./indexer/sources";
@@ -128,7 +128,7 @@ const TOMBSTONE_EVERY_CYCLES = parseInt(
  * whose failover `preferred` field is mutable — a testnet RPC outage would
  * silently repoint the mainnet loop at testnet Horizon.
  */
-type LoopState = {
+export type LoopState = {
   network: Network;
   sacContractIds: string[];
   nftContractIds: string[];
@@ -228,6 +228,66 @@ export function runningNetworks(): Network[] {
 /** Test-only: drops loop state between cases. */
 export function _resetIndexerLoops(): void {
   loops.clear();
+}
+
+/**
+ * Test-only: build one loop's isolated state with an injectable event source.
+ *
+ * The harness (#172) must drive the real `pollOnce`/`pollParallel` code — not
+ * raw `db` upserts — so a missing `network` tag fails the same way production
+ * would. `createLoopState` hard-wires a live RPC/Horizon switcher, so this
+ * builds the same state then swaps in the stub source and registers the loop
+ * (so `/status` sees it via `runningNetworks()`/`getAllIndexerStats()`).
+ */
+export function _createLoopForTesting(
+  network: Network,
+  overrides?: Partial<LoopState>,
+): LoopState {
+  const loop = createLoopState(network);
+  if (overrides) Object.assign(loop, overrides);
+  loop.allContractIds = [...new Set([...loop.sacContractIds, ...loop.nftContractIds])];
+  loops.set(network, loop);
+  return loop;
+}
+
+/** Test-only: drive one real indexer poll step for `loop`. */
+export function _pollOnceForTesting(
+  loop: LoopState,
+  fromLedger: number,
+  latestLedger: number,
+): Promise<number> {
+  return pollOnce(loop, fromLedger, latestLedger);
+}
+
+/**
+ * Test-only: mirror the `startIndexer` dispatch so the harness covers both the
+ * single-worker (`pollOnce`) and `INGEST_WORKERS > 1` (`pollParallel`) paths
+ * through the same call signatures production uses.
+ */
+export async function _pollWindowForTesting(
+  loop: LoopState,
+  fromLedger: number,
+  targetLedger: number,
+  workerCount: number = INGEST_WORKERS,
+  fetchFn?: ParallelFetchFn,
+): Promise<number> {
+  const net = loop.network;
+  if (workerCount > 1 && loop.sacContractIds.length > 1) {
+    const { totalInserted, highestLedger } = await pollParallel(
+      loop.sacContractIds,
+      fromLedger,
+      targetLedger,
+      BATCH_SIZE,
+      workerCount,
+      net,
+      fetchFn,
+    );
+    loop.totalIndexed += totalInserted;
+    transfersStoredTotal.inc({ network: net, type: "fungible" }, totalInserted);
+    recordLedgerProgress(net, fromLedger, highestLedger);
+    return highestLedger;
+  }
+  return pollOnce(loop, fromLedger, targetLedger);
 }
 
 /**
