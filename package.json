@@ -1,7 +1,7 @@
 {
   "name": "wraith",
   "version": "1.0.0",
-  "description": "Soroban incoming token transfer indexer — fills the Horizon indexing gap for SEP-41/CAP-67 events",
+  "description": "Soroban incoming token transfer indexer \u2014 fills the Horizon indexing gap for SEP-41/CAP-67 events",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
@@ -19,7 +19,8 @@
     "docs:openapi": "ts-node src/openapi/build.ts",
     "backfill:summaries": "ts-node scripts/backfill-account-summaries.ts",
     "backfill": "ts-node src/cli.ts backfill",
-    "bench": "ts-node --project bench/tsconfig.json bench/insert.bench.ts"
+    "bench": "ts-node --project bench/tsconfig.json bench/insert.bench.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "jest": {
     "preset": "ts-jest",
@@ -41,7 +42,7 @@
       "^.+\\.tsx?$": [
         "ts-jest",
         {
-          "tsconfig": "tsconfig.test.json"
+          "tsconfig": "tsconfig.jest.json"
         }
       ]
     },

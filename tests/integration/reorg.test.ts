@@ -16,6 +16,7 @@
  * mirrors the Postgres @unique(eventId) constraint.
  */
 
+import { vi } from "vitest";
 import type { TransferRecord } from "../../src/db";
 
 // ── In-memory dedup store ───────────────────────────────────────────────────
