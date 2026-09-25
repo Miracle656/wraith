@@ -38,12 +38,12 @@ import { _resetTokenCache } from "../../src/tokenCache";
 import { _clearSacCache } from "../../src/indexer/sac-detect";
 import { createApp } from "../../src/api";
 
+const HAS_DB = !!process.env.DATABASE_URL;
 process.env.DATABASE_URL ??=
   "postgresql://wraith:wraith@localhost:55432/wraith_test";
 process.env.DIRECT_DATABASE_URL ??=
   "postgresql://wraith:wraith@localhost:55432/wraith_test";
 
-const HAS_DB = !!process.env.DATABASE_URL;
 const describeDual = HAS_DB ? describe : describe.skip;
 
 // ─── Identifiers ─────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ const MAIN_CONTRACTS = [CMAIN_A, CMAIN_B, CMAIN_NFT];
 // Valid G… addresses (checksum-correct) so Address.fromString works.
 const T_FROM = "GDWCO35QUYQLGO6P7OLW4BZWNMMGGUWNPLRVPLCBVG7YNVDZKUDIW4KN";
 const T_TO = "GCXOO7OIJZ2HEOZODLOEISNVO6CBPK4PISRJCZYRFT37H7XGHDLB3C7O";
-const SHARED = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+const SHARED = "GB3XEYLJORUC2ZDVMFWC23TFOR3W64TLFVZWQYLSMVSAAAAAAAAABFSX";
 
 const COLLISION_EVENT = "dual-collision-001";
 const OLD_DAYS = 60;
