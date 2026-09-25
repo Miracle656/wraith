@@ -127,13 +127,22 @@ export interface CacheMiddlewareOptions {
 const HEADER_NO_CACHE = "x-no-cache";
 const HEADER_CACHE_STATUS = "X-Cache";
 
-/** Stable key: sorts query params so `?a=1&b=2` and `?b=2&a=1` collide. */
+/** Stable key: encodes resolved network, method, path, and sorted query params. */
 export function defaultKeyFn(req: Request): string {
-  const entries = Object.entries(req.query as Record<string, unknown>)
+  const network =
+    req.network ??
+    (typeof req.query?.network === "string"
+      ? req.query.network
+      : typeof req.headers?.["x-network"] === "string"
+        ? req.headers["x-network"]
+        : undefined);
+  const entries = Object.entries((req.query as Record<string, unknown>) || {})
+    .filter(([k]) => k !== "network")
     .map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : String(v)] as const)
     .sort(([a], [b]) => a.localeCompare(b));
   const qs = entries.map(([k, v]) => `${k}=${v}`).join("&");
-  return `${req.method}:${req.baseUrl}${req.path}?${qs}`;
+  const prefix = network ? `${network}:` : "";
+  return `${prefix}${req.method}:${req.baseUrl}${req.path}?${qs}`;
 }
 
 /**
