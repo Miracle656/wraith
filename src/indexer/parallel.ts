@@ -12,11 +12,18 @@
  * required by the data model (eventId is the canonical ordering key).
  */
 
-import { fetchEventsSafe } from "../rpc";
+import { fetchEventsSafe, type RawEvent } from "../rpc";
 import { resolveNetwork, type Network } from "../network";
 import { parseEvents } from "../decoder";
 import { upsertTransfers, setLastIndexedLedger } from "../db";
 import { emitTransfer } from "../events";
+
+export type ParallelFetchFn = (
+  startLedger: number,
+  contractIds: string[],
+  limit?: number,
+  network?: Network,
+) => Promise<{ events: RawEvent[]; latestLedger: number }>;
 
 export const DEFAULT_WORKERS = 4;
 
@@ -48,13 +55,14 @@ async function runPartitionWorker(
   toLedger: number,
   batchSize: number,
   network: Network,
+  fetchFn?: ParallelFetchFn,
 ): Promise<WorkerResult> {
   const { events, highestLedger } = await fetchEventsSafe(
     fromLedger,
     toLedger,
     partition,
     batchSize,
-    undefined,
+    fetchFn,
     network,
   );
 
@@ -84,13 +92,14 @@ export async function pollParallel(
   batchSize: number,
   workerCount: number = DEFAULT_WORKERS,
   network?: Network,
+  fetchFn?: ParallelFetchFn,
 ): Promise<{ totalInserted: number; highestLedger: number }> {
   const net = resolveNetwork(network);
   const partitions = partitionByContract(contractIds, Math.min(workerCount, contractIds.length || 1));
 
   const results = await Promise.all(
     partitions.map(partition =>
-      runPartitionWorker(partition, fromLedger, toLedger, batchSize, net),
+      runPartitionWorker(partition, fromLedger, toLedger, batchSize, net, fetchFn),
     ),
   );
 
