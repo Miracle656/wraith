@@ -93,37 +93,67 @@ export interface RawEvent {
   value: xdr.ScVal;
 }
 
+/**
+ * One page of contract events plus the paging state needed to continue.
+ *
+ * `latestLedger` is the network tip and says nothing about which ledgers the
+ * returned events cover — a page can come back full and truncated. `cursor`
+ * is how that truncated page is resumed, and `maxLedger` is the highest
+ * `event.ledger` actually seen in this page.
+ */
+export interface FetchEventsPage {
+  events: RawEvent[];
+  /** Network tip the RPC reported alongside this page. */
+  latestLedger: number;
+  /** Opaque paging cursor for continuing after a full page. */
+  cursor: string | undefined;
+  /** Highest `event.ledger` in this page; 0 when it returned no events. */
+  maxLedger: number;
+}
+
+/** Options for {@link fetchEvents}. */
+export interface FetchEventsOptions {
+  /** Continue from a previous page's cursor instead of `startLedger`. */
+  cursor?: string;
+}
+
 // ─── getEvents wrapper ────────────────────────────────────────────────────────
 /**
- * Fetch contract events from Stellar RPC.
+ * Fetch one page of contract events from Stellar RPC.
  *
  * @param startLedger  First ledger to include (inclusive).
  * @param contractIds  Filter to specific contract IDs. Pass [] to skip filter.
  * @param limit        Max events per call (RPC hard-caps at 10 000).
  * @param network      Which chain to read. Defaults to the configured network.
+ * @param options      Continue from a cursor to read the next page.
  */
 export async function fetchEvents(
   startLedger: number,
   contractIds: string[],
   limit: number = 10_000,
-  network?: Network
-): Promise<{ events: RawEvent[]; latestLedger: number }> {
+  network?: Network,
+  options?: FetchEventsOptions
+): Promise<FetchEventsPage> {
   const rpc = getRpc(network);
 
-  // Build the request using the correct Server.GetEventsRequest type.
   // Api.EventFilter allows: type, contractIds (string[]), topics (string[][]).
-  const request: RPC.Server.GetEventsRequest = {
-    startLedger,
-    limit,
-    filters: [
-      {
-        type: "contract",
-        // Only pass contractIds if the caller is watching specific contracts;
-        // omitting the field lets RPC return events for all contracts.
-        ...(contractIds.length > 0 ? { contractIds } : {}),
-      },
-    ],
-  };
+  // `as const` keeps `type` a literal: extracting the array from its old
+  // inline position would otherwise widen it to `string`.
+  const filters = [
+    {
+      type: "contract" as const,
+      // Only pass contractIds if the caller is watching specific contracts;
+      // omitting the field lets RPC return events for all contracts.
+      ...(contractIds.length > 0 ? { contractIds } : {}),
+    },
+  ];
+
+  // Api.GetEventsRequest is a union of two mutually exclusive shapes: a range
+  // request starts at a ledger, a paging request continues from a cursor.
+  const cursor = options?.cursor;
+  const request: RPC.Server.GetEventsRequest = cursor
+    ? { cursor, limit, filters }
+    : { startLedger, limit, filters };
 
   const resp = await rpc.getEvents(request);
 
@@ -141,7 +171,9 @@ export async function fetchEvents(
     value: e.value,
   }));
 
-  return { events, latestLedger: resp.latestLedger };
+  const maxLedger = events.reduce((max, e) => Math.max(max, e.ledger), 0);
+
+  return { events, latestLedger: resp.latestLedger, cursor: resp.cursor, maxLedger };
 }
 
 // ─── Network tip helper ───────────────────────────────────────────────────────
@@ -187,9 +219,79 @@ export async function withRetry<T>(
  * batch fails with an XDR error, we bisect the ledger range to skip only the
  * single problematic ledger and continue indexing the rest.
  *
- * Returns all events that could be decoded, plus the highest ledger reached.
+ * Returns all events that could be decoded, plus the highest ledger *fully
+ * covered* by them — never the raw network tip.
  */
 type FetchFn = typeof fetchEvents
+
+/**
+ * Hard cap on how many getEvents round-trips one range may issue. A range
+ * holding more events than `limit` is drained a page at a time; this bound
+ * stops a pathological stream of full pages from making unbounded RPC calls in
+ * a single poll. When it is hit the range is treated as truncated and the
+ * caller only advances to the highest ledger it actually observed.
+ */
+export const EVENTS_PAGE_BUDGET = 20;
+
+/**
+ * Drain `[startLedger, endLedger]` by following the RPC cursor while pages come
+ * back full, up to {@link EVENTS_PAGE_BUDGET} pages.
+ *
+ * Events above `endLedger` are dropped rather than returned: cursor paging has
+ * no upper bound of its own, and ingesting past the caller's window would read
+ * the un-settled ledgers `TIP_LAG` exists to avoid.
+ */
+async function fetchRangePaged(
+  startLedger: number,
+  endLedger: number,
+  contractIds: string[],
+  limit: number,
+  _fetchFn: FetchFn,
+  network?: Network,
+): Promise<{ events: RawEvent[]; latestLedger: number; maxLedger: number; truncated: boolean }> {
+  const events: RawEvent[] = [];
+  let latestLedger = startLedger;
+  let maxLedger = 0;
+  let cursor: string | undefined;
+  let truncated = false;
+
+  for (let page = 0; page < EVENTS_PAGE_BUDGET; page++) {
+    // The first page addresses the range by startLedger; every later page
+    // continues from the cursor a full page handed back.
+    const res = cursor === undefined
+      ? await _fetchFn(startLedger, contractIds, limit, network)
+      : await _fetchFn(startLedger, contractIds, limit, network, { cursor });
+
+    latestLedger = res.latestLedger;
+    for (const event of res.events) {
+      if (event.ledger > maxLedger) maxLedger = event.ledger;
+      if (event.ledger <= endLedger) events.push(event);
+    }
+    // fetchEvents reports its own page maximum; fold it in so the bound holds
+    // even if a fetchFn returns a page whose `events` list was filtered.
+    if (typeof res.maxLedger === "number" && res.maxLedger > maxLedger) {
+      maxLedger = res.maxLedger;
+    }
+
+    const fullPage = res.events.length >= limit;
+    // A short page means the RPC had nothing more to return; a page that
+    // reached endLedger means the requested window is covered.
+    if (!fullPage || maxLedger >= endLedger) break;
+
+    const next = res.cursor;
+    if (!next) {
+      truncated = true;
+      break;
+    }
+    if (page === EVENTS_PAGE_BUDGET - 1) {
+      truncated = true;
+      break;
+    }
+    cursor = next;
+  }
+
+  return { events, latestLedger, maxLedger, truncated };
+}
 
 export async function fetchEventsSafe(
   startLedger: number,
@@ -215,8 +317,20 @@ export async function fetchEventsSafe(
   }
 
   try {
-    const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
-    return { events, highestLedger: latestLedger };
+    const { events, latestLedger, maxLedger, truncated } = await fetchRangePaged(
+      startLedger,
+      endLedger,
+      contractIds,
+      limit,
+      _fetchFn,
+      network,
+    );
+    // The cursor may only advance to the highest ledger the drained pages
+    // actually covered, and never past endLedger. When the page budget cut the
+    // range short we have not fully covered `latestLedger`, so fall back to
+    // the highest event we actually saw.
+    const lastFullyCovered = truncated ? maxLedger : latestLedger;
+    return { events, highestLedger: Math.min(lastFullyCovered, endLedger) };
   } catch (err) {
     const msg = (err as Error).message ?? "";
     if (!msg.includes("XDR") && !msg.includes("unknown")) throw err;
