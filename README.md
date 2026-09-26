@@ -331,6 +331,55 @@ console.log(data);
 
 Base URL: `http://localhost:3000`
 
+### Selecting a network
+
+Wraith stores testnet and mainnet rows in the same tables, discriminated by a
+`network` column, and a single process can index both (`NETWORKS=testnet,mainnet`).
+Every read route accepts a selector so a caller can say which one it wants:
+
+```bash
+# query parameter
+curl "http://localhost:3000/transfers/incoming/GABC…?network=mainnet"
+
+# or a header — the query parameter wins if both are present
+curl -H "X-Network: mainnet" http://localhost:3000/transfers/incoming/GABC…
+```
+
+Omit it and you get the deployment's configured network (`STELLAR_NETWORK`,
+defaulting to testnet) — the behaviour every route had before the selector
+existed, so nothing changes for existing callers.
+
+Two kinds of rejection, both `400`, because they need different fixes:
+
+| Request | Response |
+| ------- | -------- |
+| `?network=mainet` | `Invalid network: "mainet". Valid values: testnet, mainnet.` |
+| `?network=mainnet` on a testnet-only deployment | `Network "mainnet" is not enabled on this deployment. Enabled networks: testnet.` |
+
+An un-indexed network is refused rather than answered with an empty list: "no
+transfers" and "this process has never looked at that chain" are different
+statements, and returning `[]` for both is how a dashboard ends up confidently
+showing zero.
+
+**GraphQL** takes the same `?network=` / `X-Network` selector, and each field
+also accepts a `network:` argument that overrides it — so one document can read
+both chains in a single round-trip:
+
+```graphql
+{
+  testnet: transfers(address: "GABC…", network: TESTNET) { total }
+  mainnet: transfers(address: "GABC…", network: MAINNET) { total }
+}
+```
+
+**WebSockets** take it on the upgrade URL — `ws://host/subscribe/GABC…?network=mainnet`
+— and the stream is filtered to that network. A socket opened with an invalid or
+un-enabled selector is closed with code `1008` and the reason, rather than left
+open delivering nothing. GraphQL subscriptions work the same way on
+`/graphql/subscriptions`, with an optional per-subscription `network:` argument.
+
+***
+
 ### `GET /status`
 
 Indexer health — current ledger, network tip, lag, uptime.
@@ -342,14 +391,93 @@ curl http://localhost:3000/status
 ```json
 {
   "ok": true,
+  "network": "testnet",
   "lastIndexedLedger": 5842100,
+  "last_indexed_ledger": 5842100,
   "latestLedger": 5842102,
   "lagLedgers": 2,
   "startedAt": "2025-10-01T10:00:00.000Z",
   "uptimeSeconds": 3600,
-  "totalIndexed": 12430
+  "totalIndexed": 12430,
+  "networks": {
+    "testnet": { "lastIndexedLedger": 5842100, "latestLedger": 5842102, "lagLedgers": 2, "running": true }
+  }
 }
 ```
+
+`last_indexed_ledger` is a snake_case alias of `lastIndexedLedger` — the same
+name the Prometheus gauge is exported under. Both always carry the same value.
+
+`network` names which chain the top-level fields describe — it follows the
+selector. `networks` reports every running loop regardless of the selector, so a
+single response shows one chain falling behind while the other is healthy.
+
+***
+
+### `GET /metrics`
+
+Indexer and process metrics in Prometheus text exposition format, for scraping,
+dashboards, and alerting.
+
+```bash
+curl http://localhost:3000/metrics
+```
+
+```
+# HELP ledgers_indexed_total Ledgers advanced through by the indexer, per network
+# TYPE ledgers_indexed_total counter
+ledgers_indexed_total{network="mainnet"} 48213
+# HELP last_indexed_ledger Highest ledger sequence committed by the indexer, per network
+# TYPE last_indexed_ledger gauge
+last_indexed_ledger{network="mainnet"} 5842100
+```
+
+| Metric | Type | Labels | What it says |
+| ------ | ---- | ------ | ------------ |
+| `ledgers_indexed_total` | counter | `network` | Ledgers the indexer has advanced through. A flat `rate()` on a network whose loop should be running means it has stalled. |
+| `transfers_stored_total` | counter | `network`, `type` | Rows persisted, split `fungible` / `nft` — one parse path can break while the other keeps working. |
+| `rpc_errors_total` | counter | `outcome` | Failed RPC attempts. `retry` counts attempts `withRetry` absorbed, `exhausted` counts calls that gave up — a degrading endpoint shows up in `retry` long before it fails a call. |
+| `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
+| `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
+
+Standard `process_*` and `nodejs_*` metrics are exported alongside these.
+
+The endpoint reads in-process counters only — no DB, no RPC — so it keeps
+answering while the subsystems it reports on are down, and it is exempt from the
+API rate limit so scrapes do not go dark under load.
+
+***
+
+### `GET /readyz`
+
+Readiness probe. `checks` and `as_of_ledger` describe the selected network;
+`networks` carries the same checks for every enabled network.
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "network": "testnet",
+  "checks": { "db": true, "rpc": true, "indexerCaughtUp": true },
+  "networks": {
+    "testnet": {
+      "checks": { "db": true, "rpc": true, "indexerCaughtUp": true },
+      "lastIndexedLedger": 5842100,
+      "latestLedger": 5842102,
+      "lagLedgers": 2
+    },
+    "mainnet": {
+      "checks": { "db": true, "rpc": false, "indexerCaughtUp": false },
+      "lastIndexedLedger": 51234000,
+      "latestLedger": null,
+      "lagLedgers": null
+    }
+  }
+}
+```
+
+The database is checked once rather than per network — a dead database is not a
+per-chain condition — and a `503 down` verdict still reports every network.
 
 ***
 
@@ -359,6 +487,7 @@ All token transfers **received** by an address.
 
 | Param        | Type   | Description                                  |
 | ------------ | ------ | -------------------------------------------- |
+| `network`    | string | `testnet` or `mainnet` (see above)           |
 | `contractId` | string | Filter to a specific token contract (`C...`) |
 | `fromLedger` | int    | Inclusive lower ledger bound                 |
 | `toLedger`   | int    | Inclusive upper ledger bound                 |
@@ -411,6 +540,7 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
 | `EVENTS_BATCH_SIZE`   | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
+| `NETWORKS`            | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
 | `PORT`                | `3000`        | REST API port                                                                                 |
 
 ### RPC URL Resolution
@@ -437,6 +567,101 @@ If `HORIZON_URL` is set, the indexer checks the RPC source first and switches to
 | Futurenet (public) | `https://rpc-futurenet.stellar.org`                       |
 
 > **Important:** Stellar RPC retains \~7 days of event history. For longer historical coverage, use [Galexie](https://developers.stellar.org/docs/data/indexers) + the [Token Transfer Processor](https://developers.stellar.org/docs/data/indexers/build-your-own/processors/token-transfer-processor).
+
+***
+
+## JSON:API Content Negotiation
+
+All `GET` endpoints support the JSON:API specification via content negotiation. Include an `Accept: application/vnd.api+json` header to receive responses in JSON:API format.
+
+### JSON:API Response Structure
+
+Responses are transformed to the JSON:API document structure:
+
+- **Collection endpoints** return an array in the `data` member with pagination metadata in `meta`
+- **Single resource endpoints** return a single resource object in `data`
+- **Error responses** return an array in the `errors` member with `title` and `detail` fields
+- **Dates** are serialized as ISO 8601 strings
+- **BigInt values** are converted to strings
+
+### Example: Transfers in JSON:API Format
+
+```bash
+# Request with JSON:API Accept header
+curl -H "Accept: application/vnd.api+json" http://localhost:3000/transfers/address/GABC123...
+
+# Response
+{
+  "data": [
+    {
+      "id": "evt-001",
+      "type": "transfer",
+      "attributes": {
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "eventType": "transfer",
+        "fromAddress": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF",
+        "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        "amount": "10000000",
+        "ledger": 1001,
+        "ledgerClosedAt": "2025-01-01T00:00:00.000Z",
+        "txHash": "aaaa1111",
+        "displayAmount": "1.0000000"
+      }
+    }
+  ],
+  "meta": {
+    "total": 1,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+### Example: Summary in JSON:API Format
+
+```bash
+curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123...
+
+{
+  "data": [
+    {
+      "id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      "type": "token-summary",
+      "attributes": {
+        "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "totalReceived": "110000000",
+        "totalSent": "170000000",
+        "netFlow": "-60000000",
+        "txCount": 3
+      }
+    }
+  ],
+  "meta": {
+    "address": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "window": { "fromDate": null, "toDate": null }
+  }
+}
+```
+
+### Supported Endpoints
+
+| Endpoint | Resource Type |
+|----------|---------------|
+| `GET /transfers/address/:address` | `transfer` |
+| `GET /transfers/incoming/:address` | `transfer` |
+| `GET /transfers/outgoing/:address` | `transfer` |
+| `GET /transfers/tx/:txHash` | `transfer` |
+| `GET /summary/:address` | `token-summary` |
+| `GET /accounts/:address/summary` | `account-summary` |
+| `GET /accounts/:address/transfers` | `transfer` |
+| `GET /assets/popular` | `popular-asset` |
+| `GET /nfts/transfers` | `nft-transfer` |
+| `GET /nfts/owners/:contract/:token_id` | `nft-owner` |
+| `GET /status` | `status` |
+| `GET /healthz` | `health` |
+| `GET /readyz` | `readiness` |
+
+`GET /metrics` is not a JSON:API resource — it serves Prometheus text format.
 
 ***
 

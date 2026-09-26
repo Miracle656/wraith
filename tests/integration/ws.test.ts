@@ -25,8 +25,14 @@ function makeTransfer(overrides: Partial<TransferEvent> = {}): TransferEvent {
     ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
     txHash: "txhash",
     eventId: "ev-1",
+    network: "testnet",
     ...overrides,
   };
+}
+
+function emit(transfer: TransferEvent): void {
+  const { network, ...record } = transfer;
+  emitTransfer(record, network);
 }
 
 /** Start a test server; resolves when it's listening. */
@@ -91,7 +97,7 @@ describe("WebSocket /subscribe/:address", () => {
     const ws = await connect(serverUrl, `/subscribe/${ADDR}`);
     const pending = collectMessages(ws, 1);
 
-    emitTransfer(makeTransfer({ toAddress: ADDR }));
+    emit(makeTransfer({ toAddress: ADDR }));
 
     const [msg] = await pending as [Record<string, unknown>];
     expect(msg.toAddress).toBe(ADDR);
@@ -104,7 +110,7 @@ describe("WebSocket /subscribe/:address", () => {
     const ws = await connect(serverUrl, `/subscribe/${ADDR}`);
     const pending = collectMessages(ws, 1);
 
-    emitTransfer(makeTransfer({ fromAddress: ADDR, toAddress: OTHER }));
+    emit(makeTransfer({ fromAddress: ADDR, toAddress: OTHER }));
 
     const [msg] = await pending as [Record<string, unknown>];
     expect(msg.fromAddress).toBe(ADDR);
@@ -119,7 +125,7 @@ describe("WebSocket /subscribe/:address", () => {
     ws.on("message", () => { received = true; });
 
     // emit for a completely different address
-    emitTransfer(makeTransfer({ fromAddress: OTHER, toAddress: "GTHIRD" }));
+    emit(makeTransfer({ fromAddress: OTHER, toAddress: "GTHIRD" }));
 
     // small wait to confirm nothing arrives
     await new Promise((r) => setTimeout(r, 50));
@@ -132,8 +138,8 @@ describe("WebSocket /subscribe/:address", () => {
     const ws = await connect(serverUrl, `/subscribe/${ADDR}`);
     const pending = collectMessages(ws, 2);
 
-    emitTransfer(makeTransfer({ toAddress: ADDR, eventId: "ev-a" }));
-    emitTransfer(makeTransfer({ toAddress: ADDR, eventId: "ev-b" }));
+    emit(makeTransfer({ toAddress: ADDR, eventId: "ev-a" }));
+    emit(makeTransfer({ toAddress: ADDR, eventId: "ev-b" }));
 
     const msgs = await pending as Array<Record<string, unknown>>;
     expect(msgs.map((m) => m.eventId)).toEqual(["ev-a", "ev-b"]);
@@ -143,7 +149,7 @@ describe("WebSocket /subscribe/:address", () => {
     await new Promise((r) => setTimeout(r, 30));
 
     // Emitting after disconnect should not throw
-    expect(() => emitTransfer(makeTransfer({ toAddress: ADDR }))).not.toThrow();
+    expect(() => emit(makeTransfer({ toAddress: ADDR }))).not.toThrow();
   });
 
   it("backpressure — buffers many rapid messages without error", async () => {
@@ -154,7 +160,7 @@ describe("WebSocket /subscribe/:address", () => {
 
     // Fire all transfers synchronously — simulates a fast producer / slow consumer
     for (let i = 0; i < COUNT; i++) {
-      emitTransfer(makeTransfer({ toAddress: ADDR, eventId: `bp-${i}` }));
+      emit(makeTransfer({ toAddress: ADDR, eventId: `bp-${i}` }));
     }
 
     const msgs = await pending as Array<Record<string, unknown>>;

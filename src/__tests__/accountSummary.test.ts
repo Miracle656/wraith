@@ -26,6 +26,10 @@ jest.mock("../rpc", () => ({
 }));
 
 jest.mock("../indexer", () => ({
+  // #161: /status also reads per-network loop state. Listed explicitly
+  // because a partial mock silently 500s the route rather than failing loudly.
+  getAllIndexerStats: jest.fn().mockReturnValue({}),
+  runningNetworks: jest.fn().mockReturnValue([]),
   getIndexerStats: jest.fn().mockReturnValue({ startedAt: "2024-01-01T00:00:00Z", uptimeSeconds: 0, totalIndexed: 0 }),
 }));
 
@@ -80,7 +84,7 @@ describe("GET /accounts/:address/summary", () => {
 
     await supertest(app).get(`/accounts/${ALICE}/summary?contractId=${CONTRACT}`);
 
-    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT);
+    expect(getAccountSummary).toHaveBeenCalledWith(ALICE, CONTRACT, "testnet");
   });
 
   it("returns account transfers and supports token filter", async () => {

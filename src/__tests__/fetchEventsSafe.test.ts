@@ -115,6 +115,8 @@ describe('fetchEventsSafe — bisection algorithm', () => {
 
     await fetchEventsSafe(100, 100, contracts, 5_000, fetch as any)
 
-    expect(fetch).toHaveBeenCalledWith(100, contracts, 5_000)
+    // fetchEventsSafe now forwards the network as a 4th argument (#161);
+    // undefined here means "the configured network", the single-network default.
+    expect(fetch).toHaveBeenCalledWith(100, contracts, 5_000, undefined)
   })
 })

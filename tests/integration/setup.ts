@@ -11,7 +11,12 @@ async function waitForApi(): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${API_BASE_URL}/healthz`);
+      // Per-request timeout: without it a single hung connection (an unhealthy
+      // container that accepts sockets but never responds) blocks forever and
+      // the deadline check below is never reached.
+      const response = await fetch(`${API_BASE_URL}/healthz`, {
+        signal: AbortSignal.timeout(5_000),
+      });
       if (response.ok) return;
     } catch {
       // The compose service may still be booting.
@@ -31,7 +36,7 @@ export async function seedIntegrationFixtures(): Promise<void> {
     await prisma.tokenTransfer.deleteMany();
     await prisma.indexerState.deleteMany();
     await prisma.tokenTransfer.createMany({ data: seedTransfers });
-    await prisma.indexerState.create({ data: { id: 1, lastIndexedLedger: 2006 } });
+    await prisma.indexerState.create({ data: { network: 'testnet', lastIndexedLedger: 2006 } });
   } finally {
     await prisma.$disconnect();
   }

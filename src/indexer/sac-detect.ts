@@ -20,6 +20,7 @@
 
 import { xdr } from "@stellar/stellar-sdk";
 import { getRpc } from "../rpc";
+import { resolveNetwork, type Network } from "../network";
 
 // ─── Known SACs ───────────────────────────────────────────────────────────────
 // The native XLM SAC on mainnet and testnet. These are fixed by the network and
@@ -61,9 +62,12 @@ export function instanceValIsSac(val: xdr.ScVal): boolean {
  */
 export type InstanceFetcher = (contractId: string) => Promise<xdr.ScVal | null>;
 
-async function fetchInstanceVal(contractId: string): Promise<xdr.ScVal | null> {
+async function fetchInstanceVal(
+  contractId: string,
+  network?: Network,
+): Promise<xdr.ScVal | null> {
   try {
-    const entry = await getRpc().getContractData(
+    const entry = await getRpc(network).getContractData(
       contractId,
       xdr.ScVal.scvLedgerKeyContractInstance(),
     );
@@ -78,6 +82,9 @@ async function fetchInstanceVal(contractId: string): Promise<xdr.ScVal | null> {
 
 const cache = new Map<string, boolean>();
 
+/** Cache key — namespaced by network so concurrent loops never share entries. */
+const cacheKey = (network: Network, contractId: string) => `${network}:${contractId}`;
+
 /**
  * Detect whether `contractId` is a Stellar Asset Contract. Cached per contract.
  *
@@ -86,16 +93,21 @@ const cache = new Map<string, boolean>();
  */
 export async function detectSac(
   contractId: string,
-  fetchInstance: InstanceFetcher = fetchInstanceVal,
+  fetchInstance?: InstanceFetcher,
+  network?: Network,
 ): Promise<boolean> {
   if (KNOWN_SAC_IDS.has(contractId)) return true;
 
-  const cached = cache.get(contractId);
+  const net = resolveNetwork(network);
+  const key = cacheKey(net, contractId);
+
+  const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
-  const val = await fetchInstance(contractId);
+  const fetcher = fetchInstance ?? ((id: string) => fetchInstanceVal(id, net));
+  const val = await fetcher(contractId);
   const isSac = val !== null && instanceValIsSac(val);
-  cache.set(contractId, isSac);
+  cache.set(key, isSac);
   return isSac;
 }
 
@@ -105,11 +117,12 @@ export async function detectSac(
  */
 export async function detectSacBatch(
   contractIds: Iterable<string>,
-  fetchInstance: InstanceFetcher = fetchInstanceVal,
+  fetchInstance?: InstanceFetcher,
+  network?: Network,
 ): Promise<Map<string, boolean>> {
   const unique = [...new Set(contractIds)];
   const results = await Promise.all(
-    unique.map(async (id) => [id, await detectSac(id, fetchInstance)] as const),
+    unique.map(async (id) => [id, await detectSac(id, fetchInstance, network)] as const),
   );
   return new Map(results);
 }
@@ -121,12 +134,14 @@ export async function detectSacBatch(
  */
 export async function tagSacTransfers<T extends { contractId: string; isSac?: boolean }>(
   records: T[],
-  fetchInstance: InstanceFetcher = fetchInstanceVal,
+  fetchInstance?: InstanceFetcher,
+  network?: Network,
 ): Promise<T[]> {
   if (records.length === 0) return records;
   const byContract = await detectSacBatch(
     records.map((r) => r.contractId),
     fetchInstance,
+    network,
   );
   for (const record of records) {
     record.isSac = byContract.get(record.contractId) ?? false;

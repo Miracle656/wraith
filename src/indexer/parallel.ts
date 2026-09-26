@@ -13,6 +13,7 @@
  */
 
 import { fetchEventsSafe } from "../rpc";
+import { resolveNetwork, type Network } from "../network";
 import { parseEvents } from "../decoder";
 import { upsertTransfers, setLastIndexedLedger } from "../db";
 import { emitTransfer } from "../events";
@@ -46,12 +47,15 @@ async function runPartitionWorker(
   fromLedger: number,
   toLedger: number,
   batchSize: number,
+  network: Network,
 ): Promise<WorkerResult> {
   const { events, highestLedger } = await fetchEventsSafe(
     fromLedger,
     toLedger,
     partition,
     batchSize,
+    undefined,
+    network,
   );
 
   if (events.length === 0) {
@@ -59,10 +63,10 @@ async function runPartitionWorker(
   }
 
   const records = parseEvents(events);
-  const inserted = await upsertTransfers(records);
+  const inserted = await upsertTransfers(records, network);
 
   if (inserted > 0) {
-    records.forEach(emitTransfer);
+    records.forEach((record) => emitTransfer(record, network));
   }
 
   return { inserted, highestLedger };
@@ -79,12 +83,14 @@ export async function pollParallel(
   toLedger: number,
   batchSize: number,
   workerCount: number = DEFAULT_WORKERS,
+  network?: Network,
 ): Promise<{ totalInserted: number; highestLedger: number }> {
+  const net = resolveNetwork(network);
   const partitions = partitionByContract(contractIds, Math.min(workerCount, contractIds.length || 1));
 
   const results = await Promise.all(
     partitions.map(partition =>
-      runPartitionWorker(partition, fromLedger, toLedger, batchSize),
+      runPartitionWorker(partition, fromLedger, toLedger, batchSize, net),
     ),
   );
 
@@ -94,11 +100,11 @@ export async function pollParallel(
     fromLedger,
   );
 
-  await setLastIndexedLedger(highestLedger);
+  await setLastIndexedLedger(highestLedger, net);
 
   if (totalInserted > 0) {
     console.log(
-      `[parallel] ${partitions.length} workers processed ${totalInserted} new records (ledger ${highestLedger})`,
+      `[parallel/${net}] ${partitions.length} workers processed ${totalInserted} new records (ledger ${highestLedger})`,
     );
   }
 

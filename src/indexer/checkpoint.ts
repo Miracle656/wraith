@@ -1,8 +1,9 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db";
+import { prisma, upsertAccountSummaries } from "../db";
 import type { TransferRecord } from "../db";
 import type { NftTransferRecord } from "../ingester/nft";
 import type { HostFnRecord } from "./host-fn-log";
+import { resolveNetwork, type Network } from "../network";
 
 /**
  * Batch metadata for atomic processing.
@@ -29,20 +30,26 @@ export interface BatchPayload {
  * Useful for idempotent restart: if we crash mid-batch, resuming with the same
  * batchId allows us to skip re-processing.
  */
-export async function hasCheckpoint(batchId: string): Promise<boolean> {
+export async function hasCheckpoint(batchId: string, network?: Network): Promise<boolean> {
   const checkpoint = await prisma.indexerCheckpoint.findUnique({
-    where: { batchId },
+    where: { network_batchId: { network: resolveNetwork(network), batchId } },
     select: { id: true },
   });
   return checkpoint !== null;
 }
 
 /**
- * Get the most recent checkpoint across all batches (for single-worker resume).
- * Returns the last ledger we successfully processed, or null if no checkpoints exist.
+ * Get the most recent checkpoint across all batches on one network (for
+ * single-worker resume). Returns the last ledger we successfully processed, or
+ * null if no checkpoints exist.
+ *
+ * Scoping is not optional here: ledger sequences are per-chain, so an unscoped
+ * "highest lastLedger" would hand a mainnet worker testnet's far-ahead tip and
+ * skip every mainnet ledger in between.
  */
-export async function getLastCheckpoint(): Promise<number | null> {
+export async function getLastCheckpoint(network?: Network): Promise<number | null> {
   const checkpoint = await prisma.indexerCheckpoint.findFirst({
+    where: { network: resolveNetwork(network) },
     orderBy: { lastLedger: "desc" },
     select: { lastLedger: true },
   });
@@ -66,37 +73,44 @@ export async function getLastCheckpoint(): Promise<number | null> {
 export async function commitBatch(
   metadata: BatchMetadata,
   payload: BatchPayload,
+  network?: Network,
 ): Promise<{
   transferred: number;
   nftTransferred: number;
   hostFnLogs: number;
 }> {
+  // Stamped explicitly on every row. The column has a DEFAULT of 'testnet', so
+  // omitting it compiles and silently files mainnet events under testnet —
+  // the one failure mode in #159 that no type error would catch.
+  const net = resolveNetwork(network);
+
   const result = await prisma.$transaction(async (tx) => {
-    // Upsert token transfers (idempotent by eventId)
+    // Upsert token transfers (idempotent by (network, eventId))
     const transferred = payload.transfers.length
       ? (
           await tx.tokenTransfer.createMany({
-            data: payload.transfers,
+            data: payload.transfers.map((r) => ({ ...r, network: net })),
             skipDuplicates: true,
           })
         ).count
       : 0;
 
-    // Upsert NFT transfers (idempotent by eventId)
+    // Upsert NFT transfers (idempotent by (network, eventId))
     const nftTransferred = payload.nftTransfers.length
       ? (
           await tx.nftTransfer.createMany({
-            data: payload.nftTransfers,
+            data: payload.nftTransfers.map((r) => ({ ...r, network: net })),
             skipDuplicates: true,
           })
         ).count
       : 0;
 
-    // Upsert host function logs (idempotent by eventId)
+    // Upsert host function logs (idempotent by (network, eventId))
     const hostFnLogs = payload.hostFnLogs.length
       ? (
           await tx.hostFnLog.createMany({
             data: payload.hostFnLogs.map((r) => ({
+              network: net,
               contractId: r.contractId,
               functionName: r.functionName,
               args: r.args as Prisma.InputJsonValue,
@@ -118,8 +132,9 @@ export async function commitBatch(
     // Atomically advance the checkpoint. On reprocessing the same batchId,
     // this upsert will update the timestamp but keep the same lastLedger.
     await tx.indexerCheckpoint.upsert({
-      where: { batchId: metadata.batchId },
+      where: { network_batchId: { network: net, batchId: metadata.batchId } },
       create: {
+        network: net,
         batchId: metadata.batchId,
         lastLedger: metadata.toLedger,
       },
@@ -137,90 +152,21 @@ export async function commitBatch(
 
 /**
  * Update account summaries for the given transfer records.
- * This is called separately after the main batch commit because it's a derived
- * table that aggregates from transfers. If this fails, we don't lose data.
+ * This is called separately after the main batch commit because it is a
+ * derived table that aggregates from transfers. If this fails, we do not lose
+ * data.
+ *
+ * Delegates to `upsertAccountSummaries` in db.ts rather than keeping a second
+ * copy of the raw upsert. The two had drifted into byte-identical duplicates,
+ * and #159 made that actively dangerous: the statement carries an
+ * `ON CONFLICT (network, address, contractId)` target that has to match the
+ * unique index exactly, so a copy left behind would throw
+ * "no unique or exclusion constraint matching the ON CONFLICT specification"
+ * on every write.
  */
 export async function updateAccountSummaries(
   records: TransferRecord[],
+  network?: Network,
 ): Promise<void> {
-  if (records.length === 0) return;
-
-  // Accumulate deltas keyed by "address|contractId"
-  const deltas = new Map<
-    string,
-    {
-      address: string;
-      contractId: string;
-      sent: bigint;
-      received: bigint;
-      count: number;
-      lastAt: Date;
-    }
-  >();
-
-  const touch = (
-    address: string,
-    contractId: string,
-    sent: bigint,
-    received: bigint,
-    at: Date,
-  ) => {
-    const key = `${address}|${contractId}`;
-    const prev = deltas.get(key) ?? {
-      address,
-      contractId,
-      sent: 0n,
-      received: 0n,
-      count: 0,
-      lastAt: at,
-    };
-    deltas.set(key, {
-      address,
-      contractId,
-      sent: prev.sent + sent,
-      received: prev.received + received,
-      count: prev.count + 1,
-      lastAt: at > prev.lastAt ? at : prev.lastAt,
-    });
-  };
-
-  for (const {
-    contractId,
-    fromAddress,
-    toAddress,
-    amount,
-    ledgerClosedAt,
-  } of records) {
-    const amt = BigInt(amount);
-    if (fromAddress) touch(fromAddress, contractId, amt, 0n, ledgerClosedAt);
-    if (toAddress) touch(toAddress, contractId, 0n, amt, ledgerClosedAt);
-  }
-
-  for (const {
-    address,
-    contractId,
-    sent,
-    received,
-    count,
-    lastAt,
-  } of deltas.values()) {
-    const sentStr = sent.toString();
-    const receivedStr = received.toString();
-    const netStr = (received - sent).toString();
-
-    await prisma.$executeRaw`
-      INSERT INTO wraith."AccountSummary"
-        (address, "contractId", "totalSent", "totalReceived", net, "txCount", "lastActivityAt", "updatedAt")
-      VALUES
-        (${address}, ${contractId}, ${sentStr}, ${receivedStr}, ${netStr}, ${count}, ${lastAt}, NOW())
-      ON CONFLICT (address, "contractId") DO UPDATE SET
-        "totalSent"      = (wraith."AccountSummary"."totalSent"::NUMERIC     + ${sentStr}::NUMERIC)::TEXT,
-        "totalReceived"  = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC)::TEXT,
-        net              = (wraith."AccountSummary"."totalReceived"::NUMERIC  + ${receivedStr}::NUMERIC
-                           - wraith."AccountSummary"."totalSent"::NUMERIC     - ${sentStr}::NUMERIC)::TEXT,
-        "txCount"        = wraith."AccountSummary"."txCount" + ${count},
-        "lastActivityAt" = GREATEST(wraith."AccountSummary"."lastActivityAt", ${lastAt}),
-        "updatedAt"      = NOW()
-    `;
-  }
+  await upsertAccountSummaries(records, resolveNetwork(network));
 }

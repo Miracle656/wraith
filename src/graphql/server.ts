@@ -8,8 +8,15 @@ import {
 } from "../db";
 import { costLimitPlugin } from "./costLimit";
 import { persistedQueryPlugin } from "./persisted";
+import { requestNetwork } from "../middleware/network";
+import { enabledNetworks, isNetwork, NETWORKS, currentNetwork, type Network } from "../network";
 
-const typeDefs = `#graphql
+export const typeDefs = `#graphql
+  enum Network {
+    TESTNET
+    MAINNET
+  }
+
   enum TransferDirection {
     INCOMING
     OUTGOING
@@ -55,17 +62,54 @@ const typeDefs = `#graphql
       address: String!
       direction: TransferDirection = ALL
       contractId: String
+      network: Network
       limit: Int = 50
       offset: Int = 0
     ): TransferConnection!
-    transferByTx(txHash: String!): [Transfer!]!
-    summary(address: String!, contractId: String): [TokenSummary!]!
+    transferByTx(txHash: String!, network: Network): [Transfer!]!
+    summary(address: String!, contractId: String, network: Network): [TokenSummary!]!
   }
 `;
 
 type TransferDirection = "INCOMING" | "OUTGOING" | "ALL";
+type NetworkArg = "TESTNET" | "MAINNET";
 
-function formatTransfer(row: Record<string, unknown>) {
+/** What every resolver receives: the network the HTTP request selected (#163). */
+export interface GraphQLContext {
+  network: Network;
+}
+
+/**
+ * Decide which network one field reads from.
+ *
+ * A field-level `network:` argument wins over the request-level selector, so a
+ * single document can compare two chains in one round-trip. With neither, the
+ * context's network applies — which is the `?network=` / `X-Network` value, and
+ * failing that the process default.
+ *
+ * An argument naming a network this deployment does not serve throws rather
+ * than returning nothing: an empty list would read as "no such transfers"
+ * instead of "this process has never indexed that chain".
+ */
+function resolveArgNetwork(arg: NetworkArg | undefined, ctx: GraphQLContext | undefined): Network {
+  if (arg === undefined) return ctx?.network ?? currentNetwork();
+
+  const normalised = arg.toLowerCase();
+  if (!isNetwork(normalised)) {
+    throw new Error(`Invalid network: "${arg}". Valid values: ${NETWORKS.join(", ")}.`);
+  }
+
+  const enabled = enabledNetworks();
+  if (!enabled.includes(normalised)) {
+    throw new Error(
+      `Network "${normalised}" is not enabled on this deployment. Enabled networks: ${enabled.join(", ")}.`
+    );
+  }
+
+  return normalised;
+}
+
+export function formatTransfer(row: Record<string, unknown>) {
   return {
     ...row,
     ledgerClosedAt:
@@ -75,7 +119,7 @@ function formatTransfer(row: Record<string, unknown>) {
   };
 }
 
-const resolvers = {
+export const resolvers = {
   Query: {
     health: () => ({ ok: true, version: process.env.npm_package_version ?? "1.0.0" }),
 
@@ -85,11 +129,14 @@ const resolvers = {
         address: string;
         direction: TransferDirection;
         contractId?: string;
+        network?: NetworkArg;
         limit?: number;
         offset?: number;
-      }
+      },
+      ctx?: GraphQLContext
     ) => {
       const common = {
+        network: resolveArgNetwork(args.network, ctx),
         address: args.address,
         contractId: args.contractId,
         limit: args.limit,
@@ -111,8 +158,12 @@ const resolvers = {
       };
     },
 
-    transferByTx: async (_parent: unknown, args: { txHash: string }) => {
-      const transfers = await queryByTxHash(args.txHash);
+    transferByTx: async (
+      _parent: unknown,
+      args: { txHash: string; network?: NetworkArg },
+      ctx?: GraphQLContext
+    ) => {
+      const transfers = await queryByTxHash(args.txHash, resolveArgNetwork(args.network, ctx));
       return (transfers as Array<Record<string, unknown>>).map((transfer) =>
         formatTransfer(transfer)
       );
@@ -120,9 +171,14 @@ const resolvers = {
 
     summary: async (
       _parent: unknown,
-      args: { address: string; contractId?: string }
+      args: { address: string; contractId?: string; network?: NetworkArg },
+      ctx?: GraphQLContext
     ) => {
-      const rows = await querySummary(args);
+      const rows = await querySummary({
+        address: args.address,
+        contractId: args.contractId,
+        network: resolveArgNetwork(args.network, ctx),
+      });
       return rows.map((row) => {
         const received = BigInt(row.totalReceived);
         const sent = BigInt(row.totalSent);
@@ -145,7 +201,7 @@ function readPositiveInt(name: string, fallback: number): number {
 }
 
 export function createGraphQLMiddleware() {
-  const server = new ApolloServer({
+  const server = new ApolloServer<GraphQLContext>({
     typeDefs,
     resolvers,
     persistedQueries: false,
@@ -160,5 +216,10 @@ export function createGraphQLMiddleware() {
 
   server.startInBackgroundHandlingStartupErrorsByLoggingAndFailingAllRequests();
 
-  return expressMiddleware(server);
+  // The HTTP-level selector reaches resolvers through the context, so
+  // `?network=` and `X-Network` work on /graphql exactly as on the REST routes
+  // — the networkMiddleware has already validated it by the time we read it.
+  return expressMiddleware(server, {
+    context: async ({ req }) => ({ network: requestNetwork(req) }),
+  });
 }

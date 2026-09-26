@@ -133,6 +133,33 @@ const eventTypeQuerySchema = z.preprocess(
   }).optional()
 );
 
+/**
+ * The network selector accepted by every read route (#163).
+ *
+ * Optional: omitting it means the deployment's configured network. Invalid or
+ * un-enabled values are rejected by the network middleware before a handler
+ * runs, so this exists to document and type the parameter, not to validate it.
+ */
+export const networkQuerySchema = z.preprocess(
+  (value) => {
+    const raw = firstValue(value);
+    if (raw === undefined || raw === null || raw === "") return undefined;
+    if (typeof raw !== "string") return raw;
+    return raw.trim().toLowerCase();
+  },
+  z
+    .enum(["testnet", "mainnet"])
+    .optional()
+    .openapi({
+      description:
+        "Network to read from. Defaults to the deployment's configured network. " +
+        "May also be sent as the X-Network header; the query parameter wins.",
+      example: "mainnet",
+    })
+);
+
+const withNetwork = { network: networkQuerySchema };
+
 export const errorResponseSchema = z.object({
   error: z.string(),
 });
@@ -146,17 +173,35 @@ export const healthzResponseSchema = z.object({
   uptime: z.number(),
 });
 
+const readyzChecksSchema = z.object({
+  db: z.boolean(),
+  rpc: z.boolean(),
+  indexerCaughtUp: z.boolean(),
+});
+
 export const readyzResponseSchema = z.object({
   ok: z.boolean(),
-  checks: z.object({
-    db: z.boolean(),
-    rpc: z.boolean(),
-    indexerCaughtUp: z.boolean(),
-  }),
+  /** The network the top-level fields describe. */
+  network: z.enum(["testnet", "mainnet"]).optional(),
+  checks: readyzChecksSchema,
+  /** One entry per enabled network, so one chain can be behind while another is fine. */
+  networks: z
+    .record(
+      z.string(),
+      z.object({
+        checks: readyzChecksSchema,
+        lastIndexedLedger: z.number().int().nullable(),
+        latestLedger: z.number().int().nullable(),
+        lagLedgers: z.number().int().nullable(),
+      })
+    )
+    .optional(),
 });
 
 export const statusResponseSchema = z.object({
   ok: z.literal(true),
+  /** The network the top-level fields describe; `networks` reports every loop. */
+  network: z.enum(["testnet", "mainnet"]).optional(),
   lastIndexedLedger: z.number().int().nullable(),
   latestLedger: z.number().int(),
   lagLedgers: z.number().int(),
@@ -351,6 +396,7 @@ export const popularAssetsResponseSchema = z.object({
 });
 
 export const searchQuerySchema = z.object({
+  ...withNetwork,
   q: z
     .string()
     .trim()
@@ -395,6 +441,7 @@ export const candleRefreshResponseSchema = z.object({
 });
 
 export const transferQuerySchema = z.object({
+  ...withNetwork,
   address: stellarAddressSchema,
   contractId: optionalQueryString("Token contract ID to filter by"),
   token: contractAddressSchema.optional(),
@@ -411,6 +458,7 @@ export const transferQuerySchema = z.object({
 }).passthrough();
 
 export const summaryQuerySchema = z.object({
+  ...withNetwork,
   address: stellarAddressSchema,
   contractId: optionalQueryString("Token contract ID to filter by"),
   fromDate: optionalQueryDateTime("Inclusive lower bound on ledgerClosedAt"),
@@ -422,6 +470,7 @@ export const txHashParamsSchema = z.object({
 }).passthrough();
 
 export const hostFnQuerySchema = z.object({
+  ...withNetwork,
   contractId: contractAddressSchema,
   functionName: optionalQueryString("Host function name to filter by"),
   limit: queryIntWithDefault(50, { min: 1, max: 200, description: "Page size" }),
@@ -429,6 +478,7 @@ export const hostFnQuerySchema = z.object({
 }).passthrough();
 
 export const nftTransfersQuerySchema = z.object({
+  ...withNetwork,
   contract: optionalQueryString("NFT contract ID to filter by"),
   token_id: optionalQueryString("NFT token identifier"),
   address: optionalQueryString("Filter by sender or recipient address"),
@@ -446,11 +496,15 @@ export const nftOwnerParamsSchema = z.object({
   token_id: z.string().min(1),
 }).passthrough();
 
+export const statusQuerySchema = z.object({ ...withNetwork }).passthrough();
+
 export const readyzQuerySchema = z.object({
+  ...withNetwork,
   maxLag: queryIntWithDefault(100, { min: 0, description: "Max acceptable ledger lag" }),
 }).passthrough();
 
 export const popularAssetsQuerySchema = z.object({
+  ...withNetwork,
   window: z.enum(["1h", "24h", "7d"]).default("24h"),
   by: z.enum(["transfers", "volume"]).default("transfers"),
   limit: queryIntWithDefault(20, { min: 1, max: 100, description: "Page size" }),

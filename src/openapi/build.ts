@@ -6,9 +6,9 @@ import {
   booleanOkResponseSchema,
   errorResponseSchema,
   healthzResponseSchema,
+  hostFnQuerySchema,
   hostFnLogsResponseSchema,
   hostFnParamsSchema,
-  hostFnQuerySchema,
   nftOwnerParamsSchema,
   nftOwnerResponseSchema,
   nftTransfersQuerySchema,
@@ -17,6 +17,9 @@ import {
   popularAssetsResponseSchema,
   readyzQuerySchema,
   readyzResponseSchema,
+  searchQuerySchema,
+  searchResponseSchema,
+  statusQuerySchema,
   statusResponseSchema,
   summaryQuerySchema,
   summaryResponseSchema,
@@ -73,8 +76,25 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/metrics",
+  summary: "Prometheus metrics",
+  description:
+    "Indexer and process metrics in Prometheus text exposition format. Served from " +
+    "in-process counters only — no database or RPC call — so it keeps answering while " +
+    "the subsystems it reports on are down.",
+  responses: {
+    200: {
+      description: "Prometheus text exposition format",
+      content: { "text/plain": { schema: { type: "string" as const } } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/status",
   summary: "Indexer status",
+  request: { query: statusQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: statusResponseSchema } } },
     ...commonErrorResponses,
@@ -290,6 +310,19 @@ registry.registerPath({
   },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: popularAssetsResponseSchema } } },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/search",
+  summary: "Fuzzy search across accounts, assets, and contracts",
+  request: {
+    query: searchQuerySchema,
+  },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: searchResponseSchema } } },
     ...commonErrorResponses,
   },
 });

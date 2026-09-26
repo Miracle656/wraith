@@ -1,11 +1,14 @@
 import type { RawEvent } from "../../rpc";
 import { createHorizonSource, type FetchLike, type HorizonSourceConfig } from "./horizon";
 import { createRpcSource, type EventSource } from "./rpc";
+import type { Network } from "../../network";
 
 export type SourceSwitcherConfig = {
   horizonUrl?: string;
   horizonEventsPath?: string;
   fetchImpl: FetchLike;
+  /** Which chain this switcher reads. Defaults to the configured network. */
+  network?: Network;
 };
 
 export interface SourceSwitcher {
@@ -25,7 +28,7 @@ function isTruthySource(source: EventSource | null): source is EventSource {
 
 export function createSourceSwitcherWithConfig(config: SourceSwitcherConfig): SourceSwitcher {
   const sources = [
-    createRpcSource(),
+    createRpcSource(config.network),
     config.horizonUrl
       ? createHorizonSource({
           baseUrl: config.horizonUrl.replace(/\/$/, ""),

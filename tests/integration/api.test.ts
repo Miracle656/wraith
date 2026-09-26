@@ -9,9 +9,9 @@ import {
 
 const API_BASE_URL = process.env.INTEGRATION_API_URL ?? "http://localhost:3300";
 
-async function getJson(path: string) {
+async function getJson(path: string): Promise<Record<string, any>> {
   const response = await fetch(`${API_BASE_URL}${path}`);
-  const body = await response.json();
+  const body = (await response.json()) as Record<string, any>;
 
   expect(response.status, JSON.stringify(body)).toBe(200);
   return body;
@@ -50,7 +50,10 @@ describe("Wraith integration API", () => {
   });
 
   it("aggregates account summary across incoming and outgoing events", async () => {
-    const body = await getJson(`/accounts/${ALICE}/summary`);
+    // Use /summary/:address (the querySummary handler returning `tokens`). The
+    // /accounts/:address/summary route is shadowed by the accounts router, which
+    // returns a different `{ address, assets }` shape.
+    const body = await getJson(`/summary/${ALICE}`);
 
     expect(body.address).toBe(ALICE);
     expect(body.tokens).toEqual([
