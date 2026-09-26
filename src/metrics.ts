@@ -63,6 +63,19 @@ export const rpcErrorsTotal = new Counter({
 });
 
 /**
+ * Events dropped by the decoder, by reason.
+ *
+ * `malformed` means a token event that failed to decode; a rising rate points
+ * at a contract emitting non-standard events or a decoder bug.
+ */
+export const eventsSkippedTotal = new Counter({
+  name: "events_skipped_total",
+  help: "Events skipped by the decoder",
+  labelNames: ["reason"] as const,
+  registers: [registry],
+});
+
+/**
  * The highest ledger the indexer has committed, per network.
  *
  * A gauge, not a counter: it is a position, and comparing it against the chain
