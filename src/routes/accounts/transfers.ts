@@ -3,24 +3,21 @@ import { queryAllTransfers } from "../../db";
 import { parseOr400 } from "../../openapi/validation";
 import { transferQuerySchema } from "../../openapi/schemas";
 import { requestNetwork } from "../../middleware/network";
+import { getCachedTokenDecimals } from "../../tokenCache";
+import { toDisplayAmount } from "../../amount";
 
 const VALID_EVENT_TYPES = new Set(["transfer", "mint", "burn", "clawback"]);
-const STROOPS = 10_000_000n;
 
-function toDisplayAmount(amount: string): string {
-  const raw = BigInt(amount);
-  const abs = raw < 0n ? -raw : raw;
-  const integer = abs / STROOPS;
-  const remainder = abs % STROOPS;
-  const sign = raw < 0n ? "-" : "";
-  return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
-}
-
-const withDisplay = <T extends { amount: string }>(t: T) => ({
-  ...t,
-  displayAmount: toDisplayAmount(t.amount),
+const withDisplay = <T extends { amount: string; contractId?: string }>(
+  transfer: T,
+  network: ReturnType<typeof requestNetwork>,
+) => ({
+  ...transfer,
+  displayAmount: toDisplayAmount(
+    transfer.amount,
+    transfer.contractId ? getCachedTokenDecimals(transfer.contractId, network) : undefined,
+  ),
 });
-
 const parseIntParam = (val: unknown, fallback: number): number => {
   const n = parseInt(String(val), 10);
   return isNaN(n) ? fallback : n;
@@ -74,8 +71,10 @@ export function createAccountsTransfersRouter(): Router {
           $select?: string[];
         };
 
+        const network = requestNetwork(req);
         const result = await queryAllTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           contractId,
           token,
@@ -95,7 +94,7 @@ export function createAccountsTransfersRouter(): Router {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string }, network);
             }
             return transfer;
           }),

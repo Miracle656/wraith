@@ -10,6 +10,8 @@ import { costLimitPlugin } from "./costLimit";
 import { persistedQueryPlugin } from "./persisted";
 import { requestNetwork } from "../middleware/network";
 import { enabledNetworks, isNetwork, NETWORKS, currentNetwork, type Network } from "../network";
+import { getCachedTokenDecimals } from "../tokenCache";
+import { toDisplayAmount } from "../amount";
 
 export const typeDefs = `#graphql
   enum Network {
@@ -137,6 +139,7 @@ export const resolvers = {
     ) => {
       const common = {
         network: resolveArgNetwork(args.network, ctx),
+        tokenDecimals: getCachedTokenDecimals,
         address: args.address,
         contractId: args.contractId,
         limit: args.limit,
@@ -163,10 +166,17 @@ export const resolvers = {
       args: { txHash: string; network?: NetworkArg },
       ctx?: GraphQLContext
     ) => {
-      const transfers = await queryByTxHash(args.txHash, resolveArgNetwork(args.network, ctx));
-      return (transfers as Array<Record<string, unknown>>).map((transfer) =>
-        formatTransfer(transfer)
-      );
+      const network = resolveArgNetwork(args.network, ctx);
+      const transfers = await queryByTxHash(args.txHash, network);
+      return (transfers as Array<Record<string, unknown>>).map((transfer) => ({
+        ...formatTransfer(transfer),
+        displayAmount: toDisplayAmount(
+          String(transfer.amount),
+          typeof transfer.contractId === "string"
+            ? getCachedTokenDecimals(transfer.contractId, network)
+            : undefined,
+        ),
+      }));
     },
 
     summary: async (

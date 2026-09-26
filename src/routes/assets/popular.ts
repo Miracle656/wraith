@@ -3,6 +3,7 @@ import { queryPopularAssets, toDisplayAmount } from "../../db";
 import { parseOr400 } from "../../openapi/validation";
 import { popularAssetsQuerySchema } from "../../openapi/schemas";
 import { requestNetwork } from "../../middleware/network";
+import { getCachedTokenDecimals } from "../../tokenCache";
 
 const VALID_WINDOWS = new Set(["1h", "24h", "7d"]);
 const VALID_SORT_BY = new Set(["transfers", "volume"]);
@@ -33,8 +34,9 @@ export function createPopularAssetsRouter(): Router {
         const { window, by, limit, offset } = parsed;
 
         const fromDate = windowToDate(window);
+        const network = requestNetwork(req);
         const { total, assets } = await queryPopularAssets({
-          network: requestNetwork(req),
+          network,
           fromDate,
           by,
           limit,
@@ -51,7 +53,7 @@ export function createPopularAssetsRouter(): Router {
             contractId: a.contractId,
             transferCount: Number(a.transferCount),
             volume: a.volume,
-            displayVolume: toDisplayAmount(a.volume),
+            displayVolume: toDisplayAmount(a.volume, getCachedTokenDecimals(a.contractId, network)),
           })),
         });
       } catch (err) {
