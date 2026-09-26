@@ -1,6 +1,7 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import type { RawEvent } from "./rpc";
 import type { TransferRecord } from "./db";
+import { eventsSkippedTotal } from "./metrics";
 
 // ─── Recognised event types ───────────────────────────────────────────────────
 // SEP-41 / CAP-67 standard topic[0] symbols
@@ -140,15 +141,25 @@ export function parseEvent(
 }
 
 /**
- * Parse a batch of raw events, silently skipping unrecognised or malformed ones.
- * Logs a count of skipped events at debug level.
+ * Parse a batch of raw events, skipping unrecognised or malformed ones.
+ *
+ * `parseEvent` throws on malformed token events; one such event must not fail
+ * the whole batch, or the indexer retries the same ledger range forever.
  */
 export function parseEvents(rawEvents: RawEvent[]): TransferRecord[] {
   const records: TransferRecord[] = [];
   let skipped = 0;
+  let failed = 0;
 
   for (const raw of rawEvents) {
-    const record = parseEvent(raw);
+    let record: TransferRecord | null;
+    try {
+      record = parseEvent(raw);
+    } catch (err) {
+      failed++;
+      console.warn(`[parser] Failed to decode event ${raw.id}: ${(err as Error).message}`);
+      continue;
+    }
     if (record) {
       records.push(record);
     } else {
@@ -157,7 +168,12 @@ export function parseEvents(rawEvents: RawEvent[]): TransferRecord[] {
   }
 
   if (skipped > 0) {
+    eventsSkippedTotal.inc({ reason: "unrecognised" }, skipped);
     console.debug(`[parser] Skipped ${skipped} non-token events out of ${rawEvents.length}`);
+  }
+  if (failed > 0) {
+    eventsSkippedTotal.inc({ reason: "malformed" }, failed);
+    console.warn(`[parser] Skipped ${failed} malformed events out of ${rawEvents.length}`);
   }
 
   return records;
