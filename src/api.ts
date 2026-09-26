@@ -28,7 +28,8 @@ import {
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType } from "./metrics";
-import { getAllCachedTokens } from "./tokenCache";
+import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
+import { toDisplayAmount } from "./amount";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -78,25 +79,17 @@ const POPULAR_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_POPULAR_MS ?? "60000
 const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000", 10);
 
 // ─── Amount formatting ────────────────────────────────────────────────────
-const STROOPS = 10_000_000n;
+export { toDisplayAmount } from "./amount";
 
-/**
- * Convert a raw i128 decimal string (stroops) to a human-readable 7-decimal
- * string. Uses BigInt arithmetic to avoid floating-point precision loss.
- * e.g. "10000000000" → "1000.0000000"
- */
-export function toDisplayAmount(amount: string): string {
-  const raw = BigInt(amount);
-  const abs = raw < 0n ? -raw : raw;
-  const integer = abs / STROOPS;
-  const remainder = abs % STROOPS;
-  const sign = raw < 0n ? "-" : "";
-  return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
-}
-
-const withDisplay = <T extends { amount: string }>(t: T) => ({
-  ...t,
-  displayAmount: toDisplayAmount(t.amount),
+const withDisplay = <T extends { amount: string; contractId?: string }>(
+  transfer: T,
+  network: Network,
+) => ({
+  ...transfer,
+  displayAmount: toDisplayAmount(
+    transfer.amount,
+    transfer.contractId ? getCachedTokenDecimals(transfer.contractId, network) : undefined,
+  ),
 });
 
 function parseSelectQuery(value: unknown): string[] | undefined {
@@ -509,8 +502,10 @@ export function createApp(): express.Application {
           token?: string;
         };
 
+        const network = requestNetwork(req);
         const result = await queryTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           direction: "incoming",
           contractId,
@@ -531,7 +526,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string }, network);
             }
             return transfer;
           }),
@@ -571,8 +566,10 @@ export function createApp(): express.Application {
           token?: string;
         };
 
+        const network = requestNetwork(req);
         const result = await queryTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           direction: "outgoing",
           contractId,
@@ -593,7 +590,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string }, network);
             }
             return transfer;
           }),
@@ -644,8 +641,10 @@ export function createApp(): express.Application {
           $select?: string[];
         };
 
+        const network = requestNetwork(req);
         const result = await queryAllTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           contractId,
           token,
@@ -665,7 +664,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string }, network);
             }
             return transfer;
           }),
@@ -716,8 +715,10 @@ export function createApp(): express.Application {
         };
 
         // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
+        const network = requestNetwork(req);
         const result = await queryAllTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           contractId,
           token,
@@ -739,7 +740,12 @@ export function createApp(): express.Application {
         // Add data rows
         for (const transfer of result.transfers) {
           const t = transfer as Record<string, unknown>;
-          const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
+          const displayAmount = toDisplayAmount(
+            String(t.amount ?? "0"),
+            typeof t.contractId === "string"
+              ? getCachedTokenDecimals(t.contractId, network)
+              : undefined,
+          );
           const closedAt = t.ledgerClosedAt instanceof Date
             ? t.ledgerClosedAt
             : new Date(String(t.ledgerClosedAt ?? 0));
@@ -781,8 +787,17 @@ export function createApp(): express.Application {
       try {
         const parsed = parseOr400(txHashParamsSchema, req.params, res);
         if (!parsed) return;
-        const transfers = await queryByTxHash(parsed.txHash, requestNetwork(req));
-        res.json({ transfers: transfers.map(withDisplay) });
+        const network = requestNetwork(req);
+        const transfers = await queryByTxHash(parsed.txHash, network);
+        res.json({
+          transfers: transfers.map((transfer) => ({
+            ...transfer,
+            displayAmount: toDisplayAmount(
+              transfer.amount,
+              getCachedTokenDecimals(transfer.contractId, network),
+            ),
+          })),
+        });
       } catch (err) {
         next(err);
       }
@@ -809,8 +824,9 @@ export function createApp(): express.Application {
         if (!parsed) return;
         const { address, contractId, fromDate, toDate } = parsed;
 
+        const network = requestNetwork(req);
         const rows = await querySummary({
-          network: requestNetwork(req),
+          network,
           address,
           contractId,
           fromDate,
@@ -826,9 +842,9 @@ export function createApp(): express.Application {
             totalReceived: row.totalReceived,
             totalSent: row.totalSent,
             netFlow: net.toString(),
-            displayTotalReceived: toDisplayAmount(row.totalReceived),
-            displayTotalSent: toDisplayAmount(row.totalSent),
-            displayNetFlow: toDisplayAmount(net.toString()),
+            displayTotalReceived: toDisplayAmount(row.totalReceived, getCachedTokenDecimals(row.contractId, network)),
+            displayTotalSent: toDisplayAmount(row.totalSent, getCachedTokenDecimals(row.contractId, network)),
+            displayNetFlow: toDisplayAmount(net.toString(), getCachedTokenDecimals(row.contractId, network)),
             txCount: Number(row.txCount),
           };
         });
