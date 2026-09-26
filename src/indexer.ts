@@ -287,26 +287,33 @@ export async function maybeTombstoneExpiredContracts(
 // ─── Core poll step ───────────────────────────────────────────────────────────
 /**
  * Fetch one batch of events starting from `fromLedger`, parse and persist them.
- * Returns the highest ledger sequence seen in the batch (or fromLedger if empty).
+ * Returns the cursor to commit — the highest ledger the source fully covered,
+ * never above `endLedger`.
  */
 async function pollOnce(
   loop: LoopState,
   fromLedger: number,
-  latestLedger: number
+  endLedger: number
 ): Promise<number> {
   const net = loop.network;
   console.log(
-    `[indexer/${net}] Polling ledgers ${fromLedger} → ${latestLedger} (lag: ${latestLedger - fromLedger})`
+    `[indexer/${net}] Polling ledgers ${fromLedger} → ${endLedger} (lag: ${endLedger - fromLedger})`
   );
 
   const { events, highestLedger } = await loop.sourceSwitcher.fetchEvents(
-    fromLedger, latestLedger, loop.allContractIds, BATCH_SIZE
+    fromLedger, endLedger, loop.allContractIds, BATCH_SIZE
   );
 
+  // The source reports the highest ledger its drained pages fully covered,
+  // already clamped to endLedger. Re-clamp here so a future source can never
+  // commit a cursor past the requested window — jumping past target would
+  // defeat the TIP_LAG propagation buffer.
+  const cursor = Math.min(highestLedger, endLedger);
+
   if (events.length === 0) {
-    await setLastIndexedLedger(highestLedger, net);
-    recordLedgerProgress(net, fromLedger, highestLedger);
-    return highestLedger;
+    await setLastIndexedLedger(cursor, net);
+    recordLedgerProgress(net, fromLedger, cursor);
+    return cursor;
   }
 
   // Persist token transfers
@@ -399,14 +406,14 @@ async function pollOnce(
     }
   }
 
-  await setLastIndexedLedger(highestLedger, net);
-  recordLedgerProgress(net, fromLedger, highestLedger);
+  await setLastIndexedLedger(cursor, net);
+  recordLedgerProgress(net, fromLedger, cursor);
 
   console.log(
-    `[indexer/${net}] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT + ${lpInserted} LP-share records saved (ledger ${highestLedger})`
+    `[indexer/${net}] Processed ${events.length} events → ${inserted} fungible + ${nftInserted} NFT + ${lpInserted} LP-share records saved (ledger ${cursor})`
   );
 
-  return highestLedger;
+  return cursor;
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
