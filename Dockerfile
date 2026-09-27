@@ -21,8 +21,9 @@ RUN apk add --no-cache openssl
 
 WORKDIR /app
 
-# The app runs Prisma schema sync on startup, so the runtime image needs the
-# Prisma CLI available without downloading it via npx at container boot.
+# The app runs `prisma migrate deploy` on startup, so the runtime image needs
+# both the Prisma CLI and the committed migration files (prisma/migrations/).
+# Without the migrations directory the deploy command has nothing to apply.
 COPY package*.json ./
 RUN npm ci
 
