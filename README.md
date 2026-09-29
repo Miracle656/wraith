@@ -615,6 +615,51 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 
 ***
 
+### `GET /tokens`
+
+All tokens the indexer has encountered and cached, on the selected network.
+Accepts the same `?network=` / `X-Network` selector as every read route.
+
+```bash
+curl "http://localhost:3000/tokens?network=mainnet"
+```
+
+```json
+{
+  "ok": true,
+  "network": "mainnet",
+  "tokens": [
+    {
+      "network": "mainnet",
+      "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "decimals": 7
+    }
+  ]
+}
+```
+
+***
+
+### `GET /transfers.csv` · `GET /transfers.parquet`
+
+<arg_value><b88a6f17>Export the **entire matching transfer set** as a CSV or Apache Parquet download —
+no pagination. Accepts the same filters as the JSON transfer routes
+(`network`, `address`, `contractId`, `token`, `fromLedger`, `toLedger`,
+`fromDate`, `toDate`, `eventType`) minus the pagination fields; narrow large
+exports with the ledger or date bounds.
+
+```bash
+# Everything for one address on mainnet
+curl -OJ "http://localhost:3000/transfers.csv?address=GABC123...&network=mainnet"
+
+# A ledger window across all addresses, as Parquet
+curl -OJ "http://localhost:3000/transfers.parquet?fromLedger=5840000&toLedger=5850000"
+```
+
+***
+
 ## Environment Variables
 
 | Variable              | Default       | Description                                                                                   |
@@ -745,6 +790,7 @@ curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123
 | `GET /transfers/tx/:txHash` | `transfer` |
 | `GET /summary/:address` | `token-summary` |
 | `GET /accounts/:address/summary` | `account-summary` |
+| `GET /accounts/:address/balance` | `account-balance` |
 | `GET /accounts/:address/transfers` | `transfer` |
 | `GET /assets/popular` | `popular-asset` |
 | `GET /nfts/transfers` | `nft-transfer` |
@@ -754,6 +800,28 @@ curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123
 | `GET /readyz` | `readiness` |
 
 `GET /metrics` is not a JSON:API resource — it serves Prometheus text format.
+
+The routes below are live but outside the JSON:API surface — no resource
+type, no `data` envelope:
+
+| Endpoint | Notes |
+|----------|-------|
+| `GET /tokens` | Cached token metadata for the selected network |
+| `GET /transfers.csv` | Full-set CSV export (no pagination) |
+| `GET /transfers.parquet` | Full-set Parquet export (no pagination) |
+| `GET /accounts/:address/balance` | Derived balances, not on-chain reads |
+
+Internal routes — not part of the public data API, and marked `deprecated: true`
+with a rationale in `openapi.json`:
+
+| Endpoint | Notes |
+|----------|-------|
+| `POST /webhooks/linq` | Signature-verified payout provider callback |
+| `GET /offramp/rate` | Wallet-only cash-out surface (server-side provider API) |
+| `POST /offramp/verify-bank` | Wallet-only cash-out surface (server-side provider API) |
+| `GET /offramp/trustline` | Wallet-only cash-out surface (server-side provider API) |
+| `POST /offramp/orders` | Wallet-only cash-out surface (server-side provider API) |
+| `GET /offramp/orders/:orderId` | Wallet-only cash-out surface (server-side provider API) |
 
 ***
 
