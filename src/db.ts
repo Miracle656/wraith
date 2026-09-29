@@ -34,10 +34,9 @@ export const prisma =
   globalForPrisma.prisma ??
   withReadReplicas(
     new PrismaClient({
-      log:
-        process.env.NODE_ENV === "development"
-          ? ["query", "warn", "error"]
-          : ["warn", "error"],
+      // Handle failures at the application boundary without Prisma printing
+      // raw database errors or query details before they can be sanitized.
+      log: [],
     }),
     { replicaUrls }
   );

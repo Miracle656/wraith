@@ -4198,6 +4198,313 @@
           }
         }
       }
+    },
+    "/candles/{bucket}/{contractId}": {
+      "get": {
+        "summary": "OHLC candles for a token contract",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1m",
+                "1h",
+                "1d"
+              ]
+            },
+            "required": true,
+            "name": "bucket",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^C[A-Z2-7]{55}$",
+              "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+            },
+            "required": true,
+            "name": "contractId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 100,
+              "description": "Page size"
+            },
+            "required": false,
+            "description": "Page size",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "default": 0,
+              "description": "Pagination offset"
+            },
+            "required": false,
+            "description": "Pagination offset",
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bucket": {
+                      "type": "string",
+                      "enum": [
+                        "1m",
+                        "1h",
+                        "1d"
+                      ]
+                    },
+                    "contractId": {
+                      "type": "string",
+                      "pattern": "^C[A-Z2-7]{55}$",
+                      "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                    },
+                    "candles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "timeBucket": {
+                            "type": "string"
+                          },
+                          "contractId": {
+                            "type": "string",
+                            "pattern": "^C[A-Z2-7]{55}$",
+                            "example": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B"
+                          },
+                          "open": {
+                            "type": "string"
+                          },
+                          "high": {
+                            "type": "string"
+                          },
+                          "low": {
+                            "type": "string"
+                          },
+                          "close": {
+                            "type": "string"
+                          },
+                          "volume": {
+                            "type": "string"
+                          },
+                          "txCount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "timeBucket",
+                          "contractId",
+                          "open",
+                          "high",
+                          "low",
+                          "close",
+                          "volume",
+                          "txCount"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "bucket",
+                    "contractId",
+                    "candles"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/candles/refresh": {
+      "post": {
+        "summary": "Refresh the OHLC aggregates",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "oneMinute": {
+                      "type": "object",
+                      "properties": {
+                        "inserted": {
+                          "type": "integer"
+                        },
+                        "updated": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "inserted",
+                        "updated"
+                      ]
+                    },
+                    "oneHour": {
+                      "type": "object",
+                      "properties": {
+                        "inserted": {
+                          "type": "integer"
+                        },
+                        "updated": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "inserted",
+                        "updated"
+                      ]
+                    },
+                    "oneDay": {
+                      "type": "object",
+                      "properties": {
+                        "inserted": {
+                          "type": "integer"
+                        },
+                        "updated": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "inserted",
+                        "updated"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "oneMinute",
+                    "oneHour",
+                    "oneDay"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
