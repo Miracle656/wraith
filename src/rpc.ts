@@ -1,6 +1,6 @@
 import { rpc as RPC, xdr, scValToNative, Contract, TransactionBuilder, Account, Networks } from "@stellar/stellar-sdk";
 import { resolveNetwork, currentNetwork, type Network } from "./network";
-import { recordRpcError } from "./metrics";
+import { recordRpcError, ledgersSkippedTotal } from "./metrics";
 
 // ─── Network config ───────────────────────────────────────────────────────────
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
@@ -191,6 +191,35 @@ export async function withRetry<T>(
  */
 type FetchFn = typeof fetchEvents
 
+/**
+ * Classify an error as a genuine XDR decode failure — not a generic "unknown"
+ * substring hit.
+ *
+ * The previous `msg.includes("XDR") || msg.includes("unknown")` predicate was
+ * too broad. Real XDR errors come from the @stellar/stellar-sdk XDR decoder
+ * and have characteristic substrings ("XDR", "decode", "TypeError: ...is
+ * not a valid XDR..."). Bare "unknown error", network blips
+ * ("getaddrinfo ENOTFOUND … unknown host"), and provider 5xx bodies are
+ * NOT XDR errors and must propagate so the retry layer can reattempt.
+ *
+ * Tests pin every case the issue calls out: bare "unknown error" and
+ * "unknown host" must propagate, real XDR errors must skip.
+ */
+export function isXdrDecodeError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
+  if (!msg) return false;
+  // The SDK's XDR decoder produces messages containing "xdr" or the
+  // Soroban event decoder's signature "decode xdr".
+  if (msg.includes("xdr")) return true;
+  if (msg.includes("decode xdr")) return true;
+  // Newer Soroban event decoders throw "unknown scval type" or
+  // "unknown scaddress type" — these are XDR failures specifically about
+  // unknown *Soroban types*, not network unknowns.
+  if (msg.includes("unknown scval") || msg.includes("unknown scaddress")) return true;
+  if (msg.includes("unknown soroban")) return true;
+  return false;
+}
+
 export async function fetchEventsSafe(
   startLedger: number,
   endLedger: number,
@@ -205,9 +234,11 @@ export async function fetchEventsSafe(
       const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
       return { events, highestLedger: Math.max(startLedger, latestLedger) };
     } catch (err) {
-      const msg = (err as Error).message ?? "";
-      if (msg.includes("XDR") || msg.includes("unknown")) {
-        console.warn(`[rpc] Skipping ledger ${startLedger} — XDR decode error: ${msg}`);
+      if (isXdrDecodeError(err)) {
+        // Real XDR decode failure — skip the ledger, but make the skip
+        // visible in metrics so it can't accumulate silently.
+        ledgersSkippedTotal.inc({ network: (network ?? currentNetwork()) });
+        console.warn(`[rpc] Skipping ledger ${startLedger} — XDR decode error: ${(err as Error).message ?? err}`);
         return { events: [], highestLedger: startLedger };
       }
       throw err;
@@ -218,8 +249,7 @@ export async function fetchEventsSafe(
     const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
     return { events, highestLedger: latestLedger };
   } catch (err) {
-    const msg = (err as Error).message ?? "";
-    if (!msg.includes("XDR") && !msg.includes("unknown")) throw err;
+    if (!isXdrDecodeError(err)) throw err;
 
     // Bisect: try lower half, then upper half
     console.warn(`[rpc] XDR error in ledgers ${startLedger}–${endLedger}, bisecting…`);

@@ -63,6 +63,23 @@ export const rpcErrorsTotal = new Counter({
 });
 
 /**
+ * Ledgers silently skipped by {@link fetchEventsSafe} when an XDR decode error
+ * cannot be bisected away — typically a single-ledger range where the RPC
+ * returned a malformed Soroban events response.
+ *
+ * Skips must be visible rather than only logged: they are real data loss,
+ * and a sustained rate of skips is the alert that the upstream RPC or
+ * decoder has rotted. Labelled by network so a skip storm on testnet
+ * doesn't mask mainnet, and vice versa.
+ */
+export const ledgersSkippedTotal = new Counter({
+  name: "ledgers_skipped_total",
+  help: "Ledgers silently skipped by fetchEventsSafe due to XDR decode errors",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
+/**
  * The highest ledger the indexer has committed, per network.
  *
  * A gauge, not a counter: it is a position, and comparing it against the chain
