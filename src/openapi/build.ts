@@ -1,9 +1,13 @@
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { OpenAPIRegistry, OpenApiGeneratorV3 } from "@asteasolutions/zod-to-openapi";
+import { getOhlcRefreshIntervalMs } from "../ohlcConfig";
 import {
   addressPathSchema,
   booleanOkResponseSchema,
+  candlesParamsSchema,
+  candlesQuerySchema,
+  candlesResponseSchema,
   errorResponseSchema,
   healthzResponseSchema,
   hostFnQuerySchema,
@@ -514,6 +518,22 @@ registry.registerPath({
     ...internalErrorResponses,
   },
 });
+
+if (getOhlcRefreshIntervalMs() !== undefined) {
+  registry.registerPath({
+    method: "get",
+    path: "/candles/{bucket}/{contractId}",
+    summary: "OHLC candles for a token contract (single-network deployments only)",
+    request: {
+      params: candlesParamsSchema,
+      query: candlesQuerySchema,
+    },
+    responses: {
+      200: { description: "OK", content: { "application/json": { schema: candlesResponseSchema } } },
+      ...commonErrorResponses,
+    },
+  });
+}
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
