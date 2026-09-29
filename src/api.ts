@@ -27,7 +27,7 @@ import {
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
-import { renderMetrics, metricsContentType } from "./metrics";
+import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens } from "./tokenCache";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
@@ -153,6 +153,31 @@ export function createApp(): express.Application {
   // validated once here rather than re-parsed per handler (#163).
   app.use(networkMiddleware);
   app.use(limiter);
+
+  // ─── HTTP metrics middleware ──────────────────────────────────────────────
+  // Records request count and latency per method + route pattern.
+  // Uses req.route?.path so the route label is the Express pattern (e.g. /transfers/incoming/:address),
+  // never the raw path — addresses must not become label values. /metrics is excluded.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Skip /metrics: a scrape endpoint that increments its own counters
+    // creates a feedback loop and misrepresents real traffic.
+    if (req.path === "/metrics") {
+      return next();
+    }
+
+    const start = process.hrtime.bigint();
+
+    res.on("finish", () => {
+      const routePattern = req.route?.path ?? "unknown";
+      const durationSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+      const status = String(res.statusCode);
+
+      httpRequestsTotal.inc({ method: req.method, route: routePattern, status });
+      httpRequestDurationSeconds.observe({ method: req.method, route: routePattern }, durationSeconds);
+    });
+
+    next();
+  });
 
   // ─── Stale read middleware ──────────────────────────────────────────
   // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`

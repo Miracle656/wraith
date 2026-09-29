@@ -21,6 +21,36 @@ export const registry = new Registry();
 collectDefaultMetrics({ register: registry });
 
 /**
+ * HTTP request count by method, route pattern, and status code.
+ *
+ * The route label uses the Express route pattern (e.g. /transfers/incoming/:address),
+ * never the raw path — addresses and other dynamic values must not become label values.
+ * /metrics is excluded from its own counters.
+ */
+export const httpRequestsTotal = new Counter({
+  name: "http_requests_total",
+  help: "Total HTTP requests by method, route pattern, and status code",
+  labelNames: ["method", "route", "status"] as const,
+  registers: [registry],
+});
+
+/**
+ * HTTP request latency by method and route pattern.
+ *
+ * Buckets run from 5ms to 10s: below 5ms nothing here is worth alerting on,
+ * and past 10s the request has already failed for whatever is waiting on it.
+ * The route label uses the Express route pattern, never the raw path.
+ * /metrics is excluded from its own histogram.
+ */
+export const httpRequestDurationSeconds = new Histogram({
+  name: "http_request_duration_seconds",
+  help: "HTTP request latency in seconds, by method and route pattern",
+  labelNames: ["method", "route"] as const,
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [registry],
+});
+
+/**
  * Ledgers the indexer has advanced through, per network.
  *
  * The rate of this is the alert that matters: a flat
