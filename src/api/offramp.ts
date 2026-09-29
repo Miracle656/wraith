@@ -1,5 +1,8 @@
 import { Router, Request, Response, NextFunction } from "express";
 
+import { Prisma } from "@prisma/client";
+import { z } from "zod";
+
 import { prisma } from "../db";
 import { requestNetwork } from "../middleware/network";
 import { statusForClients } from "../linq/statusForClients";
@@ -150,6 +153,24 @@ export function createOfframpRouter(): Router {
       idempotencyKey,
     } = req.body ?? {};
 
+    const maxAmount = Number(process.env.MAX_OFFRAMP_AMOUNT || 10_000_000);
+    const amountSchema = z.number().positive().finite().max(maxAmount);
+
+    let parsedAmountNGN: number | undefined;
+    let parsedAmountStableCoin: number | undefined;
+
+    try {
+      if (amountNGN != null) {
+        parsedAmountNGN = amountSchema.parse(Number(amountNGN));
+      }
+      if (amountStableCoin != null) {
+        parsedAmountStableCoin = amountSchema.parse(Number(amountStableCoin));
+      }
+    } catch (e) {
+      res.status(400).json({ error: "Invalid amount" });
+      return;
+    }
+
     if (
       typeof bankAccount !== "string" ||
       typeof bankCode !== "string" ||
@@ -189,9 +210,9 @@ export function createOfframpRouter(): Router {
 
     try {
       const order = await createOfframpOrder({
-        ...(amountNGN != null ? { amountNGN: Number(amountNGN) } : {}),
-        ...(amountStableCoin != null
-          ? { amountStableCoin: Number(amountStableCoin) }
+        ...(parsedAmountNGN != null ? { amountNGN: parsedAmountNGN } : {}),
+        ...(parsedAmountStableCoin != null
+          ? { amountStableCoin: parsedAmountStableCoin }
           : {}),
         bankAccount,
         bankCode,
@@ -223,6 +244,26 @@ export function createOfframpRouter(): Router {
 
       res.status(201).json(order);
     } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        const existingAfterCreate = await prisma.offrampOrder.findUnique({
+          where: { network_idempotencyKey: { network: net, idempotencyKey } },
+        });
+        if (existingAfterCreate) {
+          res.status(200).json({
+            id: existingAfterCreate.orderId,
+            walletAddress: existingAfterCreate.depositAddress,
+            chain: existingAfterCreate.chain,
+            coin: existingAfterCreate.coin,
+            amountStableCoin: Number(existingAfterCreate.amountStableCoin),
+            amountNGN: Number(existingAfterCreate.amountNGN),
+            rate: Number(existingAfterCreate.rate),
+            status: statusForClients(existingAfterCreate.status),
+            providerStatus: existingAfterCreate.status,
+            replayed: true,
+          });
+          return;
+        }
+      }
       sendLinqError(res, err);
     }
   });
