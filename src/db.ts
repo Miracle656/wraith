@@ -2,22 +2,14 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
 import { resolveNetwork, type Network } from "./network";
+import { toDisplayAmount } from "./amount";
 
 // Every function below takes an optional trailing `network`. Omitting it means
 // "the network this process is configured for" (STELLAR_NETWORK), which is
 // exactly the pre-#159 behaviour for single-network deployments. The per-network
 // indexer loop (#161) and the API selector (#163) pass it explicitly.
 
-const STROOPS = 10_000_000n;
-
-export function toDisplayAmount(amount: string): string {
-  const raw = BigInt(amount);
-  const abs = raw < 0n ? -raw : raw;
-  const integer = abs / STROOPS;
-  const remainder = abs % STROOPS;
-  const sign = raw < 0n ? "-" : "";
-  return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
-}
+export { toDisplayAmount } from "./amount";
 
 import { withReadReplicas } from "./db/router";
 import { observeDbQuery } from "./metrics";
@@ -354,6 +346,7 @@ export async function pruneOldTransfers(network?: Network): Promise<number> {
 // ─── Query helpers ─────────────────────────────────────────────────────────
 export type TransferQueryParams = {
   network?: Network;
+  tokenDecimals?: (contractId: string, network: Network) => number | undefined;
   address: string;
   direction: "incoming" | "outgoing";
   contractId?: string;
@@ -375,6 +368,7 @@ export type TransferQueryParams = {
 export async function queryTransfers(params: TransferQueryParams) {
   const {
     network,
+    tokenDecimals,
     address,
     direction,
     contractId,
@@ -391,9 +385,10 @@ export async function queryTransfers(params: TransferQueryParams) {
     offset = 0,
     includeTotal = false,
   } = params;
+  const resolvedNetwork = resolveNetwork(network);
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
-    network: resolveNetwork(network),
+    network: resolvedNetwork,
     ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
     ...(contractId ? { contractId } : {}),
     ...(token ? { contractId: token } : {}),
@@ -425,7 +420,7 @@ export async function queryTransfers(params: TransferQueryParams) {
   const prismaSelect = requestedSelect
     ? {
         id: true,
-        contractId: requestedSelect.includes("contractId"),
+        contractId: requestedSelect.includes("contractId") || requestedSelect.includes("displayAmount"),
         eventType: requestedSelect.includes("eventType"),
         fromAddress: requestedSelect.includes("fromAddress"),
         toAddress: requestedSelect.includes("toAddress"),
@@ -461,7 +456,13 @@ export async function queryTransfers(params: TransferQueryParams) {
     ...totalField(total),
     hasMore: page.hasMore,
     transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect, {
-      displayAmount: (row) => toDisplayAmount(String((row as { amount?: string }).amount)),
+      displayAmount: (row) => {
+        const transfer = row as { amount?: string; contractId?: string };
+        return toDisplayAmount(
+          String(transfer.amount),
+          transfer.contractId ? tokenDecimals?.(transfer.contractId, resolvedNetwork) : undefined,
+        );
+      },
     }),
     nextCursor: page.nextCursor,
   };
@@ -901,6 +902,7 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
 // ─── Combined address query ────────────────────────────────────────────────
 export type AllTransfersQueryParams = {
   network?: Network;
+  tokenDecimals?: (contractId: string, network: Network) => number | undefined;
   address: string;
   contractId?: string;
   token?: string;
@@ -921,6 +923,7 @@ export type AllTransfersQueryParams = {
 export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const {
     network,
+    tokenDecimals,
     address,
     contractId,
     token,
@@ -936,9 +939,10 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
     offset = 0,
     includeTotal = false,
   } = params;
+  const resolvedNetwork = resolveNetwork(network);
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
-    network: resolveNetwork(network),
+    network: resolvedNetwork,
     OR: [{ toAddress: address }, { fromAddress: address }],
     ...(contractId ? { contractId } : {}),
     ...(token ? { contractId: token } : {}),
@@ -972,7 +976,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const prismaSelect = requestedSelect
     ? {
         id: true,
-        contractId: requestedSelect.includes("contractId"),
+        contractId: requestedSelect.includes("contractId") || requestedSelect.includes("displayAmount"),
         eventType: requestedSelect.includes("eventType"),
         fromAddress: requestedSelect.includes("fromAddress"),
         toAddress: requestedSelect.includes("toAddress"),
@@ -1000,7 +1004,13 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const page = buildListPage(rows as Array<{ id: number }>, cap);
 
   const transfers = selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect ? [...requestedSelect, "direction"] : undefined, {
-    displayAmount: (row) => toDisplayAmount(String((row as { amount?: string }).amount)),
+    displayAmount: (row) => {
+      const transfer = row as { amount?: string; contractId?: string };
+      return toDisplayAmount(
+        String(transfer.amount),
+        transfer.contractId ? tokenDecimals?.(transfer.contractId, resolvedNetwork) : undefined,
+      );
+    },
     direction: (row) => ((row as { toAddress?: string | null }).toAddress === address ? "incoming" : "outgoing"),
   });
 
