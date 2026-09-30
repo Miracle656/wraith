@@ -81,15 +81,17 @@ const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000",
 // ─── Amount formatting ────────────────────────────────────────────────────
 export { toDisplayAmount } from "./amount";
 
-const withDisplay = <T extends { amount: string; contractId?: string }>(
+const withDisplay = <T extends { amount: string; contractId?: string; displayAmount?: string }>(
   transfer: T,
   network: Network,
 ) => ({
   ...transfer,
-  displayAmount: toDisplayAmount(
-    transfer.amount,
-    transfer.contractId ? getCachedTokenDecimals(transfer.contractId, network) : undefined,
-  ),
+  displayAmount:
+    transfer.displayAmount ??
+    toDisplayAmount(
+      transfer.amount,
+      transfer.contractId ? getCachedTokenDecimals(transfer.contractId, network) : undefined,
+    ),
 });
 
 function parseSelectQuery(value: unknown): string[] | undefined {
@@ -526,7 +528,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string; contractId?: string }, network);
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),
@@ -590,7 +592,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string; contractId?: string }, network);
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),
@@ -664,7 +666,7 @@ export function createApp(): express.Application {
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string; contractId?: string }, network);
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),

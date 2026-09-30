@@ -8,7 +8,10 @@ jest.mock("../../db", () => ({
   queryByTxHash: jest.fn(),
   querySummary: jest.fn(),
   getLastIndexedLedger: jest.fn(),
-  prisma: { $queryRaw: jest.fn() },
+  prisma: {
+    $queryRaw: jest.fn(),
+    tokenMetadata: { findMany: jest.fn() },
+  },
 }));
 
 jest.mock("../../rpc", () => ({
@@ -25,8 +28,9 @@ jest.mock("../../indexer", () => ({
     .mockReturnValue({ startedAt: "2024-01-01T00:00:00.000Z", uptimeSeconds: 0, totalIndexed: 0 }),
 }));
 
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger } from "../../db";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "../../db";
 import { getLatestLedger } from "../../rpc";
+import { _resetTokenCache, initTokenCache } from "../../tokenCache";
 
 // ── Typed mock helpers ────────────────────────────────────────────────────────
 const mockQueryTransfers = queryTransfers as jest.MockedFunction<typeof queryTransfers>;
@@ -109,6 +113,7 @@ describe("Transfer route handlers", () => {
   const app = createApp();
 
   beforeEach(() => {
+    _resetTokenCache();
     mockGetLastIndexedLedger.mockResolvedValue(1020);
     mockGetLatestLedger.mockResolvedValue(1022);
   });
@@ -136,6 +141,30 @@ describe("Transfer route handlers", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.transfers[0].displayAmount).toBe("1.0000000");
+    });
+
+    it("preserves a 6-decimal displayAmount from the query layer when $select omits contractId", async () => {
+      _resetTokenCache();
+      (prisma.tokenMetadata.findMany as jest.Mock).mockResolvedValue([
+        { network: "testnet", contractId: CONTRACT_A, symbol: "TOK", name: "Token", decimals: 6 },
+      ]);
+      await initTokenCache("testnet");
+
+      mockQueryTransfers.mockImplementation(async (params) => {
+        expect(params.tokenDecimals?.(CONTRACT_A, "testnet")).toBe(6);
+        return {
+          total: 1,
+          transfers: [{ amount: "1000000", displayAmount: "1.000000" }],
+          nextCursor: null,
+        } as Awaited<ReturnType<typeof queryTransfers>>;
+      });
+
+      const res = await request(app)
+        .get(`/transfers/incoming/${ALICE}`)
+        .query({ $select: "amount,displayAmount" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.transfers[0]).toEqual({ amount: "1000000", displayAmount: "1.000000" });
     });
 
     it("returns empty array for an unknown address", async () => {
