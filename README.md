@@ -109,7 +109,65 @@ docker compose up -d db
 npx prisma migrate dev --name init
 ```
 
-### 5. Start Wraith
+### 5. Seed the database (optional)
+
+Populate the database with deterministic test data for development and testing:
+
+```bash
+npm run db:seed
+```
+
+By default, this seeds `testnet`. To seed `mainnet`:
+
+```bash
+npm run db:seed -- --network=mainnet
+```
+
+You can now query the seeded data:
+
+```bash
+curl "http://localhost:3000/transfers/incoming/GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+```
+
+Expected response:
+
+```json
+{
+  "total": 2,
+  "limit": 50,
+  "offset": 0,
+  "transfers": [
+    {
+      "id": 1,
+      "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "10000000",
+      "displayAmount": "1.0000000",
+      "ledger": 2001,
+      "ledgerClosedAt": "2025-01-01T00:00:00.000Z",
+      "txHash": "tx-incoming-a-1",
+      "eventId": "integration-001"
+    },
+    {
+      "id": 2,
+      "contractId": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "40000000",
+      "displayAmount": "4.0000000",
+      "ledger": 2004,
+      "ledgerClosedAt": "2025-02-01T00:00:00.000Z",
+      "txHash": "txhash-integration-multi",
+      "eventId": "integration-004"
+    }
+  ]
+}
+```
+
+### 6. Start Wraith
 
 ```bash
 # Development (hot reload)
@@ -127,6 +185,12 @@ docker compose up --build
 
 # With Redis cache enabled
 docker compose --profile cache up --build
+```
+
+To seed the database when running via Docker, run the seed command in a separate terminal after the database is up:
+
+```bash
+npm run db:seed
 ```
 
 ***
