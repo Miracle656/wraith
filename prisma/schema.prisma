@@ -384,8 +384,16 @@ model OfframpOrder {
   id             Int      @id @default(autoincrement())
   network        String   @default("testnet")
 
-  // Linq's order id — the join key for webhooks and status polls.
+  // Linq's order id — the join key for webhooks and status polls. Never sent to
+  // clients: see publicId.
   orderId        String
+  // The id clients see and look an order up by: random and unguessable, unlike a
+  // provider id we do not control the shape of. Null on rows written before
+  // orders were access-controlled; those cannot be read through the API.
+  publicId       String?
+  // SHA-256 of the bearer token handed to the creator. Only the hash is kept, so
+  // a database read does not yield a working credential. Null as above.
+  accessTokenHash String?
   // Ours, sent as idempotencyKey. Never regenerated on retry, or the retry
   // becomes a second order that also has to be paid for.
   idempotencyKey String
@@ -417,6 +425,7 @@ model OfframpOrder {
   // Per network: an order id is unique within a chain, and the same wallet can
   // offramp on both.
   @@unique([network, orderId])
+  @@unique([network, publicId])
   @@unique([network, idempotencyKey])
   @@index([network, walletAddress])
   @@index([network, status])
