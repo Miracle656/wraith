@@ -4,6 +4,10 @@ import { OpenAPIRegistry, OpenApiGeneratorV3 } from "@asteasolutions/zod-to-open
 import {
   addressPathSchema,
   booleanOkResponseSchema,
+  candleRefreshResponseSchema,
+  candlesParamsSchema,
+  candlesQuerySchema,
+  candlesResponseSchema,
   errorResponseSchema,
   healthzResponseSchema,
   hostFnQuerySchema,
@@ -323,6 +327,30 @@ registry.registerPath({
   },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: searchResponseSchema } } },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/candles/{bucket}/{contractId}",
+  summary: "OHLC candles for a token contract",
+  request: {
+    params: candlesParamsSchema,
+    query: candlesQuerySchema,
+  },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: candlesResponseSchema } } },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/candles/refresh",
+  summary: "Refresh the OHLC aggregates",
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: candleRefreshResponseSchema } } },
     ...commonErrorResponses,
   },
 });

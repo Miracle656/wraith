@@ -8,6 +8,7 @@ import { getLatestLedger } from "./rpc";
 import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
 import { currentNetwork, enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
+import { createCandlesRouter } from "./api/candles";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createLinqWebhookRouter } from "./api/linqWebhook";
 import { createOfframpRouter } from "./api/offramp";
@@ -195,6 +196,7 @@ export function createApp(): express.Application {
 
   // ─── Accounts routes ─────────────────────────────────────────────────────
   app.use("/accounts", createAccountsRouter());
+  app.use("/candles", createCandlesRouter());
 
   // ─── Webhook subscription management ─────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());

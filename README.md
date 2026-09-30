@@ -524,6 +524,26 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 
 ***
 
+### `GET /candles/:bucket/:contractId`
+
+Returns OHLC candles from the existing `ohlc` aggregate tables. `bucket` is
+`1m`, `1h`, or `1d`; `contractId` is a 56-character Stellar contract address.
+Pagination uses `limit` (1–1000, default 100) and `offset` (non-negative, default 0).
+`POST /candles/refresh` requests one refresh of all three aggregates.
+
+The database must already contain working `ohlc.candles_*` tables and
+`ohlc.refresh_candles_*()` functions. They are not installed by Prisma's current
+startup path; the legacy `sql/001_ohlc_aggregates.sql` requires separate repair
+and deployment. These legacy aggregates do not separate networks, so they
+must not be used with a database containing transfers from multiple networks.
+
+Scheduled refresh is opt-in: set `OHLC_REFRESH_INTERVAL_MS=60000` to refresh
+every minute after those database prerequisites are met. Unset or `0` disables
+the worker, and `SKIP_INDEXER=true` always skips it. The worker stops scheduling
+on shutdown and skips ticks while an earlier refresh is still running.
+
+***
+
 ## Environment Variables
 
 | Variable              | Default       | Description                                                                                   |
@@ -537,6 +557,7 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `HORIZON_EVENTS_PATH`  | `/events`     | Horizon contract-events path used by the fallback source.                                      |
 | `START_LEDGER`        | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
 | `POLL_INTERVAL_MS`    | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
+| `OHLC_REFRESH_INTERVAL_MS` | disabled | Positive integer refresh interval in ms (max 2147483647); requires working OHLC aggregates. `0` disables; ignored when `SKIP_INDEXER=true`. |
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
 | `EVENTS_BATCH_SIZE`   | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |

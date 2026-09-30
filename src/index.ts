@@ -8,6 +8,7 @@ import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
+import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -19,8 +20,10 @@ async function main() {
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
+  let stopOhlcRefreshWorker: (() => void) | undefined;
   const shutdown = async (signal: string) => {
     console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
+    stopOhlcRefreshWorker?.();
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -56,6 +59,15 @@ async function main() {
   if (process.env.SKIP_INDEXER === "true") {
     console.log("[wraith] SKIP_INDEXER=true — API-only mode, indexer not started.");
     return;
+  }
+
+  // Opt in only after the OHLC tables and refresh functions are available.
+  // Node clamps timer delays above 2^31-1 to 1ms, so reject those as well.
+  const ohlcInterval = process.env.OHLC_REFRESH_INTERVAL_MS?.trim() ?? "";
+  const ohlcIntervalMs = Number(ohlcInterval);
+  if (/^\d+$/.test(ohlcInterval) && Number.isSafeInteger(ohlcIntervalMs)
+      && ohlcIntervalMs > 0 && ohlcIntervalMs <= 2_147_483_647) {
+    stopOhlcRefreshWorker = startOhlcRefreshWorker(ohlcIntervalMs);
   }
 
   // ── Start indexer in the background ───────────────────────────────────────
