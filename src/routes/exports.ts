@@ -6,6 +6,7 @@ import path from "path";
 import fs from "fs";
 import { requestNetwork } from "../middleware/network";
 import type { Network } from "../network";
+import { getCachedTokenDecimals } from "../tokenCache";
 
 // How many rows we fetch per DB round-trip. Keeps memory flat.
 const BATCH_SIZE = 500;
@@ -74,7 +75,8 @@ async function* streamTransfers(where: Record<string, unknown>) {
 // ── CSV endpoint ─────────────────────────────────────────────────────────────
 async function handleCsvExport(req: Request, res: Response, next: NextFunction) {
   try {
-    const where = buildWhere(req.query as Record<string, unknown>, requestNetwork(req));
+    const network = requestNetwork(req);
+    const where = buildWhere(req.query as Record<string, unknown>, network);
 
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", "attachment; filename=\"transfers.csv\"");
@@ -91,7 +93,7 @@ async function handleCsvExport(req: Request, res: Response, next: NextFunction) 
         fromAddress:     row.fromAddress ?? "",
         toAddress:       row.toAddress ?? "",
         amount:          row.amount,
-        displayAmount:   toDisplayAmount(row.amount),
+        displayAmount:   toDisplayAmount(row.amount, getCachedTokenDecimals(row.contractId, network)),
         ledger:          row.ledger,
         ledgerClosedAt:  row.ledgerClosedAt.toISOString(),
         txHash:          row.txHash,
@@ -116,7 +118,8 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
   const tmpFile = path.join(os.tmpdir(), `transfers-${Date.now()}-${Math.random().toString(36).slice(2)}.parquet`);
 
   try {
-    const where = buildWhere(req.query as Record<string, unknown>, requestNetwork(req));
+    const network = requestNetwork(req);
+    const where = buildWhere(req.query as Record<string, unknown>, network);
 
     const schema = new parquet.ParquetSchema({
       id:             { type: "INT64" },
@@ -144,7 +147,7 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
         fromAddress:    row.fromAddress ?? null,
         toAddress:      row.toAddress ?? null,
         amount:         row.amount,
-        displayAmount:  toDisplayAmount(row.amount),
+        displayAmount:  toDisplayAmount(row.amount, getCachedTokenDecimals(row.contractId, network)),
         ledger:         row.ledger,
         ledgerClosedAt: row.ledgerClosedAt.toISOString(),
         txHash:         row.txHash,

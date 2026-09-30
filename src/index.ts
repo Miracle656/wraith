@@ -8,6 +8,8 @@ import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
+import { initTokenCache } from "./tokenCache";
+import { enabledNetworks } from "./network";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -49,14 +51,10 @@ async function main() {
   // ── Start partition retention scheduler ───────────────────────────────────
   startPartitionRetentionJob();
 
-  // API-only mode. The integration harness starts the service to exercise HTTP
-  // routes against a seeded database; letting the indexer loop run there would
-  // make every request race an ingest that is also writing to the same tables,
-  // and would need live RPC the harness has no reason to depend on.
-  if (process.env.SKIP_INDEXER === "true") {
-    console.log("[wraith] SKIP_INDEXER=true — API-only mode, indexer not started.");
-    return;
-  }
+  // Seed token metadata for every served network before handling read paths.
+  // API-only deployments skip the indexer, so without this explicit seed their
+  // displayAmount values would silently fall back to 7 decimals for every token.
+  await Promise.all(enabledNetworks().map((network) => initTokenCache(network)));
 
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
