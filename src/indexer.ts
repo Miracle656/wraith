@@ -1,31 +1,17 @@
 import "dotenv/config";
 import { validateNetworkConfig, withRetry } from "./rpc";
-import { parseEvents } from "./decoder";
 import {
-  upsertTransfers,
-  upsertAccountSummaries,
-  upsertNftTransfers,
-  getNftMetadata,
-  upsertNftMetadata,
   getLastIndexedLedger,
   setLastIndexedLedger,
   pruneOldTransfers,
 } from "./db";
-import { emitTransfer, emitHostFnLog } from "./events";
-import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
-import { tagSacTransfers } from "./indexer/sac-detect";
-import {
-  parseLpShareEvents,
-  upsertLpShareTransfers,
-  resolveLpPoolIds,
-  loadKnownLpPools,
-} from "./indexer/lp-shares";
+import { resolveLpPoolIds, loadKnownLpPools } from "./indexer/lp-shares";
 import { pollParallel } from "./indexer/parallel";
+import { processEventBatch, batchTotal } from "./indexer/batch";
 import { tombstoneExpiredContracts } from "./indexer/tombstones";
-import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig, type SourceSwitcher } from "./indexer/sources";
 import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from "./network";
-import { ledgersIndexedTotal, transfersStoredTotal, lastIndexedLedger } from "./metrics";
+import { ledgersIndexedTotal, lastIndexedLedger } from "./metrics";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -87,7 +73,7 @@ export function resolveSacContractIds(network?: Network): string[] {
   // both loops at the same chain's SAC.
   return [net === "mainnet" ? DEFAULT_XLM_SAC_MAINNET : DEFAULT_XLM_SAC_TESTNET];
 }
-import { initTokenCache, getTokenMetadata } from "./tokenCache";
+import { initTokenCache } from "./tokenCache";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 // These stay process-wide: they describe how hard to poll, not which chain.
@@ -128,7 +114,7 @@ const TOMBSTONE_EVERY_CYCLES = parseInt(
  * whose failover `preferred` field is mutable — a testnet RPC outage would
  * silently repoint the mainnet loop at testnet Horizon.
  */
-type LoopState = {
+export type LoopState = {
   network: Network;
   sacContractIds: string[];
   nftContractIds: string[];
@@ -159,7 +145,7 @@ type LoopState = {
 const loops = new Map<Network, LoopState>();
 
 /** Build the isolated state for one network's loop. */
-function createLoopState(network: Network): LoopState {
+export function createLoopState(network: Network): LoopState {
   const sacContractIds = resolveSacContractIds(network);
   const nftContractIds = resolveNftContractIds(network);
   const suffix = network.toUpperCase();
@@ -309,95 +295,9 @@ async function pollOnce(
     return highestLedger;
   }
 
-  // Persist token transfers
-  // Split events by type: NFT (4 topics) vs fungible (3 topics)
-  const fungibleEvents = events.filter((e) => !isNftTransferEvent(e));
-  const nftRawEvents   = events.filter((e) => isNftTransferEvent(e));
-
-  // ── Fungible path ────────────────────────────────────────────────────────────
-  const records  = parseEvents(fungibleEvents);
-  // Tag each transfer with whether its contract is a SAC (#136). Best-effort:
-  // a detection failure must never block ingest, so default to false on error.
-  await tagSacTransfers(records, undefined, net).catch((e: unknown) =>
-    console.error(`[indexer/${net}] SAC detection failed:`, e)
-  );
-  const inserted = await upsertTransfers(records, net);
-
-  // Resolve metadata for every distinct token in this batch. Only a cache miss
-  // reaches RPC, and a miss happens once per contract for the life of the
-  // database — so this is one extra call the first time a token is seen and
-  // free thereafter. Best-effort: a token whose metadata cannot be read is
-  // still worth indexing transfers for.
-  await Promise.all(
-    [...new Set(records.map((r) => r.contractId))].map((contractId) =>
-      getTokenMetadata(contractId, net).catch(() => undefined)
-    )
-  );
-  loop.totalIndexed += inserted;
-  transfersStoredTotal.inc({ network: net, type: "fungible" }, inserted);
-
-  // Update materialized account summaries alongside transfer inserts
-  if (inserted > 0) {
-    await upsertAccountSummaries(records, net).catch((e: unknown) =>
-      console.error(`[indexer/${net}] Account summary upsert failed:`, e)
-    );
-  }
-
-  // Broadcast each new record to WebSocket subscribers
-  if (inserted > 0) {
-    records.forEach((record) => emitTransfer(record, net));
-  }
-
-  // Log every event as a raw host-fn invocation for downstream consumers (#84)
-  const hostFnRecords = events
-    .map(raw => { try { return parseHostFnEvent(raw); } catch { return null; } })
-    .filter((r): r is HostFnRecord => r !== null);
-  if (hostFnRecords.length > 0) {
-    await upsertHostFnLogs(hostFnRecords, net).catch((err: unknown) =>
-      console.error(`[indexer/${net}] host-fn log error:`, err),
-    );
-    hostFnRecords.forEach((record) => emitHostFnLog(record, net));
-  }
-
-  // ── LP-share path ──────────────────────────────────────────────────────────
-  // Decode pool deposits/withdrawals as LP-share transfers tagged with the pool
-  // ID. Best-effort and additive: deposit/withdraw events are ignored by the
-  // fungible path, while a pool's own share mint/burn is recorded here in
-  // addition to its token-transfer row.
-  const lpRecords  = parseLpShareEvents(events, loop.knownLpPools);
-  // A contract that produced an LP-share record has identified itself as a
-  // pool, so its bare mint/burn counts from here on. Learning this is what lets
-  // the bare dialect ever be accepted without an env allowlist.
-  for (const record of lpRecords) loop.knownLpPools.add(record.poolId);
-  const lpInserted = await upsertLpShareTransfers(lpRecords, net).catch((e) => {
-    console.error(`[indexer/${net}] LP-share upsert failed:`, e);
-    return 0;
-  });
-  loop.totalIndexed += lpInserted;
-
-  // ── NFT path ─────────────────────────────────────────────────────────────────
-  const nftParsed   = parseNftEvents(nftRawEvents);
-  const nftRecords  = nftParsed.map((p) => p.record);
-  const nftInserted = await upsertNftTransfers(nftRecords, net);
-  loop.totalIndexed += nftInserted;
-  transfersStoredTotal.inc({ network: net, type: "nft" }, nftInserted);
-
-  // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached
-  if (nftParsed.length > 0) {
-    const seen = new Set<string>();
-    for (const { record, tokenIdScVal } of nftParsed) {
-      const key = `${record.contractId}:${record.tokenId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const cached = await getNftMetadata(record.contractId, record.tokenId, net);
-      if (!cached) {
-        const meta = await fetchNftMetadata(record.contractId, tokenIdScVal, net).catch(() => ({}));
-        await upsertNftMetadata(record.contractId, record.tokenId, meta, net).catch((e: unknown) =>
-          console.error(`[indexer/${net}] NFT metadata upsert failed:`, e)
-        );
-      }
-    }
-  }
+  const batch = await processEventBatch(events, { network: net, knownLpPools: loop.knownLpPools });
+  const { fungibleInserted: inserted, nftInserted, lpInserted } = batch;
+  loop.totalIndexed += batchTotal(batch);
 
   await setLastIndexedLedger(highestLedger, net);
   recordLedgerProgress(net, fromLedger, highestLedger);
@@ -407,6 +307,45 @@ async function pollOnce(
   );
 
   return highestLedger;
+}
+
+// ─── One ingest window ────────────────────────────────────────────────────────
+/**
+ * Ingest ledgers `fromLedger`..`toLedger`, sequentially or sharded across
+ * `workers` (default `INGEST_WORKERS`). Returns the highest ledger seen.
+ *
+ * `workers` changes how fast the window is ingested, never what is indexed:
+ * both branches watch the same contracts (SAC and NFT), fetch through the same
+ * source switcher, and hand events to the same `processEventBatch` (#203).
+ */
+export async function ingestWindow(
+  loop: LoopState,
+  fromLedger: number,
+  toLedger: number,
+  workers: number = INGEST_WORKERS,
+): Promise<number> {
+  const net = loop.network;
+  if (workers > 1 && loop.allContractIds.length > 1) {
+    // Parallel path: shard contracts across N workers for higher throughput (#83)
+    const { totalInserted, highestLedger } = await pollParallel(
+      loop.allContractIds,
+      fromLedger,
+      toLedger,
+      BATCH_SIZE,
+      workers,
+      net,
+      {
+        fetchEvents: (from, to, contractIds, limit) =>
+          loop.sourceSwitcher.fetchEvents(from, to, contractIds, limit),
+        processBatch: (events) =>
+          processEventBatch(events, { network: net, knownLpPools: loop.knownLpPools }),
+      },
+    );
+    loop.totalIndexed += totalInserted;
+    recordLedgerProgress(net, fromLedger, highestLedger);
+    return highestLedger;
+  }
+  return pollOnce(loop, fromLedger, toLedger);
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
@@ -488,23 +427,7 @@ export async function startIndexer(network?: Network): Promise<void> {
         continue;
       }
 
-      if (INGEST_WORKERS > 1 && loop.sacContractIds.length > 1) {
-        // Parallel path: shard contracts across N workers for higher throughput (#83)
-        const { totalInserted, highestLedger } = await pollParallel(
-          loop.sacContractIds,
-          currentLedger,
-          target,
-          BATCH_SIZE,
-          INGEST_WORKERS,
-          net,
-        );
-        loop.totalIndexed += totalInserted;
-        transfersStoredTotal.inc({ network: net, type: "fungible" }, totalInserted);
-        recordLedgerProgress(net, currentLedger, highestLedger);
-        currentLedger = highestLedger;
-      } else {
-        currentLedger = await pollOnce(loop, currentLedger, target);
-      }
+      currentLedger = await ingestWindow(loop, currentLedger, target);
 
       // Periodic data retention cleanup
       loop.pollCycleCount++;
