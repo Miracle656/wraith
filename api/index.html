@@ -253,6 +253,12 @@ dashboards, and alerting.</p>
 <td>Failed RPC attempts. <code>retry</code> counts attempts <code>withRetry</code> absorbed, <code>exhausted</code> counts calls that gave up — a degrading endpoint shows up in <code>retry</code> long before it fails a call.</td>
 </tr>
 <tr>
+<td><code>events_skipped_total</code></td>
+<td>counter</td>
+<td><code>reason</code></td>
+<td>Events the decoder dropped. <code>unrecognised</code> is non-token events (normal); <code>malformed</code> is token events that failed to decode — a rising rate points at a non-standard contract or a decoder bug.</td>
+</tr>
+<tr>
 <td><code>last_indexed_ledger</code></td>
 <td>gauge</td>
 <td><code>network</code></td>
