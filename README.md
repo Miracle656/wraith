@@ -331,6 +331,8 @@ console.log(data);
 
 Base URL: `http://localhost:3000`
 
+Offramp order lookups need a bearer token; see [docs/offramp-orders.md](docs/offramp-orders.md).
+
 ### Selecting a network
 
 Wraith stores testnet and mainnet rows in the same tables, discriminated by a
