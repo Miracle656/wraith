@@ -190,6 +190,50 @@ describe("defaultKeyFn", () => {
   it("flattens array query values", () => {
     expect(defaultKeyFn(baseReq({ tag: ["x", "y"] }))).toBe("GET:/search/?tag=x,y");
   });
+
+  it("includes resolved req.network in the cache key prefix", () => {
+    const req = {
+      ...baseReq({ limit: "10" }),
+      network: "testnet" as any,
+    } as unknown as Request;
+    expect(defaultKeyFn(req)).toBe("testnet:GET:/search/?limit=10");
+  });
+
+  it("produces different keys for two requests differing only by X-Network", () => {
+    const mainnetReq = {
+      ...baseReq({ q: "USDC" }),
+      headers: { "x-network": "mainnet" },
+      network: "mainnet" as any,
+    } as unknown as Request;
+    const testnetReq = {
+      ...baseReq({ q: "USDC" }),
+      headers: { "x-network": "testnet" },
+      network: "testnet" as any,
+    } as unknown as Request;
+
+    const mainnetKey = defaultKeyFn(mainnetReq);
+    const testnetKey = defaultKeyFn(testnetReq);
+
+    expect(mainnetKey).toBe("mainnet:GET:/search/?q=USDC");
+    expect(testnetKey).toBe("testnet:GET:/search/?q=USDC");
+    expect(mainnetKey).not.toBe(testnetKey);
+  });
+
+  it("produces the same key for ?network=mainnet and X-Network: mainnet", () => {
+    const queryReq = {
+      ...baseReq({ network: "mainnet", q: "USDC" }),
+      network: "mainnet" as any,
+    } as unknown as Request;
+    const headerReq = {
+      ...baseReq({ q: "USDC" }),
+      headers: { "x-network": "mainnet" },
+      network: "mainnet" as any,
+    } as unknown as Request;
+
+    expect(defaultKeyFn(queryReq)).toBe("mainnet:GET:/search/?q=USDC");
+    expect(defaultKeyFn(headerReq)).toBe("mainnet:GET:/search/?q=USDC");
+    expect(defaultKeyFn(queryReq)).toBe(defaultKeyFn(headerReq));
+  });
 });
 
 describe("RedisCache", () => {
