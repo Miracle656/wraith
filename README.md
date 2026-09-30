@@ -70,12 +70,13 @@ cp .env.example .env
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="testnet"
 # SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
 SOROBAN_RPC_URL=
 
 START_LEDGER=
-CONTRACT_IDS=
+SAC_CONTRACT_IDS=
 PORT=3000
 ```
 
@@ -83,12 +84,13 @@ PORT=3000
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="mainnet"
 # Required on mainnet — no free public Soroban RPC exists
 SOROBAN_RPC_URL="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
 
 # Strongly recommended on mainnet: filter to specific contracts to reduce load
-CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
+SAC_CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
 START_LEDGER=
 PORT=3000
 ```
@@ -98,7 +100,7 @@ PORT=3000
 ### 3. Start Postgres
 
 ```bash
-docker-compose up -d db
+docker compose up -d db
 ```
 
 ### 4. Run database migrations
@@ -120,7 +122,11 @@ npm run build && npm start
 Or run everything via Docker:
 
 ```bash
-docker-compose up --build
+# Without cache (default)
+docker compose up --build
+
+# With Redis cache enabled
+docker compose --profile cache up --build
 ```
 
 ***
