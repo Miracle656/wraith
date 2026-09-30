@@ -399,7 +399,7 @@ describe("retrying an order creation", () => {
     const app = makeApp();
     await place(app);
 
-    const res = await place(app, { walletAddress: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBSAM" });
+    const res = await place(app, { walletAddress: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBKOH" });
 
     expect(res.status).toBe(409);
     expect(res.text).not.toContain("GDEPOSITADDRESS");
