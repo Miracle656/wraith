@@ -301,6 +301,18 @@ dashboards, and alerting.</p>
 <td><code>operation</code></td>
 <td>Duration of instrumented DB operations, failures included.</td>
 </tr>
+<tr>
+<td><code>http_requests_total</code></td>
+<td>counter</td>
+<td><code>method</code>, <code>route</code>, <code>status</code></td>
+<td>HTTP requests served. <code>route</code> is the Express route <em>pattern</em>, never the raw URL, so addresses never become label values; an unmatched request reports <code>route=&quot;unknown&quot;</code>.</td>
+</tr>
+<tr>
+<td><code>http_request_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>method</code>, <code>route</code></td>
+<td>HTTP latency, 5 ms to 10 s. No <code>status</code> label — the split is rarely worth the extra series.</td>
+</tr>
 </tbody>
 </table>
 <p>Standard <code>process_*</code> and <code>nodejs_*</code> metrics are exported alongside these.</p>
