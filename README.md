@@ -63,7 +63,7 @@ npx prisma generate
 ### 2. Configure
 
 ```bash
-cp .env.example .env
+cp .env.example.env
 ```
 
 **Testnet setup** (quick start):
@@ -96,19 +96,16 @@ PORT=3000
 > **Tip:** If you omit both `SOROBAN_RPC_URL` and `STELLAR_NETWORK`, Wraith will exit immediately with a clear error explaining what to set.
 
 ### 3. Start Postgres
-
 ```bash
 docker-compose up -d db
 ```
 
 ### 4. Run database migrations
-
 ```bash
 npx prisma migrate dev --name init
 ```
 
 ### 5. Start Wraith
-
 ```bash
 # Development (hot reload)
 npm run dev
