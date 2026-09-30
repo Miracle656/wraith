@@ -27,7 +27,7 @@ import {
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
-import { renderMetrics, metricsContentType } from "./metrics";
+import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens } from "./tokenCache";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
@@ -139,6 +139,47 @@ export function createApp(): express.Application {
   app.set("trust proxy", 1);
 
   app.use(cors());
+
+  // ─── HTTP metrics middleware ──────────────────────────────────────────────
+  // First in the chain, deliberately: mounted below networkMiddleware and the
+  // rate limiter it would never see the requests those two reject, so a 429
+  // storm or a flood of invalid ?network= values would be invisible in
+  // http_requests_total — exactly the traffic you want a counter for.
+  //
+  // The route label is `req.route?.path`, the Express route pattern, and never
+  // the raw URL: addresses and contract ids must not become label values.
+  // Do NOT "improve" this to `req.baseUrl + req.route.path`. `req.baseUrl` is
+  // the *matched* mount path, not the pattern, and `src/api/accounts.ts:29`
+  // mounts a router at "/:address/transfers" — so baseUrl reads
+  // "/accounts/GABC…/transfers" with the real address in it. One label value
+  // per address is unbounded cardinality and an unbounded memory leak in
+  // prom-client. The cost of the safe version is that endpoints whose routers
+  // declare "/" (e.g. /search, /webhooks) all report route="/"; that is a
+  // legibility loss, not a correctness or cardinality one.
+  //
+  // `method` is bounded by the set Node's HTTP parser accepts and `status` by
+  // the status codes we emit, so every label here has a fixed domain.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Skip /metrics: a scrape endpoint that increments its own counters
+    // creates a feedback loop and misrepresents real traffic.
+    if (req.path === "/metrics") {
+      return next();
+    }
+
+    const start = process.hrtime.bigint();
+
+    res.on("finish", () => {
+      const routePattern = req.route?.path ?? "unknown";
+      const durationSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+      const status = String(res.statusCode);
+
+      httpRequestsTotal.inc({ method: req.method, route: routePattern, status });
+      httpRequestDurationSeconds.observe({ method: req.method, route: routePattern }, durationSeconds);
+    });
+
+    next();
+  });
+
 
   // BEFORE express.json(). Linq signs the raw request body, so a parser that
   // consumes and re-serialises it makes every signature unverifiable - the
