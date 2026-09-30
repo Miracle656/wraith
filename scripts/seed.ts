@@ -6,8 +6,9 @@
  * on unique constraints so rows are never duplicated.
  *
  * Usage:
- *   npx ts-node scripts/seed.ts
- *   npx ts-node scripts/seed.ts --network mainnet
+ *   npm run db:seed
+ *   npm run db:seed -- --network=mainnet
+ *   npm run db:seed -- --network mainnet
  *
  * Environment variables:
  *   DATABASE_URL          — Postgres connection string (required)
@@ -24,10 +25,16 @@ import { resolveNetwork, type Network } from "../src/network";
 
 function parseArgs(): { network: Network } {
   const args = process.argv.slice(2);
-  const networkFlag = args.find((arg) => arg.startsWith("--network="));
-  const networkValue = networkFlag
-    ? networkFlag.split("=")[1]
-    : process.env.STELLAR_NETWORK || "testnet";
+  // Both spellings: `--network=mainnet` and `--network mainnet`. Accepting only
+  // the first silently seeded testnet when the second was typed, which is the
+  // worst outcome for a flag whose whole job is picking the target.
+  const eq = args.find((arg) => arg.startsWith("--network="));
+  const spaced = args.indexOf("--network");
+  const networkValue = eq
+    ? eq.slice("--network=".length)
+    : spaced !== -1
+      ? args[spaced + 1]
+      : process.env.STELLAR_NETWORK || "testnet";
 
   if (networkValue !== "testnet" && networkValue !== "mainnet") {
     console.error(`Invalid network: "${networkValue}". Valid values: testnet, mainnet.`);
