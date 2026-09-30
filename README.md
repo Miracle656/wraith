@@ -439,6 +439,8 @@ last_indexed_ledger{network="mainnet"} 5842100
 | `rpc_errors_total` | counter | `outcome` | Failed RPC attempts. `retry` counts attempts `withRetry` absorbed, `exhausted` counts calls that gave up — a degrading endpoint shows up in `retry` long before it fails a call. |
 | `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
 | `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
+| `http_requests_total` | counter | `method`, `route`, `status` | HTTP requests served. `route` is the Express route *pattern*, never the raw URL, so addresses never become label values; an unmatched request reports `route="unknown"`. |
+| `http_request_duration_seconds` | histogram | `method`, `route` | HTTP latency, 5 ms to 10 s. No `status` label — the split is rarely worth the extra series. |
 
 Standard `process_*` and `nodejs_*` metrics are exported alongside these.
 

@@ -140,24 +140,25 @@ export function createApp(): express.Application {
 
   app.use(cors());
 
-  // BEFORE express.json(). Linq signs the raw request body, so a parser that
-  // consumes and re-serialises it makes every signature unverifiable - the
-  // bytes differ even when the value does not. Their docs call this out
-  // specifically, and it is silent when wrong: the route works, the signature
-  // simply never matches.
-  app.use("/webhooks/linq", createLinqWebhookRouter());
-
-  app.use(express.json());
-  app.use(jsonApiMiddleware);
-  // Before every router: each request carries exactly one network, resolved and
-  // validated once here rather than re-parsed per handler (#163).
-  app.use(networkMiddleware);
-  app.use(limiter);
-
   // ─── HTTP metrics middleware ──────────────────────────────────────────────
-  // Records request count and latency per method + route pattern.
-  // Uses req.route?.path so the route label is the Express pattern (e.g. /transfers/incoming/:address),
-  // never the raw path — addresses must not become label values. /metrics is excluded.
+  // First in the chain, deliberately: mounted below networkMiddleware and the
+  // rate limiter it would never see the requests those two reject, so a 429
+  // storm or a flood of invalid ?network= values would be invisible in
+  // http_requests_total — exactly the traffic you want a counter for.
+  //
+  // The route label is `req.route?.path`, the Express route pattern, and never
+  // the raw URL: addresses and contract ids must not become label values.
+  // Do NOT "improve" this to `req.baseUrl + req.route.path`. `req.baseUrl` is
+  // the *matched* mount path, not the pattern, and `src/api/accounts.ts:29`
+  // mounts a router at "/:address/transfers" — so baseUrl reads
+  // "/accounts/GABC…/transfers" with the real address in it. One label value
+  // per address is unbounded cardinality and an unbounded memory leak in
+  // prom-client. The cost of the safe version is that endpoints whose routers
+  // declare "/" (e.g. /search, /webhooks) all report route="/"; that is a
+  // legibility loss, not a correctness or cardinality one.
+  //
+  // `method` is bounded by the set Node's HTTP parser accepts and `status` by
+  // the status codes we emit, so every label here has a fixed domain.
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Skip /metrics: a scrape endpoint that increments its own counters
     // creates a feedback loop and misrepresents real traffic.
@@ -178,6 +179,21 @@ export function createApp(): express.Application {
 
     next();
   });
+
+
+  // BEFORE express.json(). Linq signs the raw request body, so a parser that
+  // consumes and re-serialises it makes every signature unverifiable - the
+  // bytes differ even when the value does not. Their docs call this out
+  // specifically, and it is silent when wrong: the route works, the signature
+  // simply never matches.
+  app.use("/webhooks/linq", createLinqWebhookRouter());
+
+  app.use(express.json());
+  app.use(jsonApiMiddleware);
+  // Before every router: each request carries exactly one network, resolved and
+  // validated once here rather than re-parsed per handler (#163).
+  app.use(networkMiddleware);
+  app.use(limiter);
 
   // ─── Stale read middleware ──────────────────────────────────────────
   // Attaches X-Data-Stale and X-As-Of-Ledger headers plus `stale` / `as_of_ledger`
