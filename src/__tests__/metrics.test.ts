@@ -6,6 +6,7 @@ import {
   lastIndexedLedger,
   observeDbQuery,
   recordRpcError,
+  recordSkippedLedger,
   registry,
   _resetMetrics,
 } from "../metrics";
@@ -58,6 +59,7 @@ describe("Prometheus metrics (#39)", () => {
       const res = await request(app).get("/metrics");
 
       expect(res.text).toContain("# TYPE ledgers_indexed_total counter");
+      expect(res.text).toContain("# TYPE ledgers_skipped_total counter");
       expect(res.text).toContain("# TYPE transfers_stored_total counter");
       expect(res.text).toContain("# TYPE rpc_errors_total counter");
       expect(res.text).toContain("# TYPE last_indexed_ledger gauge");
@@ -127,6 +129,28 @@ describe("Prometheus metrics (#39)", () => {
       const res = await request(app).get("/metrics");
       expect(res.text).toContain('rpc_errors_total{outcome="retry"} 2');
       expect(res.text).toContain('rpc_errors_total{outcome="exhausted"} 1');
+    });
+  });
+
+  describe("recordSkippedLedger", () => {
+    it("counts skipped ledgers per network, with no ledger-sized label", async () => {
+      // A skipped ledger is permanent loss, and the ledger number is the value
+      // that would blow the series count up — the counter has to answer without
+      // it, or an operator ends up paying for a cardinality accident.
+      recordSkippedLedger("testnet");
+      recordSkippedLedger("testnet");
+      recordSkippedLedger("mainnet");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('ledgers_skipped_total{network="testnet"} 2');
+      expect(res.text).toContain('ledgers_skipped_total{network="mainnet"} 1');
+
+      const skipped = res.text
+        .split("\n")
+        .filter((line) => line.startsWith("ledgers_skipped_total{"));
+      expect(skipped).toHaveLength(2);
+      expect(skipped.join("\n")).not.toMatch(/ledger=|contract=|address=|url=/);
     });
   });
 

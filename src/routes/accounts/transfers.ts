@@ -89,6 +89,7 @@ export function createAccountsTransfersRouter(): Router {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({

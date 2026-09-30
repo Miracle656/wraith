@@ -697,6 +697,17 @@
             "description": "Comma-separated field list",
             "name": "$select",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
+            "in": "query"
           }
         ],
         "responses": {
@@ -708,7 +719,12 @@
                   "type": "object",
                   "properties": {
                     "total": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Exact match count. Only present when the request set includeTotal=true"
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "description": "True when another page exists"
                     },
                     "limit": {
                       "type": "integer"
@@ -798,7 +814,7 @@
                     }
                   },
                   "required": [
-                    "total",
+                    "hasMore",
                     "limit",
                     "offset",
                     "transfers"
@@ -1031,6 +1047,17 @@
             "description": "Comma-separated field list",
             "name": "$select",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
+            "in": "query"
           }
         ],
         "responses": {
@@ -1042,7 +1069,12 @@
                   "type": "object",
                   "properties": {
                     "total": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Exact match count. Only present when the request set includeTotal=true"
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "description": "True when another page exists"
                     },
                     "limit": {
                       "type": "integer"
@@ -1132,7 +1164,7 @@
                     }
                   },
                   "required": [
-                    "total",
+                    "hasMore",
                     "limit",
                     "offset",
                     "transfers"
@@ -1365,6 +1397,17 @@
             "description": "Comma-separated field list",
             "name": "$select",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
+            "in": "query"
           }
         ],
         "responses": {
@@ -1376,7 +1419,12 @@
                   "type": "object",
                   "properties": {
                     "total": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Exact match count. Only present when the request set includeTotal=true"
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "description": "True when another page exists"
                     },
                     "limit": {
                       "type": "integer"
@@ -1466,7 +1514,7 @@
                     }
                   },
                   "required": [
-                    "total",
+                    "hasMore",
                     "limit",
                     "offset",
                     "transfers"
@@ -1638,6 +1686,17 @@
             "required": false,
             "description": "Comma-separated list of event types",
             "name": "eventType",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
             "in": "query"
           }
         ],
@@ -2465,6 +2524,17 @@
             "description": "Comma-separated field list",
             "name": "$select",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
+            "in": "query"
           }
         ],
         "responses": {
@@ -2476,7 +2546,12 @@
                   "type": "object",
                   "properties": {
                     "total": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Exact match count. Only present when the request set includeTotal=true"
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "description": "True when another page exists"
                     },
                     "limit": {
                       "type": "integer"
@@ -2566,7 +2641,7 @@
                     }
                   },
                   "required": [
-                    "total",
+                    "hasMore",
                     "limit",
                     "offset",
                     "transfers"
@@ -3572,6 +3647,17 @@
             "description": "Comma-separated field list",
             "name": "$select",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "boolean",
+              "nullable": true,
+              "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"
+            },
+            "required": false,
+            "description": "Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate",
+            "name": "includeTotal",
+            "in": "query"
           }
         ],
         "responses": {
@@ -3583,7 +3669,12 @@
                   "type": "object",
                   "properties": {
                     "total": {
-                      "type": "integer"
+                      "type": "integer",
+                      "description": "Exact match count. Only present when the request set includeTotal=true"
+                    },
+                    "hasMore": {
+                      "type": "boolean",
+                      "description": "True when another page exists"
                     },
                     "limit": {
                       "type": "integer"
@@ -3657,7 +3748,7 @@
                     }
                   },
                   "required": [
-                    "total",
+                    "hasMore",
                     "limit",
                     "offset",
                     "transfers"

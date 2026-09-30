@@ -61,17 +61,30 @@ export interface TransferRecord {
 type ListPage<T> = {
   rows: T[];
   nextCursor: string | null;
+  /** True when the n+1 fetch found a row past this page. */
+  hasMore: boolean;
 };
+
+/**
+ * A `COUNT(*)` over the same filter costs as much as walking every matching
+ * row, and on the tables this service exists to grow it dominates the request.
+ * Lists therefore skip it unless the caller asks with `includeTotal` (#206);
+ * `hasMore` from the n+1 fetch already answers what pagination needs.
+ */
+function totalField(total: number | undefined): { total?: number } {
+  return total === undefined ? {} : { total };
+}
 
 function buildListPage<T extends { id: number }>(rows: T[], limit: number): ListPage<T> {
   if (rows.length <= limit) {
-    return { rows, nextCursor: null };
+    return { rows, nextCursor: null, hasMore: false };
   }
 
   const pageRows = rows.slice(0, limit);
   return {
     rows: pageRows,
     nextCursor: encodeCursor(pageRows[pageRows.length - 1].id),
+    hasMore: true,
   };
 }
 
@@ -355,6 +368,8 @@ export type TransferQueryParams = {
   eventTypes?: string[];
   limit?: number;
   offset?: number;
+  /** Also run an exact COUNT. Off by default because it is expensive. */
+  includeTotal?: boolean;
 };
 
 export async function queryTransfers(params: TransferQueryParams) {
@@ -374,6 +389,7 @@ export async function queryTransfers(params: TransferQueryParams) {
     eventTypes,
     limit = 50,
     offset = 0,
+    includeTotal = false,
   } = params;
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
@@ -426,23 +442,24 @@ export async function queryTransfers(params: TransferQueryParams) {
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
 
-  const [total, transfers] = await observeDbQuery("queryTransfers", () =>
-    prisma.$transaction([
-      prisma.tokenTransfer.count({ where }),
-      prisma.tokenTransfer.findMany({
-        where,
-        orderBy: [{ ledger: "desc" }, { id: "desc" }],
-        take: cap + 1,
-        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
-        ...(prismaSelect ? { select: prismaSelect } : {}),
-      }),
-    ])
-  );
+  const [total, transfers] = await observeDbQuery("queryTransfers", async () => {
+    const rowsQuery = prisma.tokenTransfer.findMany({
+      where,
+      orderBy: [{ ledger: "desc" }, { id: "desc" }],
+      take: cap + 1,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+      ...(prismaSelect ? { select: prismaSelect } : {}),
+    });
+    return includeTotal
+      ? prisma.$transaction([prisma.tokenTransfer.count({ where }), rowsQuery])
+      : ([undefined, await rowsQuery] as const);
+  });
 
   const page = buildListPage(transfers as Array<{ id: number }>, cap);
 
   return {
-    total,
+    ...totalField(total),
+    hasMore: page.hasMore,
     transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect, {
       displayAmount: (row) => toDisplayAmount(String((row as { amount?: string }).amount)),
     }),
@@ -606,6 +623,8 @@ export type NftTransferQueryParams = {
   toLedger?: number;
   limit?: number;
   offset?: number;
+  /** Also run an exact COUNT. Off by default because it is expensive. */
+  includeTotal?: boolean;
 };
 
 export async function queryNftTransfers(params: NftTransferQueryParams) {
@@ -621,6 +640,7 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
     toLedger,
     limit = 50,
     offset = 0,
+    includeTotal = false,
   } = params;
 
   const baseWhere: Prisma.NftTransferWhereInput = {
@@ -661,21 +681,22 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
 
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
-  const [total, transfers] = await prisma.$transaction([
-    prisma.nftTransfer.count({ where }),
-    prisma.nftTransfer.findMany({
-      where,
-      orderBy: [{ ledger: "desc" }, { id: "desc" }],
-      take: cap + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
-      ...(prismaSelect ? { select: prismaSelect } : {}),
-    }),
-  ]);
+  const rowsQuery = prisma.nftTransfer.findMany({
+    where,
+    orderBy: [{ ledger: "desc" }, { id: "desc" }],
+    take: cap + 1,
+    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+    ...(prismaSelect ? { select: prismaSelect } : {}),
+  });
+  const [total, transfers] = includeTotal
+    ? await prisma.$transaction([prisma.nftTransfer.count({ where }), rowsQuery])
+    : ([undefined, await rowsQuery] as const);
 
   const page = buildListPage(transfers as Array<{ id: number }>, cap);
 
   return {
-    total,
+    ...totalField(total),
+    hasMore: page.hasMore,
     transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect),
     nextCursor: page.nextCursor,
   };
@@ -807,10 +828,22 @@ export type AccountSummaryQueryParams = {
   cursor?: string;
   limit?: number;
   offset?: number;
+  /** Also run an exact COUNT. Off by default because it is expensive. */
+  includeTotal?: boolean;
 };
 
 export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
-  const { network, address, contractId, filter, select, cursor, limit = 50, offset = 0 } = params;
+  const {
+    network,
+    address,
+    contractId,
+    filter,
+    select,
+    cursor,
+    limit = 50,
+    offset = 0,
+    includeTotal = false,
+  } = params;
 
   const baseWhere: Prisma.AccountSummaryWhereInput = {
     network: resolveNetwork(network),
@@ -840,21 +873,22 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
 
   const cap = Math.min(limit, 200);
   const cursorId = decodeCursor(cursor);
-  const [total, rows] = await prisma.$transaction([
-    prisma.accountSummary.count({ where }),
-    prisma.accountSummary.findMany({
-      where,
-      orderBy: [{ lastActivityAt: "desc" }, { id: "desc" }],
-      take: cap + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
-      ...(prismaSelect ? { select: prismaSelect } : {}),
-    }),
-  ]);
+  const rowsQuery = prisma.accountSummary.findMany({
+    where,
+    orderBy: [{ lastActivityAt: "desc" }, { id: "desc" }],
+    take: cap + 1,
+    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+    ...(prismaSelect ? { select: prismaSelect } : {}),
+  });
+  const [total, rows] = includeTotal
+    ? await prisma.$transaction([prisma.accountSummary.count({ where }), rowsQuery])
+    : ([undefined, await rowsQuery] as const);
 
   const page = buildListPage(rows as Array<{ id: number }>, cap);
 
   return {
-    total,
+    ...totalField(total),
+    hasMore: page.hasMore,
     transfers: selectRows(page.rows as Array<Record<string, unknown>>, requestedSelect, {
       displayTotalSent: (row) => row.totalSent,
       displayTotalReceived: (row) => row.totalReceived,
@@ -880,6 +914,8 @@ export type AllTransfersQueryParams = {
   eventTypes?: string[];
   limit?: number;
   offset?: number;
+  /** Also run an exact COUNT. Off by default because it is expensive. */
+  includeTotal?: boolean;
 };
 
 export async function queryAllTransfers(params: AllTransfersQueryParams) {
@@ -898,6 +934,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
     eventTypes,
     limit = 50,
     offset = 0,
+    includeTotal = false,
   } = params;
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
@@ -949,16 +986,16 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
       }
     : undefined;
 
-  const [total, rows] = await prisma.$transaction([
-    prisma.tokenTransfer.count({ where }),
-    prisma.tokenTransfer.findMany({
-      where,
-      orderBy: [{ ledger: "desc" }, { id: "desc" }],
-      take: cap + 1,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
-      ...(prismaSelect ? { select: prismaSelect } : {}),
-    }),
-  ]);
+  const rowsQuery = prisma.tokenTransfer.findMany({
+    where,
+    orderBy: [{ ledger: "desc" }, { id: "desc" }],
+    take: cap + 1,
+    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : { skip: offset }),
+    ...(prismaSelect ? { select: prismaSelect } : {}),
+  });
+  const [total, rows] = includeTotal
+    ? await prisma.$transaction([prisma.tokenTransfer.count({ where }), rowsQuery])
+    : ([undefined, await rowsQuery] as const);
 
   const page = buildListPage(rows as Array<{ id: number }>, cap);
 
@@ -967,7 +1004,7 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
     direction: (row) => ((row as { toAddress?: string | null }).toAddress === address ? "incoming" : "outgoing"),
   });
 
-  return { total, transfers, nextCursor: page.nextCursor };
+  return { ...totalField(total), hasMore: page.hasMore, transfers, nextCursor: page.nextCursor };
 }
 
 // ─── Popular assets query ──────────────────────────────────────────────────

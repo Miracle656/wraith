@@ -5,7 +5,11 @@ import {
   type NftMetadataItem,
 } from "../indexer/nft-metadata";
 
-const CONTRACT = "CBC42KFZO33TYVFDOUXFRWXYYXHFGH7W5GM4IJQSXKGFINKL2XPP4XTE";
+import { StrKey } from "@stellar/stellar-sdk";
+
+// Built from raw bytes, so it is a valid strkey by construction rather than a
+// hand-typed string with a checksum nobody verified.
+const CONTRACT = StrKey.encodeContract(Buffer.alloc(32, 11));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

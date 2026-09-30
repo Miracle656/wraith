@@ -127,13 +127,27 @@ export interface CacheMiddlewareOptions {
 const HEADER_NO_CACHE = "x-no-cache";
 const HEADER_CACHE_STATUS = "X-Cache";
 
-/** Stable key: sorts query params so `?a=1&b=2` and `?b=2&a=1` collide. */
+/**
+ * Stable key: sorts query params so `?a=1&b=2` and `?b=2&a=1` collide.
+ *
+ * The resolved network (`req.network`, set by `networkMiddleware`) is included
+ * so that mainnet and testnet requests never share a cache entry even when the
+ * network is passed via the `X-Network` header rather than `?network=` — the
+ * header is invisible to the query-string portion of the key.
+ *
+ * `?network=` is excluded from the query segment because it is already
+ * captured by `req.network`; keeping it would produce redundant / double-
+ * encoded keys and break the `?network=mainnet` ≡ `X-Network: mainnet`
+ * equivalence required by the acceptance criteria.
+ */
 export function defaultKeyFn(req: Request): string {
   const entries = Object.entries(req.query as Record<string, unknown>)
+    .filter(([k]) => k !== "network")
     .map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : String(v)] as const)
     .sort(([a], [b]) => a.localeCompare(b));
   const qs = entries.map(([k, v]) => `${k}=${v}`).join("&");
-  return `${req.method}:${req.baseUrl}${req.path}?${qs}`;
+  const network = req.network ?? "unknown";
+  return `${req.method}:${network}:${req.baseUrl}${req.path}?${qs}`;
 }
 
 /**

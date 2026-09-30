@@ -12,6 +12,7 @@
  * between tests without clobbering theirs.
  */
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
+import type { Network } from "./network";
 
 export const registry = new Registry();
 
@@ -63,6 +64,39 @@ export const rpcErrorsTotal = new Counter({
 });
 
 /**
+ * Ledgers the indexer gave up on, per network.
+ *
+ * A skip is the one failure the indexer cannot recover from: the ledger's events
+ * are never written and the cursor has already advanced past it, so the gap is
+ * permanent. It only happens for a genuine XDR decode failure, which means any
+ * non-zero value deserves a look, and a `rate()` over it says whether the gap is
+ * still growing.
+ *
+ * Labelled by network only. The ledger number would be the interesting value and
+ * is deliberately absent: one series per skipped ledger is unbounded cardinality,
+ * and the counter answers the same question without it.
+ */
+export const ledgersSkippedTotal = new Counter({
+  name: "ledgers_skipped_total",
+  help: "Ledgers skipped by the indexer after an XDR decode failure, per network",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
+/**
+ * Events dropped by the decoder, by reason.
+ *
+ * `malformed` means a token event that failed to decode; a rising rate points
+ * at a contract emitting non-standard events or a decoder bug.
+ */
+export const eventsSkippedTotal = new Counter({
+  name: "events_skipped_total",
+  help: "Events skipped by the decoder",
+  labelNames: ["reason"] as const,
+  registers: [registry],
+});
+
+/**
  * The highest ledger the indexer has committed, per network.
  *
  * A gauge, not a counter: it is a position, and comparing it against the chain
@@ -108,6 +142,17 @@ export async function observeDbQuery<T>(operation: string, fn: () => Promise<T>)
 /** Record one failed RPC attempt. `outcome` distinguishes a retry from a give-up. */
 export function recordRpcError(outcome: "retry" | "exhausted"): void {
   rpcErrorsTotal.inc({ outcome });
+}
+
+/**
+ * Record one ledger abandoned after a genuine XDR decode failure.
+ *
+ * Called only where a ledger is actually given up on, never for the bisection
+ * that looks for it — a bisection is a search, and counting it would inflate the
+ * count by the depth of the search.
+ */
+export function recordSkippedLedger(network: Network): void {
+  ledgersSkippedTotal.inc({ network });
 }
 
 /** Serialize the registry in Prometheus text exposition format. */
