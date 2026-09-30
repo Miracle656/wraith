@@ -43,7 +43,9 @@ export const typeDefs = `#graphql
   }
 
   type TransferConnection {
-    total: Int!
+    "Exact match count. Null unless the query passed includeTotal: true, because it costs a full COUNT."
+    total: Int
+    hasMore: Boolean!
     transfers: [Transfer!]!
     nextCursor: String
   }
@@ -65,6 +67,8 @@ export const typeDefs = `#graphql
       network: Network
       limit: Int = 50
       offset: Int = 0
+      "Also compute the exact total. Slower on large result sets."
+      includeTotal: Boolean = false
     ): TransferConnection!
     transferByTx(txHash: String!, network: Network): [Transfer!]!
     summary(address: String!, contractId: String, network: Network): [TokenSummary!]!
@@ -132,6 +136,7 @@ export const resolvers = {
         network?: NetworkArg;
         limit?: number;
         offset?: number;
+        includeTotal?: boolean;
       },
       ctx?: GraphQLContext
     ) => {
@@ -141,6 +146,7 @@ export const resolvers = {
         contractId: args.contractId,
         limit: args.limit,
         offset: args.offset,
+        includeTotal: args.includeTotal,
       };
 
       const result =

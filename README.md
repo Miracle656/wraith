@@ -218,7 +218,8 @@ console.log(data);
 
 // Expected response
 // {
-//   "total": 42,
+//   "hasMore": true,
+//   "nextCursor": "MTIzNDU=",
 //   "limit": 10,
 //   "offset": 0,
 //   "transfers": [
@@ -238,6 +239,13 @@ console.log(data);
 //   ]
 // }
 ```
+
+> **Pagination and totals.** List endpoints (`/transfers/*`, `/nfts/transfers`, GraphQL `transfers`)
+> do not run a `COUNT` by default. They fetch one row past the page and return
+> `hasMore` (plus `nextCursor` to continue), which is all pagination needs. Pass
+> `?includeTotal=true` (GraphQL: `includeTotal: true`) to also get an exact
+> `total`. This runs a `COUNT` over every matching row, so it is markedly slower
+> on large result sets. Without it, `total` is absent from the response.
 
 ***
 
@@ -263,7 +271,7 @@ console.log(data);
 
 // Expected response  (same shape as /transfers/incoming — adds "direction" per row)
 // {
-//   "total": 85,
+//   "hasMore": true,
 //   "limit": 20,
 //   "offset": 0,
 //   "transfers": [
@@ -367,8 +375,8 @@ both chains in a single round-trip:
 
 ```graphql
 {
-  testnet: transfers(address: "GABC…", network: TESTNET) { total }
-  mainnet: transfers(address: "GABC…", network: MAINNET) { total }
+  testnet: transfers(address: "GABC…", network: TESTNET, includeTotal: true) { total hasMore }
+  mainnet: transfers(address: "GABC…", network: MAINNET, includeTotal: true) { total hasMore }
 }
 ```
 

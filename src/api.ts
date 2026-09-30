@@ -525,6 +525,7 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
@@ -587,6 +588,7 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
@@ -659,6 +661,7 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
@@ -940,6 +943,7 @@ export function createApp(): express.Application {
           toLedger,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({ ...result, limit, offset });
