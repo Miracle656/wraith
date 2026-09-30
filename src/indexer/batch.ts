@@ -32,6 +32,7 @@ import { emitTransfer, emitHostFnLog } from "../events";
 import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./host-fn-log";
 import { tagSacTransfers } from "./sac-detect";
 import { parseLpShareEvents, upsertLpShareTransfers } from "./lp-shares";
+import { enrichNftMetadata } from "./nft-metadata";
 import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "../ingester/nft";
 import { getTokenMetadata } from "../tokenCache";
 import { transfersStoredTotal } from "../metrics";
@@ -136,20 +137,34 @@ export async function processEventBatch(
   const nftInserted = await upsertNftTransfers(nftRecords, net);
   transfersStoredTotal.inc({ network: net, type: "nft" }, nftInserted);
 
-  // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached
+  // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached.
+  // Bounded: a small worker pool under a per-cycle time budget, so a slow or
+  // dead metadata source can never hold up the cursor (#205). This lives in the
+  // shared batch pipeline, so the sharded ingest path is bounded too — note the
+  // budget is per batch, so a sharded run spends up to `workers` of them.
   if (nftParsed.length > 0) {
-    const seen = new Set<string>();
-    for (const { record, tokenIdScVal } of nftParsed) {
-      const key = `${record.contractId}:${record.tokenId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const cached = await getNftMetadata(record.contractId, record.tokenId, net);
-      if (!cached) {
-        const meta = await fetchNftMetadata(record.contractId, tokenIdScVal, net).catch(() => ({}));
-        await upsertNftMetadata(record.contractId, record.tokenId, meta, net).catch((e: unknown) =>
-          console.error(`[indexer/${net}] NFT metadata upsert failed:`, e)
-        );
-      }
+    const outcome = await enrichNftMetadata(
+      nftParsed.map(({ record, tokenIdScVal }) => ({
+        contractId: record.contractId,
+        tokenId: record.tokenId,
+        key: tokenIdScVal,
+      })),
+      {
+        getCached: (contractId, tokenId) => getNftMetadata(contractId, tokenId, net),
+        fetch: (contractId, tokenIdScVal) =>
+          fetchNftMetadata(contractId, tokenIdScVal, net).catch(() => ({})),
+        upsert: (contractId, tokenId, meta) => upsertNftMetadata(contractId, tokenId, meta, net),
+      },
+      {
+        // Deliberately not logging the error object: it can carry a raw DB
+        // error or a provider URL.
+        onError: (message) => console.error(`[indexer/${net}] ${message}`),
+      },
+    );
+    if (outcome.deferred > 0) {
+      console.warn(
+        `[indexer/${net}] NFT metadata budget spent: ${outcome.deferred} of ${outcome.unique} tokens deferred to a later cycle`,
+      );
     }
   }
 
