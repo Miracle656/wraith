@@ -53,26 +53,28 @@ describe("Wraith integration API", () => {
     const body = await getJson(`/accounts/${ALICE}/summary`);
 
     expect(body.address).toBe(ALICE);
-    expect(body.tokens).toEqual([
-      {
-        contractId: CONTRACT_A,
-        totalReceived: "35000000",
-        totalSent: "5000000",
-        netFlow: "30000000",
-        displayTotalReceived: "3.5000000",
-        displayTotalSent: "0.5000000",
-        displayNetFlow: "3.0000000",
-        txCount: 3,
-      },
+    expect(body.assets).toEqual([
       {
         contractId: CONTRACT_B,
         totalReceived: "40000000",
         totalSent: "15000000",
-        netFlow: "25000000",
+        net: "25000000",
         displayTotalReceived: "4.0000000",
         displayTotalSent: "1.5000000",
-        displayNetFlow: "2.5000000",
+        displayNet: "2.5000000",
         txCount: 2,
+        lastActivityAt: "2025-02-02T00:00:00.000Z",
+      },
+      {
+        contractId: CONTRACT_A,
+        totalReceived: "35000000",
+        totalSent: "5000000",
+        net: "30000000",
+        displayTotalReceived: "3.5000000",
+        displayTotalSent: "0.5000000",
+        displayNet: "3.0000000",
+        txCount: 3,
+        lastActivityAt: "2025-01-03T00:00:00.000Z",
       },
     ]);
   });

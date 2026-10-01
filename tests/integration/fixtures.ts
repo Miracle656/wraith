@@ -10,6 +10,7 @@ export const CAROL = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWWHF";
 export const MULTI_EVENT_TX_HASH = "txhash-integration-multi";
 
 type SeedTransfer = Prisma.TokenTransferCreateManyInput;
+type SeedAccountSummary = Prisma.AccountSummaryCreateManyInput;
 
 const at = (iso: string) => new Date(iso);
 
@@ -79,5 +80,26 @@ export const seedTransfers: SeedTransfer[] = [
     ledgerClosedAt: at("2025-03-01T00:00:00Z"),
     txHash: "tx-unrelated",
     eventId: "integration-006",
+  },
+];
+
+export const seedAccountSummaries: SeedAccountSummary[] = [
+  {
+    address: ALICE,
+    contractId: CONTRACT_A,
+    totalReceived: "35000000",
+    totalSent: "5000000",
+    net: "30000000",
+    txCount: 3,
+    lastActivityAt: at("2025-01-03T00:00:00Z"),
+  },
+  {
+    address: ALICE,
+    contractId: CONTRACT_B,
+    totalReceived: "40000000",
+    totalSent: "15000000",
+    net: "25000000",
+    txCount: 2,
+    lastActivityAt: at("2025-02-02T00:00:00Z"),
   },
 ];

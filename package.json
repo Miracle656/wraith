@@ -31,6 +31,11 @@
       "**/__tests__/**/*.test.ts",
       "**/tests/**/*.test.ts"
     ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/tests/integration/",
+      "<rootDir>/tests/chaos/"
+    ],
     "transform": {
       "^.+\\.tsx?$": [
         "ts-jest",

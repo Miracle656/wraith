@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { seedTransfers } from "./fixtures";
+import { seedAccountSummaries, seedTransfers } from "./fixtures";
 
 process.env.DATABASE_URL ??= "postgresql://wraith:wraith@localhost:55432/wraith_test";
 process.env.DIRECT_DATABASE_URL ??= "postgresql://wraith:wraith@localhost:55432/wraith_test";
@@ -11,7 +11,9 @@ async function waitForApi(): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${API_BASE_URL}/healthz`);
+      const response = await fetch(`${API_BASE_URL}/healthz`, {
+        signal: AbortSignal.timeout(5_000),
+      });
       if (response.ok) return;
     } catch {
       // The compose service may still be booting.
@@ -28,9 +30,11 @@ export async function seedIntegrationFixtures(): Promise<void> {
 
   const prisma = new PrismaClient();
   try {
+    await prisma.accountSummary.deleteMany();
     await prisma.tokenTransfer.deleteMany();
     await prisma.indexerState.deleteMany();
     await prisma.tokenTransfer.createMany({ data: seedTransfers });
+    await prisma.accountSummary.createMany({ data: seedAccountSummaries });
     await prisma.indexerState.create({ data: { id: 1, lastIndexedLedger: 2006 } });
   } finally {
     await prisma.$disconnect();

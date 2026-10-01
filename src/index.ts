@@ -47,10 +47,16 @@ async function main() {
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
   // so the API stays responsive while indexing happens concurrently.
-  startIndexer().catch((err) => {
-    console.error("[wraith] Indexer crashed — exiting:", err);
-    process.exit(1);
-  });
+  // The integration stack runs in API-only mode so it does not depend on a
+  // live Stellar RPC endpoint or mutate the deterministic fixtures.
+  if (process.env.SKIP_INDEXER === "true") {
+    console.log("[wraith] SKIP_INDEXER=true — API-only mode");
+  } else {
+    startIndexer().catch((err) => {
+      console.error("[wraith] Indexer crashed — exiting:", err);
+      process.exit(1);
+    });
+  }
 }
 
 main();
