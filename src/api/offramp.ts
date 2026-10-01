@@ -209,6 +209,36 @@ export function createOfframpRouter(
           res.status(409).json({ error: "This idempotencyKey has already been used" });
           return;
         }
+        // An idempotency key promises "this key means this request". Replaying it
+        // with different figures used to return 200 carrying the FIRST order's
+        // amount, rate and deposit address, so a caller that reused a key with a
+        // changed amount was told its new payout had been accepted while the money
+        // followed the original order. On the only money-moving router here, a
+        // silent success for a request nobody made is the worst available outcome.
+        //
+        // Compared numerically because both sides are decimal strings: "2000" and
+        // "2000.00" are the same request and must not 409.
+        //
+        // PARTIAL, deliberately: the row stores the amounts but not bankAccount,
+        // bankCode, bankName or accountName, so a replay that changes only the
+        // destination still passes here. Closing that needs a stored hash of the
+        // idempotency-relevant fields, which needs a column and a migration —
+        // see the note in docs/ rather than guessing at one on a shared database.
+        const sameAmount = (stored: string, supplied: unknown): boolean =>
+          supplied == null ? false : Number(stored) === Number(supplied);
+        const amountMatches =
+          amountNGN != null
+            ? sameAmount(existing.amountNGN, amountNGN)
+            : amountStableCoin != null
+              ? sameAmount(existing.amountStableCoin, amountStableCoin)
+              : false;
+        if (!amountMatches) {
+          res.status(409).json({
+            error:
+              "This idempotencyKey was used for a different request. Use a new key for a new order.",
+          });
+          return;
+        }
         // A retry usually means the first response never arrived, and with it the
         // access token. Only its hash is stored, so a new one is issued and the
         // old one stops working.

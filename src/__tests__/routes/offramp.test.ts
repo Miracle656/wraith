@@ -371,6 +371,35 @@ describe("brute-forcing lookups", () => {
 });
 
 describe("retrying an order creation", () => {
+  it("refuses a replay that changes the amount instead of reporting success", async () => {
+    const app = makeApp();
+    const first = await place(app);
+    expect(first.status).toBe(201);
+
+    // Same wallet, same key, different amount. This used to answer 200 with the
+    // FIRST order's figures and `replayed: true`, so a caller that reused a key
+    // after editing the amount was told its new payout had been accepted while
+    // the money followed the original order.
+    const changed = await place(app, { amountStableCoin: 500 });
+
+    expect(changed.status).toBe(409);
+    expect(changed.body.error).toMatch(/different request/i);
+    // Nothing new reached the provider and no second row exists.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("treats a differently-formatted but equal amount as the same request", async () => {
+    const app = makeApp();
+    await place(app);
+    // "50" and "50.00" are the same order; a replay must not 409 on formatting.
+    const retry = await place(app, { amountStableCoin: "50.00" });
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.replayed).toBe(true);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   it("re-issues the token, keeps the id, and does not create a second order", async () => {
     const app = makeApp();
     const first = await place(app);
