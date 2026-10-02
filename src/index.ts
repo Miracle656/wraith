@@ -14,10 +14,31 @@ import { enabledNetworks } from "./network";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
-  // Run DB migrations on every startup so Render deployments always have
-  // an up-to-date schema without needing a separate pre-deploy step.
-  console.log("[wraith] Running database migrations…");
-  execSync("npx prisma db push --accept-data-loss", { stdio: "inherit" });
+  // ── Database schema migration ──────────────────────────────────────────────
+  // Production path: apply every committed migration file in prisma/migrations/
+  // via `prisma migrate deploy`.  This is idempotent, safe, and never drops data.
+  //
+  // Dev/test escape hatch: set DB_PUSH_DEV=true to fall back to `prisma db push`
+  // for rapid local iteration against a throwaway database.  This flag MUST NOT
+  // be present in any production or staging environment.
+  if (process.env.DB_PUSH_DEV === "true") {
+    console.log("[wraith] DB_PUSH_DEV=true — running prisma db push (dev/test only)…");
+    execSync("npx prisma db push", { stdio: "inherit" });
+  } else {
+    console.log("[wraith] Running prisma migrate deploy…");
+    try {
+      execSync("npx prisma migrate deploy", { stdio: "inherit" });
+    } catch {
+      // Do NOT log the raw error — it may contain the DATABASE_URL.
+      console.error(
+        "[wraith] FATAL: prisma migrate deploy failed — the database schema is out of sync.\n" +
+          "  Run `npx prisma migrate status` to inspect pending migrations.\n" +
+          "  See docs/drift-recovery.md for recovery steps if the database was previously\n" +
+          "  managed by `db push`."
+      );
+      process.exit(1);
+    }
+  }
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
