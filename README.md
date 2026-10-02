@@ -70,12 +70,13 @@ cp .env.example .env
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="testnet"
 # SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
 SOROBAN_RPC_URL=
 
 START_LEDGER=
-CONTRACT_IDS=
+SAC_CONTRACT_IDS=
 PORT=3000
 ```
 
@@ -83,12 +84,13 @@ PORT=3000
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="mainnet"
 # Required on mainnet — no free public Soroban RPC exists
 SOROBAN_RPC_URL="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
 
 # Strongly recommended on mainnet: filter to specific contracts to reduce load
-CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
+SAC_CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
 START_LEDGER=
 PORT=3000
 ```
@@ -98,7 +100,7 @@ PORT=3000
 ### 3. Start Postgres
 
 ```bash
-docker-compose up -d db
+docker compose up -d db
 ```
 
 ### 4. Run database migrations
@@ -107,7 +109,65 @@ docker-compose up -d db
 npx prisma migrate dev --name init
 ```
 
-### 5. Start Wraith
+### 5. Seed the database (optional)
+
+Populate the database with deterministic test data for development and testing:
+
+```bash
+npm run db:seed
+```
+
+By default, this seeds `testnet`. To seed `mainnet`:
+
+```bash
+npm run db:seed -- --network=mainnet
+```
+
+You can now query the seeded data:
+
+```bash
+curl "http://localhost:3000/transfers/incoming/GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+```
+
+Expected response:
+
+```json
+{
+  "total": 2,
+  "limit": 50,
+  "offset": 0,
+  "transfers": [
+    {
+      "id": 1,
+      "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "10000000",
+      "displayAmount": "1.0000000",
+      "ledger": 2001,
+      "ledgerClosedAt": "2025-01-01T00:00:00.000Z",
+      "txHash": "tx-incoming-a-1",
+      "eventId": "integration-001"
+    },
+    {
+      "id": 2,
+      "contractId": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "40000000",
+      "displayAmount": "4.0000000",
+      "ledger": 2004,
+      "ledgerClosedAt": "2025-02-01T00:00:00.000Z",
+      "txHash": "txhash-integration-multi",
+      "eventId": "integration-004"
+    }
+  ]
+}
+```
+
+### 6. Start Wraith
 
 ```bash
 # Development (hot reload)
@@ -120,7 +180,17 @@ npm run build && npm start
 Or run everything via Docker:
 
 ```bash
-docker-compose up --build
+# Without cache (default)
+docker compose up --build
+
+# With Redis cache enabled
+docker compose --profile cache up --build
+```
+
+To seed the database when running via Docker, run the seed command in a separate terminal after the database is up:
+
+```bash
+npm run db:seed
 ```
 
 ***
@@ -218,7 +288,8 @@ console.log(data);
 
 // Expected response
 // {
-//   "total": 42,
+//   "hasMore": true,
+//   "nextCursor": "MTIzNDU=",
 //   "limit": 10,
 //   "offset": 0,
 //   "transfers": [
@@ -238,6 +309,13 @@ console.log(data);
 //   ]
 // }
 ```
+
+> **Pagination and totals.** List endpoints (`/transfers/*`, `/nfts/transfers`, GraphQL `transfers`)
+> do not run a `COUNT` by default. They fetch one row past the page and return
+> `hasMore` (plus `nextCursor` to continue), which is all pagination needs. Pass
+> `?includeTotal=true` (GraphQL: `includeTotal: true`) to also get an exact
+> `total`. This runs a `COUNT` over every matching row, so it is markedly slower
+> on large result sets. Without it, `total` is absent from the response.
 
 ***
 
@@ -263,7 +341,7 @@ console.log(data);
 
 // Expected response  (same shape as /transfers/incoming — adds "direction" per row)
 // {
-//   "total": 85,
+//   "hasMore": true,
 //   "limit": 20,
 //   "offset": 0,
 //   "transfers": [
@@ -331,6 +409,8 @@ console.log(data);
 
 Base URL: `http://localhost:3000`
 
+Offramp order lookups need a bearer token; see [docs/offramp-orders.md](docs/offramp-orders.md).
+
 ### Selecting a network
 
 Wraith stores testnet and mainnet rows in the same tables, discriminated by a
@@ -367,8 +447,8 @@ both chains in a single round-trip:
 
 ```graphql
 {
-  testnet: transfers(address: "GABC…", network: TESTNET) { total }
-  mainnet: transfers(address: "GABC…", network: MAINNET) { total }
+  testnet: transfers(address: "GABC…", network: TESTNET, includeTotal: true) { total hasMore }
+  mainnet: transfers(address: "GABC…", network: MAINNET, includeTotal: true) { total hasMore }
 }
 ```
 
@@ -437,8 +517,11 @@ last_indexed_ledger{network="mainnet"} 5842100
 | `ledgers_indexed_total` | counter | `network` | Ledgers the indexer has advanced through. A flat `rate()` on a network whose loop should be running means it has stalled. |
 | `transfers_stored_total` | counter | `network`, `type` | Rows persisted, split `fungible` / `nft` — one parse path can break while the other keeps working. |
 | `rpc_errors_total` | counter | `outcome` | Failed RPC attempts. `retry` counts attempts `withRetry` absorbed, `exhausted` counts calls that gave up — a degrading endpoint shows up in `retry` long before it fails a call. |
+| `events_skipped_total` | counter | `reason` | Events the decoder dropped. `unrecognised` is non-token events (normal); `malformed` is token events that failed to decode — a rising rate points at a non-standard contract or a decoder bug. |
 | `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
 | `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
+| `http_requests_total` | counter | `method`, `route`, `status` | HTTP requests served. `route` is the Express route *pattern*, never the raw URL, so addresses never become label values; an unmatched request reports `route="unknown"`. |
+| `http_request_duration_seconds` | histogram | `method`, `route` | HTTP latency, 5 ms to 10 s. No `status` label — the split is rarely worth the extra series. |
 
 Standard `process_*` and `nodejs_*` metrics are exported alongside these.
 

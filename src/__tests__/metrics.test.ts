@@ -6,8 +6,11 @@ import {
   lastIndexedLedger,
   observeDbQuery,
   recordRpcError,
+  recordSkippedLedger,
   registry,
   _resetMetrics,
+  httpRequestsTotal,
+  httpRequestDurationSeconds,
 } from "../metrics";
 
 jest.mock("../db", () => ({
@@ -58,6 +61,7 @@ describe("Prometheus metrics (#39)", () => {
       const res = await request(app).get("/metrics");
 
       expect(res.text).toContain("# TYPE ledgers_indexed_total counter");
+      expect(res.text).toContain("# TYPE ledgers_skipped_total counter");
       expect(res.text).toContain("# TYPE transfers_stored_total counter");
       expect(res.text).toContain("# TYPE rpc_errors_total counter");
       expect(res.text).toContain("# TYPE last_indexed_ledger gauge");
@@ -130,6 +134,28 @@ describe("Prometheus metrics (#39)", () => {
     });
   });
 
+  describe("recordSkippedLedger", () => {
+    it("counts skipped ledgers per network, with no ledger-sized label", async () => {
+      // A skipped ledger is permanent loss, and the ledger number is the value
+      // that would blow the series count up — the counter has to answer without
+      // it, or an operator ends up paying for a cardinality accident.
+      recordSkippedLedger("testnet");
+      recordSkippedLedger("testnet");
+      recordSkippedLedger("mainnet");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('ledgers_skipped_total{network="testnet"} 2');
+      expect(res.text).toContain('ledgers_skipped_total{network="mainnet"} 1');
+
+      const skipped = res.text
+        .split("\n")
+        .filter((line) => line.startsWith("ledgers_skipped_total{"));
+      expect(skipped).toHaveLength(2);
+      expect(skipped.join("\n")).not.toMatch(/ledger=|contract=|address=|url=/);
+    });
+  });
+
   describe("GET /status", () => {
     it("reports last_indexed_ledger alongside the camelCase field", async () => {
       const res = await request(app).get("/status");
@@ -137,6 +163,60 @@ describe("Prometheus metrics (#39)", () => {
       expect(res.status).toBe(200);
       expect(res.body.last_indexed_ledger).toBe(1000);
       expect(res.body.lastIndexedLedger).toBe(1000);
+    });
+  });
+
+  describe("HTTP metrics middleware", () => {
+    it("increments http_requests_total with method, route pattern, and status", async () => {
+      await request(app).get("/healthz");
+      await request(app).get("/healthz");
+      await request(app).post("/healthz"); // 404 since only GET exists
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('http_requests_total{method="GET",route="/healthz",status="200"} 2');
+      expect(res.text).toContain('http_requests_total{method="POST",route="unknown",status="404"} 1');
+    });
+
+    it("records http_request_duration_seconds with method and route pattern", async () => {
+      await request(app).get("/healthz");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('http_request_duration_seconds_count{method="GET",route="/healthz"} 1');
+      expect(res.text).toMatch(/http_request_duration_seconds_sum\{method="GET",route="\/healthz"\} \d+(\.\d+)?/);
+    });
+
+    it("uses Express route pattern for parameterized routes", async () => {
+      const { queryTransfers } = jest.requireMock("../db");
+      queryTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+
+      await request(app).get("/transfers/incoming/GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('http_requests_total{method="GET",route="/transfers/incoming/:address",status="200"} 1');
+    });
+
+    it("excludes /metrics from its own counters", async () => {
+      // Reset and hit /metrics a few times
+      _resetMetrics();
+      await request(app).get("/metrics");
+      await request(app).get("/metrics");
+      await request(app).get("/metrics");
+
+      const res = await request(app).get("/metrics");
+
+      // /metrics should not appear in the http_requests_total output
+      expect(res.text).not.toContain('route="/metrics"');
+    });
+
+    it("includes /metrics in the metrics output (the scrape still works)", async () => {
+      const res = await request(app).get("/metrics");
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain("# TYPE http_requests_total counter");
+      expect(res.text).toContain("# TYPE http_request_duration_seconds histogram");
     });
   });
 });

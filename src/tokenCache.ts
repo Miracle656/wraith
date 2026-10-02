@@ -97,6 +97,15 @@ export function getAllCachedTokens(network?: Network): TokenMetadata[] {
   return network ? all.filter((t) => t.network === network) : all;
 }
 
+/** Read cached decimals without triggering a database or RPC lookup. */
+export function getCachedTokenDecimals(
+  contractId: string,
+  network?: Network,
+): number | undefined {
+  const net = resolveNetwork(network);
+  return cache.get(cacheKey(net, contractId))?.decimals;
+}
+
 /** Test-only: drop the in-memory cache. */
 export function _resetTokenCache(): void {
   cache.clear();

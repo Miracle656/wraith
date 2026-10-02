@@ -14,6 +14,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
+    "db:seed": "ts-node scripts/seed.ts",
     "db:studio": "prisma studio",
     "docs": "typedoc",
     "docs:openapi": "ts-node src/openapi/build.ts",

@@ -88,6 +88,18 @@ const queryIntWithDefault = (defaultValue: number, options: { min?: number; max?
       .openapi({ description: options.description })
   );
 
+const optionalQueryBool = (description?: string) =>
+  z.preprocess(
+    (value) => {
+      const raw = firstValue(value);
+      if (raw === undefined || raw === null || raw === "") return undefined;
+      if (raw === "true" || raw === "1") return true;
+      if (raw === "false" || raw === "0") return false;
+      return raw;
+    },
+    z.boolean().optional().openapi({ description })
+  );
+
 const optionalCommaList = (items: z.ZodTypeAny, description?: string) =>
   z.preprocess(
     (value) => {
@@ -226,7 +238,8 @@ export const transferSchema = z.object({
 });
 
 export const transferListResponseSchema = z.object({
-  total: z.number().int(),
+  total: z.number().int().optional().openapi({ description: "Exact match count. Only present when the request set includeTotal=true" }),
+  hasMore: z.boolean().openapi({ description: "True when another page exists" }),
   limit: z.number().int(),
   offset: z.number().int(),
   nextCursor: z.string().nullable().optional(),
@@ -362,7 +375,8 @@ export const nftTransferSchema = z.object({
 });
 
 export const nftTransfersResponseSchema = z.object({
-  total: z.number().int(),
+  total: z.number().int().optional().openapi({ description: "Exact match count. Only present when the request set includeTotal=true" }),
+  hasMore: z.boolean().openapi({ description: "True when another page exists" }),
   limit: z.number().int(),
   offset: z.number().int(),
   nextCursor: z.string().nullable().optional(),
@@ -455,6 +469,7 @@ export const transferQuerySchema = z.object({
   cursor: optionalQueryString("Opaque pagination cursor"),
   $filter: optionalQueryString("OData filter expression"),
   $select: optionalCommaList(z.string(), "Comma-separated field list"),
+  includeTotal: optionalQueryBool("Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"),
 }).passthrough();
 
 export const summaryQuerySchema = z.object({
@@ -489,6 +504,7 @@ export const nftTransfersQuerySchema = z.object({
   cursor: optionalQueryString("Opaque pagination cursor"),
   $filter: optionalQueryString("OData filter expression"),
   $select: optionalCommaList(z.string(), "Comma-separated field list"),
+  includeTotal: optionalQueryBool("Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"),
 }).passthrough();
 
 export const nftOwnerParamsSchema = z.object({

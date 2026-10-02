@@ -10,6 +10,8 @@ import { costLimitPlugin } from "./costLimit";
 import { persistedQueryPlugin } from "./persisted";
 import { requestNetwork } from "../middleware/network";
 import { enabledNetworks, isNetwork, NETWORKS, currentNetwork, type Network } from "../network";
+import { getCachedTokenDecimals } from "../tokenCache";
+import { toDisplayAmount } from "../amount";
 
 export const typeDefs = `#graphql
   enum Network {
@@ -43,7 +45,9 @@ export const typeDefs = `#graphql
   }
 
   type TransferConnection {
-    total: Int!
+    "Exact match count. Null unless the query passed includeTotal: true, because it costs a full COUNT."
+    total: Int
+    hasMore: Boolean!
     transfers: [Transfer!]!
     nextCursor: String
   }
@@ -65,6 +69,8 @@ export const typeDefs = `#graphql
       network: Network
       limit: Int = 50
       offset: Int = 0
+      "Also compute the exact total. Slower on large result sets."
+      includeTotal: Boolean = false
     ): TransferConnection!
     transferByTx(txHash: String!, network: Network): [Transfer!]!
     summary(address: String!, contractId: String, network: Network): [TokenSummary!]!
@@ -132,15 +138,18 @@ export const resolvers = {
         network?: NetworkArg;
         limit?: number;
         offset?: number;
+        includeTotal?: boolean;
       },
       ctx?: GraphQLContext
     ) => {
       const common = {
         network: resolveArgNetwork(args.network, ctx),
+        tokenDecimals: getCachedTokenDecimals,
         address: args.address,
         contractId: args.contractId,
         limit: args.limit,
         offset: args.offset,
+        includeTotal: args.includeTotal,
       };
 
       const result =
@@ -163,10 +172,17 @@ export const resolvers = {
       args: { txHash: string; network?: NetworkArg },
       ctx?: GraphQLContext
     ) => {
-      const transfers = await queryByTxHash(args.txHash, resolveArgNetwork(args.network, ctx));
-      return (transfers as Array<Record<string, unknown>>).map((transfer) =>
-        formatTransfer(transfer)
-      );
+      const network = resolveArgNetwork(args.network, ctx);
+      const transfers = await queryByTxHash(args.txHash, network);
+      return (transfers as Array<Record<string, unknown>>).map((transfer) => ({
+        ...formatTransfer(transfer),
+        displayAmount: toDisplayAmount(
+          String(transfer.amount),
+          typeof transfer.contractId === "string"
+            ? getCachedTokenDecimals(transfer.contractId, network)
+            : undefined,
+        ),
+      }));
     },
 
     summary: async (
