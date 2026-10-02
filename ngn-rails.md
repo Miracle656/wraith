@@ -5,8 +5,8 @@ Three rails move money between naira and a Veil wallet, all through Linq:
 | Rail | Direction | Route prefix | Order storage |
 | --- | --- | --- | --- |
 | **Offramp** | USDC/XLM out → NGN to a bank account | `/offramp` | Persisted (`OfframpOrder`) |
-| **Onramp** | NGN in from a bank transfer → XLM/USDC to a wallet | `/ngn/onramp` | None — see [Why `/ngn` has no order table](#why-ngn-has-no-order-table) |
-| **Bills** | Wallet crypto → airtime, data, electricity, cable TV, betting | `/ngn/bills` | None — same reason |
+| **Onramp** | NGN in from a bank transfer → XLM/USDC to a wallet | `/ngn/onramp` | `NgnOrder` — [for the webhook, not for reads](#the-order-record-and-what-it-deliberately-is-not) |
+| **Bills** | Wallet crypto → airtime, data, electricity, cable TV, betting | `/ngn/bills` | `NgnOrder` — same table, and the reason it exists |
 
 The offramp is documented for clients in [offramp-orders.md](./offramp-orders.md); this
 file is the whole surface, including the parts a client never sees.
@@ -230,29 +230,56 @@ user asked for.**
 
 ---
 
-## Why `/ngn` has no order table
+## The order record, and what it deliberately is not
 
 The offramp persists its orders because it mints its own `publicId` and a bearer
 token, so a client can read an order back without the provider's id ever leaving
-the server.
+the server. `/ngn` has a table too — `NgnOrder` — but it exists for a different
+reason and grants no new read access.
 
-These two rails do not need that, and adding a table would be the more dangerous
-choice. Linq's status endpoints require **both** `customerRef` and `orderId`, and
-return the same 404 for another customer's order as for one that does not exist.
-`orderId` is an unguessable UUID, so knowing someone's wallet address — which is
-semi-public — buys nothing on its own. That is the same property the offramp's
-`publicId` provides, already enforced upstream.
+**It exists because a bill's outcome is off-chain.** When Linq delivers XLM or
+USDC for an onramp, the indexer sees the payment arrive at the wallet's classic
+account and the existing address subscription already pushes it; the onramp
+never needed a row to be observable. A biller vending airtime — or refusing to,
+after the user has already paid — is invisible to the chain. Without a row,
+`order.failed` arrives for an order we cannot identify, and the only thing that
+ever learns about the failure is a client that happens to poll.
 
-> **What must never be added here is a route that lists orders by `customerRef`
-> alone.** That would turn a public identifier into a way to read someone's bank
-> details and amounts, and it is the one change that silently removes the
-> protection.
+**Reads are unchanged.** Linq's status endpoints require **both** `customerRef`
+and `orderId`, and return the same 404 for another customer's order as for one
+that does not exist. `orderId` is an unguessable UUID, so knowing someone's
+wallet address — which is semi-public — buys nothing on its own.
+`findNgnOrder` enforces the same thing locally: it takes both, matches the
+`customerRef` rather than merely accepting it, and returns `null` for a row
+belonging to someone else, which is indistinguishable from one that is absent.
+
+Two things are therefore deliberately missing, and both should stay missing:
+
+> **There is no index on `customerRef`**, so nothing makes it cheap to list a
+> customer's orders — and **no route may list orders by `customerRef` alone**.
+> That would turn a public identifier into a way to read someone's bank details
+> and amounts, and it is the one change that silently removes the protection.
+
+> **`customerId` is not stored.** The phone number for airtime, the meter number
+> for electricity — it is passed straight through to Linq at creation and kept
+> nowhere, for the same reason the NIN never is.
 
 Lookups are rate-limited with `skipSuccessfulRequests`, so a wallet polling its
 own open order never spends the budget while someone trying ids they do not own
 exhausts it quickly: 20 failures per minute.
 
----
+### Falling back when Linq is down
+
+If Linq answers **5xx or times out**, a status read is served from the record
+instead of failing, marked `stale: true` with a reason. A **4xx is passed
+through unchanged** — that is Linq telling us something true about the request
+(an unverified customer, an order that is not yours), and papering over it with
+a last-known row would turn "this order is not yours" into a status page.
+
+Recording happens *after* the response is sent and never throws. The user is
+holding bank details or a deposit address they need; our bookkeeping must not
+stand between them and that. If the write fails, it is logged loudly and the
+rail degrades to exactly the behaviour it had before the table existed.
 
 ## Webhooks
 
@@ -266,9 +293,17 @@ brings its own `express.raw()` and is mounted ahead of it.
 
 Events: `order.processing`, `order.completed`, `order.failed`.
 
-> ⚠️ **Today this reconciles the offramp only.** Onramp and bill orders have no
-> webhook handling — their status is read on demand through Linq. See
-> [What is not built](#what-is-not-built).
+One endpoint carries all three rails, and the body does not say which rail an
+event belongs to — only an `orderId`. So reconciliation is "find the order that
+id belongs to": the offramp table first, then `NgnOrder`. An id in neither is
+logged and ignored; nothing here creates a row, because an event for an order we
+never placed is not ours to act on.
+
+Reconciliation is idempotent by construction — it writes settled figures to a row
+keyed on the order id, so a redelivery writes the same values rather than
+double-counting. The 200 is sent *before* reconciling, because Linq times out at
+10 seconds and marks the delivery failed, and a database write on a throttled
+instance can outlast that.
 
 ---
 
@@ -297,9 +332,8 @@ on their own.
 
 | Gap | Consequence |
 | --- | --- |
-| No webhook handling for onramp or bill orders | Status is pull-only. A completed order is not known until something asks. |
-| No onramp order persistence | Nothing to show a user who lost their `orderId`. Additive to add — the schema converges at boot — but it reintroduces the question above, so any such table must still require both identifiers. |
-| Bills ship airtime only in the UI | The other four categories are accepted by the API but carry unvalidated extra fields. |
+| Nothing pushes a bill result to the client | The webhook now records a completed or failed bill, but no subscription carries it to the wallet, so the client still has to ask. The onramp does not share this gap — its delivery is an on-chain payment the indexer already pushes. |
+| Bills ship airtime only in the UI | The other four categories are accepted by the API but carry unvalidated extra fields (a data plan, a meter type). |
 | Mobile screens | Designed, not built. |
 
 ## Tests
