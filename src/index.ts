@@ -14,10 +14,38 @@ import { enabledNetworks } from "./network";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
-  // Run DB migrations on every startup so Render deployments always have
-  // an up-to-date schema without needing a separate pre-deploy step.
-  console.log("[wraith] Running database migrations…");
-  execSync("npx prisma db push --accept-data-loss", { stdio: "inherit" });
+  // Converge the schema on every startup, so a deploy needs no separate
+  // pre-deploy step.
+  //
+  // This is `db push` rather than `migrate deploy` because the migration
+  // history cannot support the latter: `prisma/migrations` holds 7 migrations
+  // covering 5 tables, while the schema defines 15. TokenTransfer,
+  // AccountSummary, IndexerState and OfframpOrder have no migration at all —
+  // this database was built by `db push` from the beginning. Switching without
+  // baselining production first would create five tables and leave the app
+  // crashing on the other ten.
+  //
+  // `--accept-data-loss` was removed deliberately. With it, any change Prisma
+  // reads as destructive — a renamed column, a narrowed type, a dropped field
+  // — applied silently on the next deploy, taking the column and everything in
+  // it. This database holds offramp orders: records of real naira paid to real
+  // bank accounts. A deploy that refuses to start is a problem someone fixes in
+  // minutes; a column of payment records that vanished during a routine deploy
+  // is not recoverable.
+  //
+  // Additive changes — a new table, a new nullable column — still apply on
+  // their own. Anything destructive now fails loudly here instead.
+  console.log("[wraith] Converging database schema…");
+  try {
+    execSync("npx prisma db push", { stdio: "inherit" });
+  } catch {
+    console.error(
+      "[wraith] Schema convergence refused: the pending change is destructive.\n" +
+        "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
+        "[wraith] change needs a deliberate migration, not --accept-data-loss.",
+    );
+    process.exit(1);
+  }
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
