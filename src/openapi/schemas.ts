@@ -567,3 +567,161 @@ export type TransferQuery = z.infer<typeof transferQuerySchema>;
 export type SummaryQuery = z.infer<typeof summaryQuerySchema>;
 export type HostFnQuery = z.infer<typeof hostFnQuerySchema>;
 export type NftTransfersQuery = z.infer<typeof nftTransfersQuerySchema>;
+
+// ─── GET /accounts/:address/balance ────────────────────────────────────────
+
+export const accountBalanceResponseSchema = z.object({
+  address: stellarAddressSchema,
+  network: z.enum(["testnet", "mainnet"]),
+  balances: z.array(
+    z.object({
+      contractId: contractAddressSchema,
+      balance: z.string(),
+      displayBalance: z.string(),
+    })
+  ),
+  /** Always true: this is a sum over the indexed window, not an on-chain read. */
+  derivedFromLedger: z.literal(true),
+  note: z.string(),
+});
+
+// ─── GET /tokens ────────────────────────────────────────────────────────────
+
+/** Metadata for one token the indexer has seen, as served by GET /tokens. */
+export const tokenMetadataSchema = z.object({
+  network: z.enum(["testnet", "mainnet"]),
+  contractId: contractAddressSchema,
+  symbol: z.string(),
+  name: z.string(),
+  decimals: z.number().int(),
+});
+
+export const tokensQuerySchema = z.object({ ...withNetwork }).passthrough();
+
+export const tokensResponseSchema = z.object({
+  ok: z.literal(true),
+  network: z.enum(["testnet", "mainnet"]),
+  tokens: z.array(tokenMetadataSchema),
+});
+
+// ─── GET /transfers.csv · GET /transfers.parquet ────────────────────────────
+
+/**
+ * Query schema for the full-table export routes.
+ *
+ * The same filters `buildWhere` accepts for the JSON transfer routes, minus
+ * the pagination fields: exports stream the entire matching set rather than a
+ * page, so limit/offset/cursor have nothing to mean there.
+ */
+export const transferExportQuerySchema = z.object({
+  ...withNetwork,
+  address: stellarAddressSchema.optional(),
+  contractId: optionalQueryString("Token contract ID to filter by"),
+  token: contractAddressSchema.optional(),
+  fromLedger: optionalQueryInt({ min: 0 }),
+  toLedger: optionalQueryInt({ min: 0 }),
+  fromDate: optionalQueryDateTime("Inclusive lower bound on ledgerClosedAt"),
+  toDate: optionalQueryDateTime("Inclusive upper bound on ledgerClosedAt"),
+  eventType: eventTypeQuerySchema.openapi({ description: "Comma-separated list of event types" }),
+}).passthrough();
+
+export const binaryExportResponseSchema = z.string().openapi({ format: "binary" });
+
+// ─── /webhooks/linq — provider callback (internal) ─────────────────────────
+
+export const linqWebhookAckResponseSchema = z.object({
+  ok: z.literal(true),
+});
+
+// ─── /offramp/* — cash-out surface (internal) ───────────────────────────────
+
+export const offrampRateResponseSchema = z.object({
+  rate: z.number(),
+  currency: z.string(),
+  coin: z.string(),
+  /** Always true: the binding rate is the one locked into an order at creation. */
+  indicative: z.literal(true),
+});
+
+export const offrampVerifyBankBodySchema = z
+  .object({
+    bankCode: z.string().min(1),
+    accountNumber: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampVerifiedBankSchema = z.object({
+  accountName: z.string(),
+  bankName: z.string(),
+  accountNumber: z.string(),
+  bankCode: z.string(),
+});
+
+export const offrampTrustlineQuerySchema = z
+  .object({
+    /** The classic fee-payer address; contract (C…) addresses are rejected. */
+    address: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampTrustlineResponseSchema = z.object({
+  address: z.string(),
+  valid: z.boolean(),
+  trustsUSDC: z.boolean(),
+});
+
+export const offrampOrderBodySchema = z
+  .object({
+    /** Exactly one of amountNGN / amountStableCoin. */
+    amountNGN: z.number().optional(),
+    amountStableCoin: z.number().optional(),
+    bankAccount: z.string().min(1),
+    bankCode: z.string().min(1),
+    bankName: z.string().min(1),
+    accountName: z.string().min(1),
+    /** Must already hold a USDC trustline — the fee-payer, never the wallet contract. */
+    refundAddress: z.string().optional(),
+    walletAddress: z.string().min(1),
+    /** Caller-generated; replaying a request with the same key returns the original order. */
+    idempotencyKey: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampOrderStatus = z
+  .enum(["pending", "waiting_for_deposit", "processing", "completed", "failed", "expired"])
+  .openapi({ description: "Client-facing status mapped from the provider's raw one." });
+
+export const offrampOrderResponseSchema = z.object({
+  id: z.string(),
+  walletAddress: z.string().openapi({ description: "Deposit address the stablecoin is sent to." }),
+  chain: z.string(),
+  coin: z.string(),
+  amountStableCoin: z.number(),
+  amountNGN: z.number(),
+  rate: z.number(),
+  status: offrampOrderStatus,
+  providerStatus: z.string().optional().openapi({ description: "Raw provider status, when the order is not a replay." }),
+  /** True when an existing idempotencyKey returned the original order instead of creating one. */
+  replayed: z.boolean().optional(),
+});
+
+export const offrampOrderParamsSchema = z.object({
+  orderId: z.string().min(1),
+}).passthrough();
+
+export const offrampOrderStatusResponseSchema = z.object({
+  id: z.string(),
+  status: offrampOrderStatus,
+  providerStatus: z.string(),
+  amountStableCoin: z.number(),
+  amountNGN: z.number(),
+  depositAddress: z.string(),
+  rate: z.number(),
+  createdAt: z.string().datetime({ offset: true }),
+  /** "linq" when reconciled against the provider, "cache" when the provider was unreachable. */
+  source: z.enum(["linq", "cache"]),
+});
+
+export const offrampErrorResponseSchema = z.object({
+  error: z.string(),
+});
