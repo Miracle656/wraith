@@ -5,23 +5,29 @@
  * — it creates orders that move real naira — and anything in an APK is
  * extractable. The app never holds it.
  *
- * ## Why there is no order table here
+ * ## The order record, and why it grants no new read access
  *
- * The offramp persists its orders because it mints its own `publicId` and a
- * bearer token, so a client can read an order back without the provider's id
- * ever leaving the server. These two rails do not need that, and adding a table
- * would be the more dangerous choice.
+ * These rails do keep a row (`NgnOrder`), but not for the reason the offramp
+ * does. The offramp persists because it mints its own `publicId` and a bearer
+ * token so a client can read an order back; `NgnOrder` exists because a bill's
+ * outcome is **off-chain**. An onramp delivering XLM lands as a payment the
+ * indexer already sees and the address subscription already pushes — no row
+ * needed to observe it. A biller refusing to vend after the user has paid is
+ * invisible to the chain, so without a row `order.failed` arrives for an order
+ * we cannot identify. See `../linq/ngnOrders.ts`.
  *
- * Linq's own status endpoints require **both** `customerRef` and `orderId`, and
- * return the same 404 for another customer's order as for one that does not
- * exist. `orderId` is an unguessable UUID, so knowing someone's wallet address
- * — which is semi-public — buys nothing on its own. That is the same property
- * the offramp's `publicId` provides, already enforced upstream.
+ * Reads are unchanged by it. Linq's status endpoints require **both**
+ * `customerRef` and `orderId`, and return the same 404 for another customer's
+ * order as for one that does not exist. `orderId` is an unguessable UUID, so
+ * knowing someone's wallet address — which is semi-public — buys nothing on its
+ * own. `findNgnOrder` enforces the same pairing locally and returns null for
+ * another customer's row, so the local fallback cannot be used to get around it.
  *
  * What we must therefore never add is a route that lists orders by
- * `customerRef` alone. That would turn a public identifier into a way to read
- * someone's bank details and amounts, and it is the one change here that
- * silently removes the protection.
+ * `customerRef` alone, and the table deliberately has no index on that column
+ * to keep it from looking cheap. That would turn a public identifier into a way
+ * to read someone's bank details and amounts, and it is the one change here
+ * that silently removes the protection.
  *
  * ## Mainnet only
  *
@@ -47,6 +53,7 @@ import {
   type OnrampCoin,
 } from "../linq/onramp";
 import { getBillStatus, payBill, type BillCategory, type BillCoin } from "../linq/bills";
+import { findNgnOrder, recordNgnOrder } from "../linq/ngnOrders";
 
 function isConfigured(): boolean {
   return Boolean(process.env.LINQ_API_KEY?.trim());
@@ -64,6 +71,34 @@ function sendLinqError(res: Response, err: unknown): void {
     return;
   }
   res.status(500).json({ error: "Request failed" });
+}
+
+/**
+ * When Linq itself is unreachable, answer from our own record rather than
+ * failing.
+ *
+ * Only for 502/504 — Linq being down or slow. A 4xx is Linq telling us
+ * something true about the request (an unverified customer, an order that does
+ * not exist) and must be passed through, not papered over with a stale row.
+ *
+ * The answer is marked `stale: true` so a client cannot mistake a last-known
+ * status for a live one. A bill that was `initiated` when we last heard is not
+ * evidence that it still is.
+ */
+async function fallbackToRecordedOrder(
+  res: Response,
+  err: unknown,
+  network: string,
+  customerRef: string,
+  orderId: string,
+): Promise<boolean> {
+  if (!(err instanceof LinqError) || err.status < 500) return false;
+
+  const recorded = await findNgnOrder(network, customerRef, orderId).catch(() => null);
+  if (!recorded) return false;
+
+  res.json({ ...recorded, stale: true, reason: "Linq is unreachable; this is our last known status" });
+  return true;
 }
 
 /**
@@ -242,15 +277,30 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(
-        await createOnrampOrder({
-          customerRef,
-          amountStableCoin: Number(amountStableCoin),
-          walletAddress,
-          rate: Number(rate),
-          coin: resolvedCoin,
-        }),
-      );
+      const order = await createOnrampOrder({
+        customerRef,
+        amountStableCoin: Number(amountStableCoin),
+        walletAddress,
+        rate: Number(rate),
+        coin: resolvedCoin,
+      });
+      res.json(order);
+
+      // After the response, deliberately. The user is holding bank details they
+      // need; our bookkeeping must not stand between them and that, and
+      // recordNgnOrder never throws.
+      void recordNgnOrder({
+        network: requestNetwork(req),
+        kind: "onramp",
+        orderId: order.orderId,
+        customerRef,
+        walletAddress,
+        coin: resolvedCoin,
+        amountStableCoin: order.amountStableCoin ?? Number(amountStableCoin),
+        amountNgn: order.amountNgn,
+        rate: Number(rate),
+        status: order.status,
+      });
     } catch (err) {
       sendLinqError(res, err);
     }
@@ -268,6 +318,9 @@ export function createNgnRouter(
       res.setHeader("Cache-Control", "no-store");
       res.json(await getOnrampStatus(customerRef, req.params.orderId));
     } catch (err) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+        return;
+      }
       sendLinqError(res, err);
     }
   });
@@ -314,19 +367,35 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(
-        await payBill({
-          customerRef,
-          billCategory,
-          provider,
-          customerId,
-          amountNgn: Number(amountNgn),
-          amountStableCoin: Number(amountStableCoin),
-          rate: Number(rate),
-          coin: resolvedCoin,
-          refundAddress,
-        }),
-      );
+      const order = await payBill({
+        customerRef,
+        billCategory,
+        provider,
+        customerId,
+        amountNgn: Number(amountNgn),
+        amountStableCoin: Number(amountStableCoin),
+        rate: Number(rate),
+        coin: resolvedCoin,
+        refundAddress,
+      });
+      res.json(order);
+
+      // `customerId` — the phone or meter number — is not passed on. It went to
+      // Linq and stops there; see the header of linq/ngnOrders.ts.
+      void recordNgnOrder({
+        network: requestNetwork(req),
+        kind: "bill",
+        orderId: order.id,
+        customerRef,
+        walletAddress: refundAddress,
+        coin: resolvedCoin,
+        amountStableCoin: Number(amountStableCoin),
+        amountNgn: Number(amountNgn),
+        rate: Number(rate),
+        status: order.status,
+        billCategory,
+        provider,
+      });
     } catch (err) {
       sendLinqError(res, err);
     }
@@ -343,6 +412,9 @@ export function createNgnRouter(
       res.setHeader("Cache-Control", "no-store");
       res.json(await getBillStatus(customerRef, req.params.orderId));
     } catch (err) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+        return;
+      }
       sendLinqError(res, err);
     }
   });
