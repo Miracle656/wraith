@@ -10,6 +10,7 @@ import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
+import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -36,15 +37,43 @@ async function main() {
   // Additive changes — a new table, a new nullable column — still apply on
   // their own. Anything destructive now fails loudly here instead.
   console.log("[wraith] Converging database schema…");
-  try {
-    execSync("npx prisma db push", { stdio: "inherit" });
-  } catch {
-    console.error(
-      "[wraith] Schema convergence refused: the pending change is destructive.\n" +
-        "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
-        "[wraith] change needs a deliberate migration, not --accept-data-loss.",
-    );
-    process.exit(1);
+  const first = pushSchema();
+  if (!first.ok) {
+    // `--accept-data-loss` consents to two very different things at once, and
+    // Prisma gives no way to agree to one without the other.
+    //
+    // Adding a unique constraint is NOT data loss: the index either builds or
+    // fails on a duplicate, and nothing is dropped either way. Refusing it put
+    // the service in a crash loop over a change that cannot destroy a row —
+    // which is exactly how this guard took wraith down once.
+    //
+    // Dropping a column IS data loss, and that is what the guard is for.
+    //
+    // So the warnings get read rather than counted: if every one is an added
+    // unique constraint, consent and retry. If even one is anything else,
+    // refuse exactly as before.
+    if (onlyAddsUniqueConstraints(first.output)) {
+      console.warn(
+        "[wraith] Schema diff is unique constraints only — no column is dropped.\n" +
+          "[wraith] Applying. A duplicate would fail the index, not delete a row.",
+      );
+      const retry = pushSchema("--accept-data-loss");
+      if (!retry.ok) {
+        console.error(
+          "[wraith] The constraint could not be applied — most likely duplicate\n" +
+            "[wraith] rows already exist for it. Nothing was dropped. Resolve the\n" +
+            "[wraith] duplicates and redeploy.",
+        );
+        process.exit(1);
+      }
+    } else {
+      console.error(
+        "[wraith] Schema convergence refused: the pending change is destructive.\n" +
+          "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
+          "[wraith] change needs a deliberate migration, not --accept-data-loss.",
+      );
+      process.exit(1);
+    }
   }
   console.log("[wraith] Database ready.");
 
