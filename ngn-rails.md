@@ -105,6 +105,42 @@ person.
 
 ### 2. Verify by NIN — once per person, ever
 
+> **Confirmed with Linq, 2026-10-03.** Their NIN check is **NIN only** — no
+> liveness and no face-match against the NIMC photo. They do **not** expose the
+> sender's bank account name on an onramp order. But a NIN that has already
+> verified one customer **cannot verify a second**: uniqueness is enforced.
+>
+> Three consequences, and the third is the one that bites:
+>
+> 1. **A stolen NIN still verifies.** NIN slips circulate widely in Nigeria, so
+>    the check proves possession of a number, not identity. The blast radius is
+>    bounded by uniqueness — one stolen NIN buys one account, not a farm — but
+>    that one account's KYC record names an innocent person.
+> 2. **The obvious free mitigation is unavailable.** Matching the sender's bank
+>    account name to the verified name would force an attacker to also hold a
+>    bank account in the victim's name, and Nigerian accounts are BVN-bound.
+>    Linq does not expose the payer, so this cannot be built on their data. The
+>    `f3` design screen renders `From · GTBank ··4821`, which this does not
+>    support.
+> 3. **Uniqueness turns a changed `customerRef` into a lockout.** A reference
+>    that drifts is not a new name for the same person — it is a stranger whose
+>    NIN is already spent. The mobile client therefore persists
+>    `customerRef` (`getCustomerRef` in `lib/onramp.ts`) rather than deriving it
+>    per read. A user who creates a genuinely new wallet, or reinstalls without
+>    a backup, still lands on "NIN already used" with no way out.
+>
+> **The open question that matters most:** can an existing customer be resolved
+> or re-bound for a NIN that is already verified? Without it, a reinstall is a
+> permanent loss of the naira rails for that person. Ask before public launch.
+>
+> Liveness, if wanted, is now a Veil-side build (Smile ID, Dojah, Prembly and
+> QoreID all do NIN-with-selfie). Weigh it carefully: biometric data is
+> *sensitive* personal data under the NDPA, so it pulls in a DPIA and raises
+> the stakes on NDPC registration — and it would not replace Linq's check,
+> which stays the one of record. If built, the capture must go device →
+> provider directly so no image ever touches wraith, and it must run *before*
+> Linq's KYC so a failure never spends one of their rate-limited attempts.
+
 ```
 POST /ngn/customers/kyc
 { customerRef, nin }
