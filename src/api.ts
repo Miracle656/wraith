@@ -201,6 +201,21 @@ export function createApp(): express.Application {
       return next();
     }
 
+    // The naira rails answer from Linq, not from indexed ledger data, so RPC
+    // health says nothing about whether their answer is current. Marking a live
+    // exchange rate `stale` because mainnet has no indexer configured is simply
+    // untrue — `/ngn/onramp/rate` was returning `{"rate":1437.45,"stale":true}`
+    // for a rate fetched seconds earlier.
+    //
+    // It also collides with a flag these routes already set for a different
+    // meaning: `/ngn` marks `stale: true` for "Linq was unreachable, this is
+    // our last known record". Letting this middleware write the same key would
+    // have the app tell people the payment provider is down while it is
+    // answering perfectly well.
+    if (req.path.startsWith("/ngn") || req.path.startsWith("/offramp")) {
+      return next();
+    }
+
     try {
       const net = requestNetwork(req);
       const rpcHealthy = await checkRpcHealth(net);
