@@ -41,6 +41,10 @@ services:
       POLL_INTERVAL_MS: "3000"
       EVENTS_BATCH_SIZE: "500"
       PORT: "3001"
+      # The chaos stack provisions schema via db push (no _prisma_migrations
+      # baseline), so migrate deploy would abort with P3005 on an empty database.
+      # Remove once the 0_init baseline migration lands and CI uses migrate deploy.
+      DB_PUSH_DEV: "true"
     ports:
       - "3001:3001"
     # Healthcheck lets `docker compose up --wait` block until the HTTP server

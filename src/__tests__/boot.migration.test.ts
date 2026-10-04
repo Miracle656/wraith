@@ -7,8 +7,9 @@
  *   - A migrate deploy failure triggers process.exit(1) with a safe error message
  *     (one that does not log the raw error, which may contain DATABASE_URL)
  *
- * The test fails against the OLD code (which unconditionally ran
- * `prisma db push --accept-data-loss`) and passes with the new implementation.
+ * Imports the real `runBootMigration` from src/index.ts so that this test
+ * exercises the shipped code rather than an inline copy — satisfying the repo
+ * rule that a test must fail on main and pass after the change.
  */
 
 import { execSync } from "child_process";
@@ -17,23 +18,26 @@ jest.mock("child_process", () => ({
   execSync: jest.fn(),
 }));
 
-const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
+// Mock every module that src/index.ts imports at load time so that importing
+// it does not attempt to connect to a database, start an HTTP server, or spin
+// up any workers.  Only runBootMigration (which uses the already-mocked
+// child_process.execSync) is exercised here.
+jest.mock("dotenv/config", () => ({}));
+jest.mock("../api", () => ({ createApp: jest.fn(() => ({ listen: jest.fn() })) }));
+jest.mock("../indexer", () => ({ startAllIndexers: jest.fn() }));
+jest.mock("../db", () => ({ prisma: { $disconnect: jest.fn() } }));
+jest.mock("../ws", () => ({ attachWebSocketServer: jest.fn() }));
+jest.mock("../graphql/subscriptions", () => ({
+  attachGraphQLSubscriptions: jest.fn(),
+  SUBSCRIPTIONS_PATH: "/graphql/subscriptions",
+}));
+jest.mock("../workers/webhooks", () => ({ startWebhookWorker: jest.fn() }));
+jest.mock("../jobs/retention", () => ({ startPartitionRetentionJob: jest.fn() }));
 
-// We need to re-import the module after manipulating env so we inline the
-// migration logic here rather than importing src/index.ts (which would also
-// spin up the full server). This mirrors exactly what src/index.ts does.
-function runBootMigration(): void {
-  if (process.env.DB_PUSH_DEV === "true") {
-    execSync("npx prisma db push", { stdio: "inherit" });
-  } else {
-    try {
-      execSync("npx prisma migrate deploy", { stdio: "inherit" });
-    } catch {
-      console.error("[wraith] FATAL: prisma migrate deploy failed");
-      process.exit(1);
-    }
-  }
-}
+// Import after all mocks are registered so the module sees the mocked deps.
+import { runBootMigration } from "../index";
+
+const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 
 describe("boot-time migration (issue #192)", () => {
   let mockExit: jest.SpyInstance;

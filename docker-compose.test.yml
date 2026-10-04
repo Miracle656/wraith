@@ -27,6 +27,10 @@ services:
       PORT: 3000
       RATE_LIMIT_MAX: 1000
       SKIP_INDEXER: "true"
+      # The integration harness provisions schema via db push (no _prisma_migrations
+      # baseline), so migrate deploy would abort with P3005 on an empty database.
+      # Remove once the 0_init baseline migration lands and CI uses migrate deploy.
+      DB_PUSH_DEV: "true"
     ports:
       - "3300:3000"
     healthcheck:

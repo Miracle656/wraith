@@ -11,14 +11,20 @@ import { startPartitionRetentionJob } from "./jobs/retention";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-async function main() {
-  // ── Database schema migration ──────────────────────────────────────────────
-  // Production path: apply every committed migration file in prisma/migrations/
-  // via `prisma migrate deploy`.  This is idempotent, safe, and never drops data.
-  //
-  // Dev/test escape hatch: set DB_PUSH_DEV=true to fall back to `prisma db push`
-  // for rapid local iteration against a throwaway database.  This flag MUST NOT
-  // be present in any production or staging environment.
+/**
+ * Run the boot-time database migration.
+ *
+ * Production path: `prisma migrate deploy` — idempotent, safe, records every
+ * applied migration in _prisma_migrations.  Never drops data.
+ *
+ * Dev/test escape hatch: set DB_PUSH_DEV=true to fall back to `prisma db push`
+ * for rapid local iteration against a throwaway database.  This flag MUST NOT
+ * be present in any production or staging environment.
+ *
+ * Exported so that the unit test (src/__tests__/boot.migration.test.ts) can
+ * import and exercise the real implementation rather than an inline copy.
+ */
+export function runBootMigration(): void {
   if (process.env.DB_PUSH_DEV === "true") {
     console.log("[wraith] DB_PUSH_DEV=true — running prisma db push (dev/test only)…");
     execSync("npx prisma db push", { stdio: "inherit" });
@@ -37,6 +43,11 @@ async function main() {
       process.exit(1);
     }
   }
+}
+
+async function main() {
+  // ── Database schema migration ──────────────────────────────────────────────
+  runBootMigration();
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────

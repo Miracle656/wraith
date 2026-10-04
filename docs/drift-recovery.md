@@ -1,5 +1,16 @@
 # Drift Recovery: migrating from `db push` to `prisma migrate deploy`
 
+> **⚠️ Required before merging this PR into production**
+>
+> The live database was provisioned by `prisma db push`, so `_prisma_migrations`
+> is empty. When this change lands, `prisma migrate deploy` will abort with
+> **P3005** and the service will not come up. You must baseline the production
+> database (Option A below) **before** deploying this commit — the ordering is
+> not optional.
+>
+> Note: this database is shared with Lens. Getting the ordering wrong affects
+> both services.
+
 This guide covers how to bring a database that was previously managed by
 `prisma db push` under proper migration control.
 
@@ -15,7 +26,7 @@ npx prisma db push --accept-data-loss
 
 on every startup. `db push` diffs the Prisma schema against the live database
 and applies the delta directly — it never writes to the `_prisma_migrations`
-table, so the database has no migration history. Seven committed migration files
+table, so the database has no migration history. Eight committed migration files
 in `prisma/migrations/` were present but never applied.
 
 The new boot path is:
@@ -82,10 +93,13 @@ all migrations as applied without re-running them."
    shell loop:
 
    ```sh
-   ls prisma/migrations | sort | while read m; do
-     npx prisma migrate resolve --applied "$m"
+   ls -d prisma/migrations/*/ | sort | while read m; do
+     npx prisma migrate resolve --applied "$(basename "$m")"
    done
    ```
+
+   The `-d */` pattern matches only directories, so `migration_lock.toml` is
+   never passed to `migrate resolve` (which errors out on non-migration names).
 
 3. **Verify**
 
@@ -111,7 +125,7 @@ npx prisma migrate reset --force --skip-seed
 ```
 
 This drops the entire schema, re-creates it from scratch via the migration
-files, and leaves a fully-baselned `_prisma_migrations` table. **Never run
+files, and leaves a fully-baselined `_prisma_migrations` table. **Never run
 this against production.**
 
 ---
@@ -132,7 +146,7 @@ This skips `migrate deploy` and falls back to `prisma db push` (without
 
 ## Verifying a fresh database reaches the current schema
 
-On a brand-new, empty database `prisma migrate deploy` should apply all seven
+On a brand-new, empty database `prisma migrate deploy` should apply all eight
 migrations and produce a schema identical to what `db push` would have created:
 
 ```sh
@@ -146,7 +160,7 @@ npx prisma migrate deploy
 npx prisma migrate status
 ```
 
-All seven entries in `prisma/migrations/` should be marked **applied**.
+All eight entries in `prisma/migrations/` should be marked **applied**.
 
 ---
 
