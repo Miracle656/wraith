@@ -84,7 +84,11 @@ async function runPartitionWorker(
 /**
  * Poll one ledger window across all contract partitions in parallel.
  *
- * @returns Total rows inserted (every record type) and the highest ledger seen across all workers.
+ * @returns Total rows inserted (every record type), and the cursor to commit:
+ * the **lowest** `highestLedger` across workers, clamped to
+ * `[fromLedger, toLedger]`. A worker cut short by the page budget covered less
+ * than the others, and the window cannot be considered indexed past the first
+ * ledger someone failed to fully cover.
  */
 export async function pollParallel(
   contractIds: string[],
@@ -105,9 +109,18 @@ export async function pollParallel(
   );
 
   const totalInserted = results.reduce((sum, r) => sum + r.inserted, 0);
-  const highestLedger = results.reduce(
-    (max, r) => Math.max(max, r.highestLedger),
+  // The committed cursor is the *minimum* ledger covered across workers, not
+  // the maximum. Before #180 every worker returned the identical network tip,
+  // so `Math.max` was meaningless; now a partition that hit the page budget
+  // returns a genuinely lower `highestLedger` than one that drained cleanly, and
+  // taking the max would skip the truncated partition's ledgers forever.
+  //
+  // Seeding the reduce with `toLedger` also clamps to the requested window (the
+  // parallel path has no separate clamp), and the floor at `fromLedger` keeps
+  // an empty window making progress instead of stalling.
+  const highestLedger = Math.max(
     fromLedger,
+    results.reduce((min, r) => Math.min(min, r.highestLedger), toLedger),
   );
 
   await setLastIndexedLedger(highestLedger, net);
