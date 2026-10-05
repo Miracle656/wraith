@@ -64,6 +64,22 @@ describe('fetchEventsSafe — bisection algorithm', () => {
     expect(fetch).toHaveBeenCalledTimes(3)
   })
 
+  it('clamps highestLedger to endLedger when the bisect fires on a narrow range', async () => {
+    // full(100–101) → XDR, then both single-ledger halves return the raw tip.
+    // Pre-#180 they were returned verbatim, so one decode error jumped the
+    // caller's cursor to the network tip; the docstring promises otherwise.
+    const fetch = mockFetch(
+      () => Promise.reject(xdrError()),   // full 100–101
+      () => Promise.resolve({ events: [makeEvent(100, 'e1')], latestLedger: 9_999 }),  // 100–100
+      () => Promise.resolve({ events: [makeEvent(101, 'e2')], latestLedger: 9_999 })   // 101–101
+    )
+
+    const result = await fetchEventsSafe(100, 101, [], 10_000, fetch as any)
+
+    expect(result.highestLedger).toBe(101)
+    expect(result.highestLedger).toBeLessThanOrEqual(101)
+  })
+
   it('isolates a single bad ledger and collects events from surrounding ledgers', async () => {
     // Range 100–104, ledger 102 is bad.
     // full(100–104) → XDR

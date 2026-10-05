@@ -75,7 +75,8 @@ async function runPartitionWorker(
 /**
  * Poll one ledger window across all contract partitions in parallel.
  *
- * @returns Total rows inserted and the highest ledger seen across all workers.
+ * @returns Total rows inserted and the *lowest* ledger every partition
+ *   actually covered — the only value safe to commit as the next cursor.
  */
 export async function pollParallel(
   contractIds: string[],
@@ -95,9 +96,19 @@ export async function pollParallel(
   );
 
   const totalInserted = results.reduce((sum, r) => sum + r.inserted, 0);
-  const highestLedger = results.reduce(
-    (max, r) => Math.max(max, r.highestLedger),
+
+  // The committed cursor is the *minimum* ledger covered across workers, not
+  // the maximum. Before #180 every worker returned the identical network tip,
+  // so `Math.max` was meaningless; now a partition that hit the page budget
+  // returns a genuinely lower `highestLedger` than one that drained cleanly, and
+  // taking the max would skip the truncated partition's ledgers forever.
+  //
+  // Seeding the reduce with `toLedger` also clamps to the requested window (the
+  // parallel path has no separate clamp), and the floor at `fromLedger` keeps
+  // an empty window making progress instead of stalling.
+  const highestLedger = Math.max(
     fromLedger,
+    results.reduce((min, r) => Math.min(min, r.highestLedger), toLedger),
   );
 
   await setLastIndexedLedger(highestLedger, net);

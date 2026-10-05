@@ -232,6 +232,10 @@ type FetchFn = typeof fetchEvents
  * caller only advances to the highest ledger it actually observed.
  */
 export const EVENTS_PAGE_BUDGET = 20;
+// The budget is only a guard against a pathological stream, not a limit real
+// ranges hit: with the default BATCH_SIZE (10 000 events per page) a single
+// ledger would need ~200 000 matching events before the cursor stopped
+// advancing and the loop could livelock.
 
 /**
  * Drain `[startLedger, endLedger]` by following the RPC cursor while pages come
@@ -305,7 +309,10 @@ export async function fetchEventsSafe(
   if (startLedger >= endLedger) {
     try {
       const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
-      return { events, highestLedger: Math.max(startLedger, latestLedger) };
+      // The RPC still reports the network tip here, and the bisect below
+      // recurses into this branch — so clamp to endLedger, or one XDR error in
+      // a range would hand the raw tip back to the caller as the cursor.
+      return { events, highestLedger: Math.min(Math.max(startLedger, latestLedger), endLedger) };
     } catch (err) {
       const msg = (err as Error).message ?? "";
       if (msg.includes("XDR") || msg.includes("unknown")) {
@@ -335,7 +342,12 @@ export async function fetchEventsSafe(
     const msg = (err as Error).message ?? "";
     if (!msg.includes("XDR") && !msg.includes("unknown")) throw err;
 
-    // Bisect: try lower half, then upper half
+    // Bisect: try lower half, then upper half.
+    //
+    // The bisect wraps the whole range, not the individual pages, so a decode
+    // error on page 17 re-reads pages 1–16 as part of the lower half. That is
+    // the accepted cost of keeping the retry stateless: XDR errors are rare,
+    // and per-page bisection state would have to survive the recursion.
     console.warn(`[rpc] XDR error in ledgers ${startLedger}–${endLedger}, bisecting…`);
     const mid = Math.floor((startLedger + endLedger) / 2);
 
@@ -344,7 +356,10 @@ export async function fetchEventsSafe(
 
     return {
       events: [...lower.events, ...upper.events],
-      highestLedger: Math.max(lower.highestLedger, upper.highestLedger),
+      // Clamp again: the halves recurse, and each already clamps to its own
+      // endLedger, but keeping the bound explicit here is what makes the
+      // docstring ("never the raw network tip") true for every path.
+      highestLedger: Math.min(Math.max(lower.highestLedger, upper.highestLedger), endLedger),
     };
   }
 }

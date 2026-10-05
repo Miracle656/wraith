@@ -308,6 +308,13 @@ async function pollOnce(
   // already clamped to endLedger. Re-clamp here so a future source can never
   // commit a cursor past the requested window — jumping past target would
   // defeat the TIP_LAG propagation buffer.
+  //
+  // `highestLedger` can be the top ledger of a *partially* drained range: the
+  // `maxLedger >= endLedger` and page-budget breaks in fetchRangePaged may stop
+  // mid-ledger. That is safe only because the next poll re-reads `fromLedger`
+  // inclusively, so the partially-covered ledger is picked up again — committing
+  // a cursor past it would skip those events permanently. This is the
+  // load-bearing assumption of the whole drain design.
   const cursor = Math.min(highestLedger, endLedger);
 
   if (events.length === 0) {
