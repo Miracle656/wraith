@@ -222,7 +222,7 @@ model WebhookSubscription {
 
 // ─── Webhook Deliveries ───────────────────────────────────────────────────────
 model WebhookDelivery {
-  id Int @id @default(autoincrement())
+  id             Int                 @id @default(autoincrement())
   // Denormalised from the subscription so a delivery can be looked up by
   // (network, eventId) without a join.
   network        String              @default("testnet")
@@ -309,16 +309,16 @@ model RetentionJobRun {
 // consumers watch this table for a "the contract is gone" signal. One row per
 // contract — the first expiry detection wins; re-detection is idempotent.
 model ContractTombstone {
-  id              Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   // Which chain the contract expired on. The same contract id can exist on both
   // networks with different TTLs, so a tombstone is only meaningful per network
   // — a global unique on contractId would let a testnet expiry suppress the
   // mainnet one forever.
-  network         String   @default("testnet")
+  network String @default("testnet")
 
   // The contract whose storage expired (C...)
-  contractId      String
+  contractId String
 
   // The contract instance's liveUntilLedger at the moment of expiry — the last
   // ledger for which the entry was still live.
@@ -326,16 +326,15 @@ model ContractTombstone {
 
   // The ledger at which we observed the entry had expired
   // (detectedLedger > liveUntilLedger).
-  detectedLedger  Int
+  detectedLedger Int
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
   // First expiry detection wins, per network; re-detection is a no-op.
   @@unique([network, contractId])
   @@index([network, detectedLedger])
   @@schema("wraith")
 }
-
 
 // ─── Backfill Cursor ───────────────────────────────────────────────────────────
 // Durable cursor so the backfill job can resume mid-range after a crash.
@@ -381,44 +380,118 @@ model TokenMetadata {
 // which payout this was. Account numbers and names go to Linq and are not ours
 // to keep.
 model OfframpOrder {
-  id             Int      @id @default(autoincrement())
-  network        String   @default("testnet")
+  id      Int    @id @default(autoincrement())
+  network String @default("testnet")
 
-  // Linq's order id — the join key for webhooks and status polls.
-  orderId        String
+  // Linq's order id — the join key for webhooks and status polls. Never sent to
+  // clients: see publicId.
+  orderId         String
+  // The id clients see and look an order up by: random and unguessable, unlike a
+  // provider id we do not control the shape of. Null on rows written before
+  // orders were access-controlled; those cannot be read through the API.
+  publicId        String?
+  // SHA-256 of the bearer token handed to the creator. Only the hash is kept, so
+  // a database read does not yield a working credential. Null as above.
+  accessTokenHash String?
   // Ours, sent as idempotencyKey. Never regenerated on retry, or the retry
   // becomes a second order that also has to be paid for.
-  idempotencyKey String
+  idempotencyKey  String
   // Which wallet placed it, so a user can be shown their own orders.
-  walletAddress  String
+  walletAddress   String
 
-  chain          String   @default("stellar")
-  coin           String   @default("usdc")
+  chain             String  @default("stellar")
+  coin              String  @default("usdc")
   // Where the user must send USDC. Linq creates it with a trustline in place.
-  depositAddress String
+  depositAddress    String
   // Requested at creation; on a manualDeposit order the settled figures below
   // are what actually happened and can differ.
-  amountStableCoin String
-  amountNGN        String
-  rate             String
+  amountStableCoin  String
+  amountNGN         String
+  rate              String
   // Linq's status string, stored verbatim rather than mapped to an enum — it
   // is their vocabulary ("processing: in bank queue") and inventing our own
   // would lose detail we cannot recover.
-  status         String   @default("initiated")
+  status            String  @default("initiated")
   // Set from the settled webhook, so a reconciled payout is distinguishable
   // from the requested one.
   settledStableCoin String?
   settledNGN        String?
   depositTxHash     String?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Per network: an order id is unique within a chain, and the same wallet can
   // offramp on both.
   @@unique([network, orderId])
+  @@unique([network, publicId])
   @@unique([network, idempotencyKey])
   @@index([network, walletAddress])
+  @@index([network, status])
+  @@schema("wraith")
+}
+
+/// An onramp or bill order placed through Linq.
+///
+/// This exists for one reason the offramp's table does not share: a bill's
+/// outcome is **off-chain**. When Linq delivers XLM or USDC for an onramp, the
+/// indexer sees the payment land on the wallet's classic account and the
+/// existing address subscription already pushes it — no row needed. A biller
+/// vending airtime, or refusing to, is invisible to the chain, so without a
+/// record here a failed bill is only discovered by asking.
+///
+/// Reads still require **both** `customerRef` and `orderId`, exactly as Linq's
+/// own status endpoints do. That is why there is deliberately **no index on
+/// `customerRef`**: nothing here should make it cheap to list a customer's
+/// orders, because a wallet address is semi-public and an orderId is not.
+///
+/// `customerId` — the phone number for airtime, the meter number for
+/// electricity — is deliberately **not stored**. It is personal data under the
+/// NDPA, it is passed straight through to Linq at creation, and the same rule
+/// that keeps the NIN out of every persisted shape keeps it out of this one.
+model NgnOrder {
+  id      Int    @id @default(autoincrement())
+  /// Always "mainnet" in practice — Linq has no sandbox and the routes refuse
+  /// every other network — but kept explicit so a row is never ambiguous.
+  network String @default("mainnet")
+
+  /// "onramp" or "bill". One table because the lifecycle is identical: created
+  /// with a locked rate, settled or failed later by a webhook.
+  kind String
+
+  /// Linq's order id — the join key for webhooks and status polls.
+  orderId     String
+  /// Linq's customer reference. Required alongside orderId on every read.
+  customerRef String
+
+  /// Onramp: where the crypto is delivered. Bill: where the deposit is returned
+  /// if the vend fails. Always a classic G-address; a contract cannot receive a
+  /// classic payment.
+  walletAddress String
+
+  coin             String
+  amountStableCoin String
+  amountNGN        String
+  rate             String
+
+  /// Bills only.
+  billCategory String?
+  provider     String?
+
+  /// Linq's status string, stored verbatim rather than mapped to an enum — it
+  /// is their vocabulary and inventing our own would lose detail.
+  status String @default("initiated")
+
+  /// Written by the webhook. A manual deposit settles at whatever arrived, so
+  /// the settled figures can differ from the requested ones.
+  settledStableCoin String?
+  settledNGN        String?
+  txHash            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([network, orderId])
   @@index([network, status])
   @@schema("wraith")
 }

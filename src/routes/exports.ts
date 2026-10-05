@@ -8,6 +8,7 @@ import { z } from "zod";
 import { requestNetwork } from "../middleware/network";
 import { parseOr400 } from "../openapi/validation";
 import type { Network } from "../network";
+import { getCachedTokenDecimals } from "../tokenCache";
 
 // How many rows we fetch per DB round-trip. Keeps memory flat.
 const BATCH_SIZE = 500;
@@ -106,7 +107,8 @@ async function handleCsvExport(req: Request, res: Response, next: NextFunction) 
     if (!parsed) return;
 
     const effectiveMax = parsed.maxRows ?? DEFAULT_MAX_ROWS;
-    const where = buildWhere(parsed, requestNetwork(req));
+    const network = requestNetwork(req);
+    const where = buildWhere(parsed, network);
 
     // Fetch one row beyond the cap so we can tell the caller whether the result
     // was truncated without a separate COUNT query.
@@ -134,7 +136,7 @@ async function handleCsvExport(req: Request, res: Response, next: NextFunction) 
         fromAddress:    row.fromAddress ?? "",
         toAddress:      row.toAddress ?? "",
         amount:         row.amount,
-        displayAmount:  toDisplayAmount(row.amount),
+        displayAmount:  toDisplayAmount(row.amount, getCachedTokenDecimals(row.contractId, network)),
         ledger:         row.ledger,
         ledgerClosedAt: row.ledgerClosedAt.toISOString(),
         txHash:         row.txHash,
@@ -178,7 +180,8 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
     if (!parsed) return;
 
     const effectiveMax = parsed.maxRows ?? DEFAULT_MAX_ROWS;
-    const where = buildWhere(parsed, requestNetwork(req));
+    const network = requestNetwork(req);
+    const where = buildWhere(parsed, network);
 
     const schema = new parquet.ParquetSchema({
       id:             { type: "INT64" },
@@ -214,7 +217,7 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
         fromAddress:    row.fromAddress ?? null,
         toAddress:      row.toAddress ?? null,
         amount:         row.amount,
-        displayAmount:  toDisplayAmount(row.amount),
+        displayAmount:  toDisplayAmount(row.amount, getCachedTokenDecimals(row.contractId, network)),
         ledger:         row.ledger,
         ledgerClosedAt: row.ledgerClosedAt.toISOString(),
         txHash:         row.txHash,

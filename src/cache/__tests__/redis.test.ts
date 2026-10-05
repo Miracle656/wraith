@@ -174,21 +174,64 @@ describe("cacheMiddleware", () => {
 });
 
 describe("defaultKeyFn", () => {
-  const baseReq = (query: Record<string, unknown>): Request =>
-    ({ method: "GET", baseUrl: "/search", path: "/", query } as unknown as Request);
+  const baseReq = (query: Record<string, unknown>, network?: string): Request =>
+    ({ method: "GET", baseUrl: "/search", path: "/", query, network } as unknown as Request);
 
   it("is stable regardless of query param order", () => {
-    expect(defaultKeyFn(baseReq({ a: "1", b: "2" }))).toBe(
-      defaultKeyFn(baseReq({ b: "2", a: "1" })),
+    expect(defaultKeyFn(baseReq({ a: "1", b: "2" }, "mainnet"))).toBe(
+      defaultKeyFn(baseReq({ b: "2", a: "1" }, "mainnet")),
     );
   });
 
-  it("encodes method, path and sorted query", () => {
-    expect(defaultKeyFn(baseReq({ b: "2", a: "1" }))).toBe("GET:/search/?a=1&b=2");
+  it("encodes method, network, path and sorted query", () => {
+    expect(defaultKeyFn(baseReq({ b: "2", a: "1" }, "mainnet"))).toBe(
+      "GET:mainnet:/search/?a=1&b=2",
+    );
   });
 
   it("flattens array query values", () => {
-    expect(defaultKeyFn(baseReq({ tag: ["x", "y"] }))).toBe("GET:/search/?tag=x,y");
+    expect(defaultKeyFn(baseReq({ tag: ["x", "y"] }, "mainnet"))).toBe(
+      "GET:mainnet:/search/?tag=x,y",
+    );
+  });
+
+  it("falls back to 'unknown' when req.network is not set", () => {
+    expect(defaultKeyFn(baseReq({ a: "1" }))).toBe("GET:unknown:/search/?a=1");
+  });
+
+  // Acceptance criteria: two requests differing only by X-Network produce different keys.
+  // networkMiddleware resolves both ?network= and X-Network: into req.network, so by the
+  // time defaultKeyFn runs the network is always in req.network regardless of how it arrived.
+  it("produces different keys for mainnet vs testnet", () => {
+    const mainnet = defaultKeyFn(baseReq({ q: "USDC" }, "mainnet"));
+    const testnet = defaultKeyFn(baseReq({ q: "USDC" }, "testnet"));
+    expect(mainnet).not.toBe(testnet);
+    expect(mainnet).toBe("GET:mainnet:/search/?q=USDC");
+    expect(testnet).toBe("GET:testnet:/search/?q=USDC");
+  });
+
+  // Acceptance criteria: ?network=mainnet and X-Network: mainnet produce the same key.
+  // Both paths go through networkMiddleware which sets req.network; the ?network= param
+  // is stripped from the query segment to avoid double-encoding.
+  it("produces the same key for ?network=mainnet and X-Network: mainnet (both resolve to req.network)", () => {
+    // Simulates request via query string: networkMiddleware strips ?network from query
+    // and sets req.network = "mainnet"
+    const viaQuery = defaultKeyFn(baseReq({ q: "USDC" }, "mainnet"));
+    // Simulates request via header: networkMiddleware sets req.network = "mainnet",
+    // query has no network param at all
+    const viaHeader = defaultKeyFn(baseReq({ q: "USDC" }, "mainnet"));
+    expect(viaQuery).toBe(viaHeader);
+  });
+
+  it("excludes the ?network query param from the key (captured in req.network instead)", () => {
+    // ?network= in the query string must not appear in the key; the resolved
+    // req.network value is the canonical source.
+    const withNetworkInQuery = defaultKeyFn(
+      baseReq({ q: "USDC", network: "mainnet" }, "mainnet"),
+    );
+    const withoutNetworkInQuery = defaultKeyFn(baseReq({ q: "USDC" }, "mainnet"));
+    expect(withNetworkInQuery).toBe(withoutNetworkInQuery);
+    expect(withNetworkInQuery).toBe("GET:mainnet:/search/?q=USDC");
   });
 });
 

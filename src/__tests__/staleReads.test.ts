@@ -65,6 +65,7 @@ describe("Graceful stale reads during RPC outage (#164)", () => {
             eventId: "evt123",
           },
         ],
+        hasMore: false,
         nextCursor: null,
       });
 
@@ -80,7 +81,7 @@ describe("Graceful stale reads during RPC outage (#164)", () => {
 
     it("resumes normal non-stale headers after RPC recovers", async () => {
       mockGetLatestLedger.mockRejectedValueOnce(new Error("RPC outage"));
-      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res1 = await request(app).get(`/transfers/incoming/${ALICE}`);
       expect(res1.status).toBe(200);

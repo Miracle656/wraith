@@ -1,5 +1,5 @@
 import { xdr } from "@stellar/stellar-sdk";
-import { parseEvent } from "../decoder";
+import { parseEvent, parseEvents } from "../decoder";
 import * as fixtures from "./fixtures/events.json";
 
 describe("Soroban XDR Decoder", () => {
@@ -105,5 +105,34 @@ describe("Soroban XDR Decoder", () => {
 
     const result = parseEvent(raw);
     expect(result).toBeNull();
+  });
+});
+
+describe("parseEvents", () => {
+  const common = {
+    ledger: 100,
+    ledgerClosedAt: "2024-01-01T00:00:00Z",
+    contractId: fixtures.contractId,
+    txHash: "abc123txhash",
+    type: "contract",
+  };
+  const good = (id: string) => ({
+    ...common,
+    id,
+    topic: fixtures.transfer.topic.map((t) => xdr.ScVal.fromXDR(t, "base64")),
+    value: xdr.ScVal.fromXDR(fixtures.transfer.value, "base64"),
+  });
+  // A "transfer" with only the symbol topic: parseEvent throws on this.
+  const malformed = {
+    ...common,
+    id: "0000000000000000001-00002",
+    topic: [xdr.ScVal.fromXDR(fixtures.transfer.topic[0], "base64")],
+    value: xdr.ScVal.fromXDR(fixtures.transfer.value, "base64"),
+  };
+
+  it("skips a malformed event instead of failing the batch", () => {
+    expect(() => parseEvent(malformed)).toThrow();
+    const records = parseEvents([good("0000000000000000001-00001"), malformed, good("0000000000000000001-00003")]);
+    expect(records).toHaveLength(2);
   });
 });

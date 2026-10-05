@@ -11,6 +11,7 @@ import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createLinqWebhookRouter } from "./api/linqWebhook";
 import { createOfframpRouter } from "./api/offramp";
+import { createNgnRouter } from "./api/ngn";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
@@ -27,8 +28,9 @@ import {
 } from "./openapi/schemas";
 import { parseOr400 } from "./openapi/validation";
 import { networkMiddleware, requestNetwork } from "./middleware/network";
-import { renderMetrics, metricsContentType } from "./metrics";
-import { getAllCachedTokens } from "./tokenCache";
+import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
+import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
+import { toDisplayAmount } from "./amount";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -78,25 +80,19 @@ const POPULAR_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_POPULAR_MS ?? "60000
 const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000", 10);
 
 // ─── Amount formatting ────────────────────────────────────────────────────
-const STROOPS = 10_000_000n;
+export { toDisplayAmount } from "./amount";
 
-/**
- * Convert a raw i128 decimal string (stroops) to a human-readable 7-decimal
- * string. Uses BigInt arithmetic to avoid floating-point precision loss.
- * e.g. "10000000000" → "1000.0000000"
- */
-export function toDisplayAmount(amount: string): string {
-  const raw = BigInt(amount);
-  const abs = raw < 0n ? -raw : raw;
-  const integer = abs / STROOPS;
-  const remainder = abs % STROOPS;
-  const sign = raw < 0n ? "-" : "";
-  return `${sign}${integer}.${String(remainder).padStart(7, "0")}`;
-}
-
-const withDisplay = <T extends { amount: string }>(t: T) => ({
-  ...t,
-  displayAmount: toDisplayAmount(t.amount),
+const withDisplay = <T extends { amount: string; contractId?: string; displayAmount?: string }>(
+  transfer: T,
+  network: Network,
+) => ({
+  ...transfer,
+  displayAmount:
+    transfer.displayAmount ??
+    toDisplayAmount(
+      transfer.amount,
+      transfer.contractId ? getCachedTokenDecimals(transfer.contractId, network) : undefined,
+    ),
 });
 
 function parseSelectQuery(value: unknown): string[] | undefined {
@@ -140,6 +136,47 @@ export function createApp(): express.Application {
 
   app.use(cors());
 
+  // ─── HTTP metrics middleware ──────────────────────────────────────────────
+  // First in the chain, deliberately: mounted below networkMiddleware and the
+  // rate limiter it would never see the requests those two reject, so a 429
+  // storm or a flood of invalid ?network= values would be invisible in
+  // http_requests_total — exactly the traffic you want a counter for.
+  //
+  // The route label is `req.route?.path`, the Express route pattern, and never
+  // the raw URL: addresses and contract ids must not become label values.
+  // Do NOT "improve" this to `req.baseUrl + req.route.path`. `req.baseUrl` is
+  // the *matched* mount path, not the pattern, and `src/api/accounts.ts:29`
+  // mounts a router at "/:address/transfers" — so baseUrl reads
+  // "/accounts/GABC…/transfers" with the real address in it. One label value
+  // per address is unbounded cardinality and an unbounded memory leak in
+  // prom-client. The cost of the safe version is that endpoints whose routers
+  // declare "/" (e.g. /search, /webhooks) all report route="/"; that is a
+  // legibility loss, not a correctness or cardinality one.
+  //
+  // `method` is bounded by the set Node's HTTP parser accepts and `status` by
+  // the status codes we emit, so every label here has a fixed domain.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    // Skip /metrics: a scrape endpoint that increments its own counters
+    // creates a feedback loop and misrepresents real traffic.
+    if (req.path === "/metrics") {
+      return next();
+    }
+
+    const start = process.hrtime.bigint();
+
+    res.on("finish", () => {
+      const routePattern = req.route?.path ?? "unknown";
+      const durationSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+      const status = String(res.statusCode);
+
+      httpRequestsTotal.inc({ method: req.method, route: routePattern, status });
+      httpRequestDurationSeconds.observe({ method: req.method, route: routePattern }, durationSeconds);
+    });
+
+    next();
+  });
+
+
   // BEFORE express.json(). Linq signs the raw request body, so a parser that
   // consumes and re-serialises it makes every signature unverifiable - the
   // bytes differ even when the value does not. Their docs call this out
@@ -161,6 +198,21 @@ export function createApp(): express.Application {
     // /metrics is served from in-process counters, so the RPC health probe
     // below would add a network round-trip to every scrape and report nothing.
     if (req.method !== "GET" || req.path === "/healthz" || req.path === "/metrics") {
+      return next();
+    }
+
+    // The naira rails answer from Linq, not from indexed ledger data, so RPC
+    // health says nothing about whether their answer is current. Marking a live
+    // exchange rate `stale` because mainnet has no indexer configured is simply
+    // untrue — `/ngn/onramp/rate` was returning `{"rate":1437.45,"stale":true}`
+    // for a rate fetched seconds earlier.
+    //
+    // It also collides with a flag these routes already set for a different
+    // meaning: `/ngn` marks `stale: true` for "Linq was unreachable, this is
+    // our last known record". Letting this middleware write the same key would
+    // have the app tell people the payment provider is down while it is
+    // answering perfectly well.
+    if (req.path.startsWith("/ngn") || req.path.startsWith("/offramp")) {
       return next();
     }
 
@@ -199,6 +251,8 @@ export function createApp(): express.Application {
   // ─── Webhook subscription management ─────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
   app.use("/offramp", createOfframpRouter());
+  // Naira rails: buying with naira, and bills paid out of the wallet.
+  app.use("/ngn", createNgnRouter());
   app.use("/graphql", createGraphQLMiddleware());
 
   // ─── Assets routes ───────────────────────────────────────────────────────
@@ -509,8 +563,10 @@ export function createApp(): express.Application {
           token?: string;
         };
 
+        const network = requestNetwork(req);
         const result = await queryTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           direction: "incoming",
           contractId,
@@ -525,13 +581,14 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),
@@ -571,8 +628,10 @@ export function createApp(): express.Application {
           token?: string;
         };
 
+        const network = requestNetwork(req);
         const result = await queryTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           direction: "outgoing",
           contractId,
@@ -587,13 +646,14 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),
@@ -644,8 +704,10 @@ export function createApp(): express.Application {
           $select?: string[];
         };
 
+        const network = requestNetwork(req);
         const result = await queryAllTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           contractId,
           token,
@@ -659,13 +721,14 @@ export function createApp(): express.Application {
           eventTypes: eventType as string[] | undefined,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({
           ...result,
           transfers: result.transfers.map((transfer) => {
             if (transfer && typeof (transfer as { amount?: unknown }).amount === "string") {
-              return withDisplay(transfer as { amount: string });
+              return withDisplay(transfer as { amount: string; contractId?: string; displayAmount?: string }, network);
             }
             return transfer;
           }),
@@ -716,8 +779,10 @@ export function createApp(): express.Application {
         };
 
         // Always fetch with offset=0 and enforce a 10,000 row limit for CSV export
+        const network = requestNetwork(req);
         const result = await queryAllTransfers({
-          network: requestNetwork(req),
+          network,
+          tokenDecimals: getCachedTokenDecimals,
           address,
           contractId,
           token,
@@ -739,7 +804,12 @@ export function createApp(): express.Application {
         // Add data rows
         for (const transfer of result.transfers) {
           const t = transfer as Record<string, unknown>;
-          const displayAmount = toDisplayAmount(String(t.amount ?? "0"));
+          const displayAmount = toDisplayAmount(
+            String(t.amount ?? "0"),
+            typeof t.contractId === "string"
+              ? getCachedTokenDecimals(t.contractId, network)
+              : undefined,
+          );
           const closedAt = t.ledgerClosedAt instanceof Date
             ? t.ledgerClosedAt
             : new Date(String(t.ledgerClosedAt ?? 0));
@@ -781,8 +851,17 @@ export function createApp(): express.Application {
       try {
         const parsed = parseOr400(txHashParamsSchema, req.params, res);
         if (!parsed) return;
-        const transfers = await queryByTxHash(parsed.txHash, requestNetwork(req));
-        res.json({ transfers: transfers.map(withDisplay) });
+        const network = requestNetwork(req);
+        const transfers = await queryByTxHash(parsed.txHash, network);
+        res.json({
+          transfers: transfers.map((transfer) => ({
+            ...transfer,
+            displayAmount: toDisplayAmount(
+              transfer.amount,
+              getCachedTokenDecimals(transfer.contractId, network),
+            ),
+          })),
+        });
       } catch (err) {
         next(err);
       }
@@ -809,8 +888,9 @@ export function createApp(): express.Application {
         if (!parsed) return;
         const { address, contractId, fromDate, toDate } = parsed;
 
+        const network = requestNetwork(req);
         const rows = await querySummary({
-          network: requestNetwork(req),
+          network,
           address,
           contractId,
           fromDate,
@@ -826,9 +906,9 @@ export function createApp(): express.Application {
             totalReceived: row.totalReceived,
             totalSent: row.totalSent,
             netFlow: net.toString(),
-            displayTotalReceived: toDisplayAmount(row.totalReceived),
-            displayTotalSent: toDisplayAmount(row.totalSent),
-            displayNetFlow: toDisplayAmount(net.toString()),
+            displayTotalReceived: toDisplayAmount(row.totalReceived, getCachedTokenDecimals(row.contractId, network)),
+            displayTotalSent: toDisplayAmount(row.totalSent, getCachedTokenDecimals(row.contractId, network)),
+            displayNetFlow: toDisplayAmount(net.toString(), getCachedTokenDecimals(row.contractId, network)),
             txCount: Number(row.txCount),
           };
         });
@@ -940,6 +1020,7 @@ export function createApp(): express.Application {
           toLedger,
           limit,
           offset,
+          includeTotal: (parsed as { includeTotal?: boolean }).includeTotal,
         });
 
         res.json({ ...result, limit, offset });
