@@ -526,11 +526,44 @@ export async function startIndexer(network?: Network): Promise<void> {
  * returns immediately with the loops running in the background.
  */
 export function startAllIndexers(networks: Network[] = enabledNetworks()): Network[] {
-  // Validate every network up front so a bad mainnet endpoint is reported at
-  // startup rather than after testnet has already begun writing.
-  validateNetworkConfig(networks);
+  // Validated per network, and a failure skips that network rather than
+  // throwing.
+  //
+  // `validateNetworkConfig(networks)` threw for the whole set if any one entry
+  // was misconfigured, which broke the isolation promised above in the worst
+  // way: an unset SOROBAN_RPC_URL_MAINNET killed the process during main(),
+  // taking testnet indexing AND the HTTP API with it. The API does not index.
+  // The naira rails are plain HTTP to Linq and never touch Soroban RPC, so a
+  // missing mainnet endpoint was stopping /ngn from answering for a reason
+  // that has nothing to do with it.
+  //
+  // Serving reads on the networks that *are* configured, while saying loudly
+  // which one is not, beats refusing to serve anything.
+  const runnable: Network[] = [];
+  for (const net of networks) {
+    try {
+      validateNetworkConfig([net]);
+      runnable.push(net);
+    } catch (err) {
+      console.error(
+        `[indexer/${net}] NOT STARTED — ${(err as Error).message}
+` +
+          `[indexer/${net}] Reads for this network will serve whatever is already ` +
+          `indexed and fall behind until it is configured. Other networks and the ` +
+          `HTTP API are unaffected.`,
+      );
+    }
+  }
 
-  console.log(`[indexer] Starting loops for: ${networks.join(", ")}`);
+  if (runnable.length === 0) {
+    console.error(
+      "[indexer] No network is configured for indexing. The API is still serving; " +
+        "nothing is being indexed.",
+    );
+    return [];
+  }
+
+  console.log(`[indexer] Starting loops for: ${runnable.join(", ")}`);
 
   const run = (net: Network) => {
     startIndexer(net).catch((err) => {
@@ -539,8 +572,8 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
     });
   };
 
-  for (const net of networks) run(net);
-  return networks;
+  for (const net of runnable) run(net);
+  return runnable;
 }
 
 function sleep(ms: number): Promise<void> {
