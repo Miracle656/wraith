@@ -4,6 +4,7 @@ import { execSync } from "child_process";
 import { createApp } from "./api";
 import { startAllIndexers } from "./indexer";
 import { prisma } from "./db";
+import { drainServer } from "./shutdown";
 import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
@@ -80,6 +81,10 @@ async function main() {
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {
     console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
+    // Stop accepting new connections and let in-flight requests finish (bounded
+    // so a stuck request cannot hold the process open), then release the
+    // database handle before exiting.
+    await drainServer(server);
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -131,4 +136,10 @@ async function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(
+    "[wraith] Startup failed:",
+    err instanceof Error ? err.message : err,
+  );
+  process.exit(1);
+});

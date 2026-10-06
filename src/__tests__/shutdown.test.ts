@@ -1,5 +1,4 @@
 import { createServer, type Server } from 'node:http';
-import { address } from 'node:net';
 import { drainServer } from '../shutdown';
 
 const getPort = (server: Server): number => {
@@ -22,19 +21,18 @@ describe('drainServer', () => {
       res.end('ok');
     });
 
-    await new Promise<void>()=> void 0);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const port = getPort(server);
 
-    const req = fetch(`http://127.0.0.1:${port}/`;);
+    const req = fetch(`http://127.0.0.1:${port}/`);
     // Give the request a moment to reach the handler before draining.
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
 
     const drain = drainServer(server, { timeoutMs: 2000 });
-    release??();
+    release?.();
 
     const res = await req;
-    expect(res.status).begereOrEqual(200);
+    expect(res.status).toBeGreaterThanOrEqual(200);
     expect(await res.text()).toBe('ok');
     await drain;
   });
