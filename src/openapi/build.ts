@@ -410,9 +410,13 @@ registry.registerPath({
 });
 
 // Internal surfaces, kept in the spec for completeness. The provider webhook
-// is a signature-verified callback for Linq's infrastructure and the offramp
+// is a signature-verified callback from the payout provider and the offramp
 // router is the wallet's own cash-out surface fronting a server-side provider
-// API — neither is a public data API, so both are marked deprecated.
+// API — neither is a public data API, so both carry `x-internal`.
+//
+// `x-internal` rather than `deprecated`: these routes are live and the wallet
+// calls them today. `deprecated` tells every generator and every reader that
+// the endpoint is being withdrawn, which would read as cash-out being retired.
 const internalDescription =
   "Internal endpoint. Not part of the public data API: " +
   "(provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).";
@@ -420,9 +424,9 @@ const internalDescription =
 registry.registerPath({
   method: "post",
   path: "/webhooks/linq",
-  summary: "Linq payout webhook (provider callback)",
+  summary: "Payout webhook (provider callback)",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   responses: {
     200: { description: "Acknowledged", content: { "application/json": { schema: linqWebhookAckResponseSchema } } },
     401: { description: "Invalid signature", content: { "application/json": { schema: errorResponseSchema } } },
@@ -441,7 +445,7 @@ registry.registerPath({
   path: "/offramp/rate",
   summary: "Indicative NGN/USDC rate",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampRateResponseSchema } } },
     ...internalErrorResponses,
@@ -453,7 +457,7 @@ registry.registerPath({
   path: "/offramp/verify-bank",
   summary: "Verify a bank account before creating an order",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   request: {
     body: {
       required: true,
@@ -471,7 +475,7 @@ registry.registerPath({
   path: "/offramp/trustline",
   summary: "Check a refund address holds a USDC trustline",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   request: { query: offrampTrustlineQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampTrustlineResponseSchema } } },
@@ -484,7 +488,7 @@ registry.registerPath({
   path: "/offramp/orders",
   summary: "Create a cash-out order",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   request: {
     body: {
       required: true,
@@ -503,7 +507,7 @@ registry.registerPath({
   path: "/offramp/orders/{orderId}",
   summary: "Get the status of a cash-out order",
   description: internalDescription,
-  deprecated: true,
+  "x-internal": true,
   request: { params: offrampOrderParamsSchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampOrderStatusResponseSchema } } },

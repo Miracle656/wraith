@@ -718,8 +718,17 @@ export const offrampOrderStatusResponseSchema = z.object({
   depositAddress: z.string(),
   rate: z.number(),
   createdAt: z.string().datetime({ offset: true }),
-  /** "linq" when reconciled against the provider, "cache" when the provider was unreachable. */
-  source: z.enum(["linq", "cache"]),
+  /**
+   * "live" when reconciled against the provider, "cache" when the provider was
+   * unreachable and the stored row was served instead.
+   *
+   * This said "linq" until #216 renamed the wire value — a spec that documents
+   * a value the server no longer sends is worse than no spec, and it would have
+   * shipped as the published reference. Dropping the provider's name also keeps
+   * this consistent with `withoutProviderName()` in src/api/offramp.ts, which
+   * exists so the provider is not named to users; openapi.json is published.
+   */
+  source: z.enum(["live", "cache"]),
 });
 
 export const offrampErrorResponseSchema = z.object({

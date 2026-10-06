@@ -4947,9 +4947,9 @@
     },
     "/webhooks/linq": {
       "post": {
-        "summary": "Linq payout webhook (provider callback)",
+        "summary": "Payout webhook (provider callback)",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "responses": {
           "200": {
             "description": "Acknowledged",
@@ -5015,7 +5015,7 @@
       "get": {
         "summary": "Indicative NGN/USDC rate",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "responses": {
           "200": {
             "description": "OK",
@@ -5147,7 +5147,7 @@
       "post": {
         "summary": "Verify a bank account before creating an order",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -5303,7 +5303,7 @@
       "get": {
         "summary": "Check a refund address holds a USDC trustline",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "parameters": [
           {
             "schema": {
@@ -5439,7 +5439,7 @@
       "post": {
         "summary": "Create a cash-out order",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -5720,7 +5720,7 @@
       "get": {
         "summary": "Get the status of a cash-out order",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
-        "deprecated": true,
+        "x-internal": true,
         "parameters": [
           {
             "schema": {
@@ -5777,7 +5777,7 @@
                     "source": {
                       "type": "string",
                       "enum": [
-                        "linq",
+                        "live",
                         "cache"
                       ]
                     }

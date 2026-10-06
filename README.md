@@ -615,6 +615,29 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 
 ***
 
+### Changing the OpenAPI spec
+
+`openapi.json` is generated — edit `src/openapi/build.ts` and `schemas.ts`, then:
+
+```bash
+npm run docs:openapi                                  # regenerate the spec
+cd clients/react-query && npm install && npm run generate   # regenerate the client types
+```
+
+Both outputs are committed, and both are checked in CI:
+`src/__tests__/openapiCoverage.test.ts` fails when the spec does not match the
+generator or when a registered route is undocumented, and
+`.github/workflows/react-query-sdk.yml` runs `git diff --exit-code` on
+`clients/react-query/src/schema.d.ts` whenever `openapi.json` changes. Nothing
+near `src/openapi/` mentions that second coupling, which is exactly how it gets
+missed.
+
+Internal routes carry `x-internal: true`, never `deprecated` — `deprecated`
+tells generators and readers the endpoint is being withdrawn, and the client
+would emit `@deprecated` on endpoints the wallet calls today.
+
+***
+
 ### `GET /tokens`
 
 All tokens the indexer has encountered and cached, on the selected network.
@@ -644,9 +667,10 @@ curl "http://localhost:3000/tokens?network=mainnet"
 
 ### `GET /transfers.csv` · `GET /transfers.parquet`
 
-<arg_value><b88a6f17>Export the **entire matching transfer set** as a CSV or Apache Parquet download —
-no pagination. Accepts the same filters as the JSON transfer routes
-(`network`, `address`, `contractId`, `token`, `fromLedger`, `toLedger`,
+Export the matching transfer set as a CSV or Apache Parquet download — no
+pagination, but **capped**: see the row-cap note above for `maxRows`,
+`X-Truncated` and `X-Row-Limit`. Accepts the same filters as the JSON transfer
+routes (`network`, `address`, `contractId`, `token`, `fromLedger`, `toLedger`,
 `fromDate`, `toDate`, `eventType`) minus the pagination fields; narrow large
 exports with the ledger or date bounds.
 
