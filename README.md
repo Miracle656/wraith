@@ -411,6 +411,14 @@ Base URL: `http://localhost:3000`
 
 Offramp order lookups need a bearer token; see [docs/offramp-orders.md](docs/offramp-orders.md).
 
+`GET /transfers.csv` and `/transfers.parquet` need no filter, and are **capped
+rather than rejected**: a request with nothing narrowing it returns the first
+`maxRows` rows instead of the whole table. When rows were left behind, the
+response says so in `X-Truncated: true` and `X-Row-Limit: <n>`, set before the
+body starts — so a client can tell a complete export from a partial one without
+counting. Narrow with `address`, `contractId`, `fromLedger`/`toLedger` or
+`fromDate`/`toDate`, or raise `maxRows` up to 500 000.
+
 ### Selecting a network
 
 Wraith stores testnet and mainnet rows in the same tables, discriminated by a
@@ -625,6 +633,7 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
 | `NETWORKS`            | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
 | `PORT`                | `3000`        | REST API port                                                                                 |
+| `EXPORT_MAX_ROWS`     | `50000`       | Default row cap for `/transfers.csv` and `/transfers.parquet`. Clamped to 500 000; a caller may ask for less with `?maxRows=`. |
 
 ### RPC URL Resolution
 
