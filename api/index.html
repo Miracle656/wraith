@@ -184,6 +184,13 @@ on large result sets. Without it, <code>total</code> is absent from the response
 <h2 id="api-reference" class="tsd-anchor-link">API Reference<a href="#api-reference" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2>
 <p>Base URL: <code>http://localhost:3000</code></p>
 <p>Offramp order lookups need a bearer token; see <a href="media/offramp-orders.md">docs/offramp-orders.md</a>.</p>
+<p><code>GET /transfers.csv</code> and <code>/transfers.parquet</code> need no filter, and are <strong>capped
+rather than rejected</strong>: a request with nothing narrowing it returns the first
+<code>maxRows</code> rows instead of the whole table. When rows were left behind, the
+response says so in <code>X-Truncated: true</code> and <code>X-Row-Limit: &lt;n&gt;</code>, set before the
+body starts — so a client can tell a complete export from a partial one without
+counting. Narrow with <code>address</code>, <code>contractId</code>, <code>fromLedger</code>/<code>toLedger</code> or
+<code>fromDate</code>/<code>toDate</code>, or raise <code>maxRows</code> up to 500 000.</p>
 <h3 id="selecting-a-network" class="tsd-anchor-link">Selecting a network<a href="#selecting-a-network" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h3>
 <p>Wraith stores testnet and mainnet rows in the same tables, discriminated by a
 <code>network</code> column, and a single process can index both (<code>NETWORKS=testnet,mainnet</code>).
@@ -467,6 +474,11 @@ per-chain condition — and a <code>503 down</code> verdict still reports every 
 <td><code>PORT</code></td>
 <td><code>3000</code></td>
 <td>REST API port</td>
+</tr>
+<tr>
+<td><code>EXPORT_MAX_ROWS</code></td>
+<td><code>50000</code></td>
+<td>Default row cap for <code>/transfers.csv</code> and <code>/transfers.parquet</code>. Clamped to 500 000; a caller may ask for less with <code>?maxRows=</code>.</td>
 </tr>
 </tbody>
 </table>
