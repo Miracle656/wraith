@@ -34,9 +34,9 @@ export function resolveNftContractIds(network?: Network): string[] {
 // These are derived from Asset.native().contractId(Networks.PUBLIC / Networks.TESTNET)
 // and serve as the backwards-compatible default when SAC_CONTRACT_IDS is unset.
 export const DEFAULT_XLM_SAC_MAINNET =
-  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+  "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 export const DEFAULT_XLM_SAC_TESTNET =
-  "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 /**
  * Resolve the list of SAC contract IDs to watch.
