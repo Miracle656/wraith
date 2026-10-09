@@ -69,6 +69,18 @@ const listQueries: Array<[string, string, (extra?: AnyRecord) => Promise<AnyReco
 ];
 
 describe.each(listQueries)("%s", (_name, modelName, run) => {
+  it("passes a quoted OR substring through to the database filter", async () => {
+    await run({ filter: "contains(contractId,'OR')" });
+
+    const query = calls.find((call) => call.model === modelName && call.op === "findMany");
+    expect(query?.args.where).toEqual({
+      AND: [
+        expect.any(Object),
+        { contractId: { contains: "OR", mode: "insensitive" } },
+      ],
+    });
+  });
+
   it("issues no COUNT by default and omits total", async () => {
     rows = makeRows(3);
     const result = await run({ limit: 10 });
