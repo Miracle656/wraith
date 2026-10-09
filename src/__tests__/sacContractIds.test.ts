@@ -9,6 +9,7 @@
  *  - SAC_CONTRACT_IDS takes precedence over CONTRACT_IDS when both set
  */
 
+import { Asset, Networks } from '@stellar/stellar-sdk';
 import {
   resolveSacContractIds,
   DEFAULT_XLM_SAC_MAINNET,
@@ -22,6 +23,8 @@ beforeEach(() => {
   // Shallow-clone so mutations don't bleed between tests
   process.env = { ...ORIGINAL_ENV };
   delete process.env.SAC_CONTRACT_IDS;
+  delete process.env.SAC_CONTRACT_IDS_MAINNET;
+  delete process.env.SAC_CONTRACT_IDS_TESTNET;
   delete process.env.CONTRACT_IDS;
   delete process.env.STELLAR_NETWORK;
 });
@@ -69,6 +72,15 @@ describe('resolveSacContractIds — legacy CONTRACT_IDS fallback', () => {
 
 // ── Default XLM SAC fallback ─────────────────────────────────────────────────
 describe('resolveSacContractIds — default XLM SAC when no env var is set', () => {
+  it.each([
+    ['mainnet', Networks.PUBLIC, DEFAULT_XLM_SAC_MAINNET],
+    ['testnet', Networks.TESTNET, DEFAULT_XLM_SAC_TESTNET],
+  ] as const)('uses the SDK-derived native SAC for %s', (network, passphrase, defaultId) => {
+    const derivedId = Asset.native().contractId(passphrase);
+    expect(defaultId).toBe(derivedId);
+    expect(resolveSacContractIds(network)).toEqual([derivedId]);
+  });
+
   it('defaults to the testnet XLM SAC when STELLAR_NETWORK is unset', () => {
     const result = resolveSacContractIds();
     expect(result).toEqual([DEFAULT_XLM_SAC_TESTNET]);
