@@ -50,6 +50,8 @@ import {
   offrampOrderParamsSchema,
   offrampOrderStatusResponseSchema,
   offrampErrorResponseSchema,
+  ngnCustomerStatusQuerySchema,
+  ngnCustomerStatusResponseSchema,
 } from "./schemas";
 
 const registry = new OpenAPIRegistry();
@@ -86,6 +88,26 @@ registry.registerPath({
   responses: {
     200: { description: "OK", content: { "application/json": { schema: readyzResponseSchema } } },
     503: { description: "Service Unavailable", content: { "application/json": { schema: readyzResponseSchema } } },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/ngn/customers/status",
+  summary: "Is this customer reference verified?",
+  description:
+    "Read-only check against the naira provider. Creating nothing is the point: the " +
+    "only previous way to ask was to provision a customer and read `verified` off the " +
+    "reply, which needed a full set of personal details to answer a yes/no question " +
+    "about a reference the caller already held. Rate-limited, because a reference is " +
+    "derived from a wallet address and an unthrottled answer would be an oracle.",
+  request: { query: ngnCustomerStatusQuerySchema },
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: ngnCustomerStatusResponseSchema } },
+    },
     ...commonErrorResponses,
   },
 });

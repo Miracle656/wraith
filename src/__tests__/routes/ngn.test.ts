@@ -18,6 +18,7 @@ jest.mock("../../linq/onramp", () => {
   return {
     ...actual,
     provisionCustomer: jest.fn(),
+    getCustomerStatus: jest.fn(),
     submitCustomerKyc: jest.fn(),
     getOnrampRate: jest.fn(),
     createOnrampOrder: jest.fn(),
@@ -38,11 +39,13 @@ import {
   getOnrampRate,
   getOnrampStatus,
   provisionCustomer,
+  getCustomerStatus,
   submitCustomerKyc,
 } from "../../linq/onramp";
 import { getBillStatus, payBill } from "../../linq/bills";
 import { findNgnOrder, recordNgnOrder } from "../../linq/ngnOrders";
 import { LinqError } from "../../linq/client";
+import { usdPerCoin } from "../../linq/coinPrice";
 
 const G_ADDRESS = "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z";
 const C_ADDRESS = "CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF";
@@ -145,6 +148,159 @@ describe("contract addresses are refused wherever Linq would pay to one", () => 
   });
 });
 
+jest.mock("../../linq/coinPrice", () => ({
+  usdPerCoin: jest.fn(),
+  __clearCoinPriceCache: jest.fn(),
+}));
+
+describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
+  beforeEach(() => {
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+  });
+
+  it("quotes naira per XLM, not naira per dollar", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    expect(res.status).toBe(200);
+    // 1450 naira to the dollar, 20 cents to the XLM: 290 naira to the XLM.
+    // The old answer was 1450, which is what made ₦1,000 buy 0.6 XLM.
+    expect(res.body.rate).toBeCloseTo(290, 6);
+    expect(res.body.coin).toBe("xlm");
+  });
+
+  it("quotes naira per dollar for USDC, which is the same number as before", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    expect(res.status).toBe(200);
+    expect(res.body.rate).toBeCloseTo(1450, 6);
+  });
+
+  // Linq's own endpoint accepts a coin and ignores it, which is how a wrong
+  // number looked like a right one for weeks. Ours refuses.
+  it("refuses a request with no coin instead of assuming one", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate"));
+    expect(res.status).toBe(400);
+  });
+
+  it("refuses an unknown coin", async () => {
+    const res = await mainnet(
+      request(makeApp()).get("/ngn/onramp/rate").query({ coin: "doge" }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("fails rather than quoting when the asset cannot be priced", async () => {
+    (usdPerCoin as jest.Mock).mockRejectedValue(new LinqError("Could not price XLM right now", 502));
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    expect(res.status).toBe(502);
+  });
+});
+
+describe("the server refuses a mispriced order", () => {
+  beforeEach(() => {
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+  });
+
+  const order = (rate: number) => ({
+    customerRef: "u",
+    amountStableCoin: 1,
+    walletAddress: "G" + "A".repeat(55),
+    rate,
+    coin: "xlm",
+  });
+
+  it("rejects the dollar rate sent for an XLM order", async () => {
+    const res = await mainnet(request(makeApp()).post("/ngn/onramp/orders").send(order(1450)));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("rate_out_of_date");
+    expect(createOnrampOrder).not.toHaveBeenCalled();
+  });
+
+  it("accepts the right rate", async () => {
+    (createOnrampOrder as jest.Mock).mockResolvedValue({
+      orderId: "o1",
+      amountNgn: 290,
+      status: "pending",
+    });
+    const res = await mainnet(request(makeApp()).post("/ngn/onramp/orders").send(order(290)));
+    expect(res.status).toBe(200);
+    expect(createOnrampOrder).toHaveBeenCalled();
+  });
+
+  it("tolerates ordinary drift while the user sits on the confirm screen", async () => {
+    (createOnrampOrder as jest.Mock).mockResolvedValue({
+      orderId: "o1",
+      amountNgn: 290,
+      status: "pending",
+    });
+    const res = await mainnet(request(makeApp()).post("/ngn/onramp/orders").send(order(300)));
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("customer status", () => {
+  it("answers from the reference alone, creating nothing", async () => {
+    (getCustomerStatus as jest.Mock).mockResolvedValue({
+      customerRef: "u",
+      verified: true,
+      status: "verified",
+    });
+
+    const res = await mainnet(
+      request(makeApp()).get("/ngn/customers/status").query({ customerRef: "u" }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.verified).toBe(true);
+    expect(getCustomerStatus).toHaveBeenCalledWith("u");
+    // The whole point of this route: asking must not provision anybody.
+    expect(provisionCustomer).not.toHaveBeenCalled();
+    expect(res.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("requires a customerRef", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/customers/status"));
+    expect(res.status).toBe(400);
+    expect(getCustomerStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("provider error codes", () => {
+  // The client has to tell "this NIN is spent" apart from "this customer is
+  // not verified" to say anything true to the user. It used to do that by
+  // matching the prose, which breaks the first time the provider rewords an
+  // error — so the code is carried through verbatim.
+  it("passes the provider code through alongside the message", async () => {
+    (submitCustomerKyc as jest.Mock).mockRejectedValue(
+      new LinqError("NIN already used", 409, "nin_already_used"),
+    );
+
+    const res = await mainnet(
+      request(makeApp()).post("/ngn/customers/kyc").send({ customerRef: "u", nin: "12345678901" }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("nin_already_used");
+    expect(res.body.error).toBe("NIN already used");
+  });
+
+  it("omits code entirely when the provider sent none", async () => {
+    (submitCustomerKyc as jest.Mock).mockRejectedValue(new LinqError("Something broke", 400));
+
+    const res = await mainnet(
+      request(makeApp()).post("/ngn/customers/kyc").send({ customerRef: "u", nin: "12345678901" }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body).not.toHaveProperty("code");
+    expect(res.body.error).toBe("Something broke");
+  });
+});
+
 describe("KYC", () => {
   it("passes the NIN through and returns nothing containing it", async () => {
     (submitCustomerKyc as jest.Mock).mockResolvedValue({
@@ -214,9 +370,11 @@ describe("onramp rate", () => {
   // order, and XLM floats — so it is never cached.
   it("is never cached", async () => {
     (getOnrampRate as jest.Mock).mockResolvedValue(1356.15);
+    (usdPerCoin as jest.Mock).mockResolvedValue(1);
 
-    const first = await mainnet(request(makeApp()).get("/ngn/onramp/rate"));
-    const second = await mainnet(request(makeApp()).get("/ngn/onramp/rate"));
+    const ask = () => mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const first = await ask();
+    const second = await ask();
 
     expect(first.body.rate).toBe(1356.15);
     expect(first.headers["cache-control"]).toBe("no-store");
@@ -254,6 +412,16 @@ describe("status lookups require both identifiers", () => {
 });
 
 describe("bills", () => {
+  // Explicit, not inherited. Jest's `clearMocks` clears calls but leaves
+  // implementations in place, so these passed only because a describe above
+  // had set them — and would have broken the moment anyone reordered the file.
+  beforeEach(() => {
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+  });
+
   it("creates an airtime order and returns the deposit address", async () => {
     (payBill as jest.Mock).mockResolvedValue({
       id: "9e4b1f2a",
@@ -270,7 +438,7 @@ describe("bills", () => {
         customerId: "08012345678",
         amountNgn: 1000,
         amountStableCoin: 0.75,
-        rate: 1333,
+        rate: 290,
         coin: "xlm",
         refundAddress: G_ADDRESS,
       }),
@@ -290,7 +458,7 @@ describe("bills", () => {
         customerId: "080",
         amountNgn: 1000,
         amountStableCoin: 0.75,
-        rate: 1333,
+        rate: 290,
         coin: "xlm",
         refundAddress: G_ADDRESS,
       }),
@@ -309,7 +477,7 @@ describe("bills", () => {
         customerId: "080",
         amountNgn: 1000,
         amountStableCoin: 0.75,
-        rate: 1333,
+        rate: 290,
         coin: "sui",
         refundAddress: G_ADDRESS,
       }),
@@ -321,6 +489,16 @@ describe("bills", () => {
 });
 
 describe("orders are recorded, and what is left out of the record", () => {
+  // Explicit, not inherited. Jest's `clearMocks` clears calls but leaves
+  // implementations in place, so these passed only because a describe above
+  // had set them — and would have broken the moment anyone reordered the file.
+  beforeEach(() => {
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+  });
+
   it("records an onramp order against the delivery address", async () => {
     (createOnrampOrder as jest.Mock).mockResolvedValue({
       orderId: "47ca0421",
@@ -338,7 +516,7 @@ describe("orders are recorded, and what is left out of the record", () => {
     const res = await mainnet(
       request(makeApp())
         .post("/ngn/onramp/orders")
-        .send({ customerRef: "u", amountStableCoin: 6, walletAddress: G_ADDRESS, rate: 1356, coin: "xlm" }),
+        .send({ customerRef: "u", amountStableCoin: 6, walletAddress: G_ADDRESS, rate: 290, coin: "xlm" }),
     );
 
     expect(res.status).toBe(200);
@@ -371,7 +549,7 @@ describe("orders are recorded, and what is left out of the record", () => {
         customerId: "08012345678",
         amountNgn: 1000,
         amountStableCoin: 0.75,
-        rate: 1333,
+        rate: 290,
         coin: "xlm",
         refundAddress: G_ADDRESS,
       }),

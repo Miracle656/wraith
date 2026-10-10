@@ -199,6 +199,29 @@ export function provisionCustomer(params: ProvisionCustomerParams): Promise<Linq
   );
 }
 
+export interface CustomerStatus {
+  customerRef: string;
+  verified: boolean;
+  status?: string;
+}
+
+/**
+ * Ask whether a reference is verified, without creating anything.
+ *
+ * Before this existed the only way to ask was `provisionCustomer`, leaning on
+ * it being idempotent and reading `verified` off the reply — which works, but
+ * makes creating a customer the only way to ask a question about one, and
+ * needs a full set of personal details to ask it. This needs the reference
+ * alone.
+ *
+ * It matters most for the person whose NIN is bound to a reference that is not
+ * theirs any more: we can now see that the binding has moved before asking
+ * them to spend a rate-limited verification attempt finding out.
+ */
+export function getCustomerStatus(customerRef: string): Promise<CustomerStatus> {
+  return call<CustomerStatus>("/b2b/customers/status", { query: { customerRef } });
+}
+
 export interface CustomerKycResult {
   customerRef: string;
   verified: boolean;

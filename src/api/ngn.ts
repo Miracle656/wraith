@@ -43,11 +43,13 @@ import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
 import { requestNetwork } from "../middleware/network";
 import { LinqError } from "../linq/client";
+import { usdPerCoin } from "../linq/coinPrice";
 import {
   assertOnrampNetwork,
   createOnrampOrder,
   getOnrampRate,
   getOnrampStatus,
+  getCustomerStatus,
   provisionCustomer,
   submitCustomerKyc,
   type OnrampCoin,
@@ -67,7 +69,15 @@ function isConfigured(): boolean {
  */
 function sendLinqError(res: Response, err: unknown): void {
   if (err instanceof LinqError) {
-    res.status(err.status >= 500 ? 502 : err.status).json({ error: err.message });
+    // `code` rides along when Linq sent one — `nin_already_used`,
+    // `customer_not_verified`, and so on. Without it the clients are left
+    // matching on the prose in `error`, which is how a reworded provider
+    // message turns into a user sent down the wrong branch. `error` stays
+    // exactly as it was, so nothing that reads it today breaks.
+    res.status(err.status >= 500 ? 502 : err.status).json({
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+    });
     return;
   }
   res.status(500).json({ error: "Request failed" });
@@ -108,6 +118,75 @@ async function fallbackToRecordedOrder(
  * seconds never spends the budget, while someone trying ids they do not own
  * exhausts it quickly.
  */
+/**
+ * How far a client's quoted rate may sit from ours before we refuse it.
+ *
+ * Wide enough that ordinary drift between fetching a rate and posting an order
+ * never trips it — XLM floats, and a user may sit on a confirm screen. Narrow
+ * enough that the mistake this exists for cannot pass: pricing XLM as a dollar
+ * is a factor of roughly five, not a few percent.
+ */
+const RATE_TOLERANCE = 0.15;
+
+/**
+ * Refuse an order whose rate does not match what we would quote.
+ *
+ * The client sends the rate the order settles at, and for weeks both naira
+ * screens sent a dollar rate for XLM orders. Nothing rejected it: the provider
+ * honoured what we asked for, and a user bought 0.6 XLM for ₦1,000. A client
+ * is allowed to have bugs; it should not be able to move money at a price the
+ * server would never quote.
+ *
+ * Returns true when it has already answered, in the style of the other
+ * `reject*` helpers here.
+ */
+async function rejectMispricedRate(
+  res: Response,
+  coin: OnrampCoin,
+  rate: number,
+): Promise<boolean> {
+  if (!Number.isFinite(rate) || rate <= 0) {
+    res.status(400).json({ error: "rate is required" });
+    return true;
+  }
+
+  let expected: number;
+  try {
+    expected = await ngnPerCoin(coin);
+  } catch (err) {
+    sendLinqError(res, err);
+    return true;
+  }
+
+  if (Math.abs(rate - expected) / expected > RATE_TOLERANCE) {
+    // The number is deliberately not echoed as "use this instead": a client
+    // that got the rate wrong should re-fetch it, not be handed one to retry
+    // with inside an error path.
+    res.status(400).json({
+      error: "That rate is out of date. Fetch the rate again and retry.",
+      code: "rate_out_of_date",
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Naira per one unit of `coin` — the number a client may divide naira by.
+ *
+ * Linq gives naira per dollar; this turns it into naira per coin. Every naira
+ * amount on both rails is denominated this way, so the conversion happens in
+ * exactly one place and the rate we quote is the rate we send Linq.
+ */
+async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
+  const [ngnPerUsd, usd] = await Promise.all([getOnrampRate(), usdPerCoin(coin)]);
+  const rate = ngnPerUsd * usd;
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new LinqError("Could not price that asset right now", 502);
+  }
+  return rate;
+}
+
 function createLookupLimiter(): RateLimitRequestHandler {
   return rateLimit({
     windowMs: 60_000,
@@ -210,6 +289,32 @@ export function createNgnRouter(
   });
 
   /**
+   * Is this reference verified?
+   *
+   * Rate-limited like the other lookups: it takes a `customerRef`, and ours
+   * are derived from a wallet address, so an unthrottled endpoint answering
+   * "does this reference exist and is it verified" is an oracle worth denying.
+   *
+   * Deliberately a GET with no side effect. The client used to answer this by
+   * provisioning a customer, which needed a name, an email and a phone number
+   * to ask a yes/no question about a reference it already had.
+   */
+  router.get("/customers/status", lookupLimiter, async (req: Request, res: Response) => {
+    const customerRef = req.query["customerRef"];
+    if (typeof customerRef !== "string" || !customerRef) {
+      res.status(400).json({ error: "customerRef is required" });
+      return;
+    }
+
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await getCustomerStatus(customerRef));
+    } catch (err) {
+      sendLinqError(res, err);
+    }
+  });
+
+  /**
    * Verify a customer by NIN.
    *
    * **The NIN is read off the request and handed straight to Linq. It is not
@@ -250,10 +355,24 @@ export function createNgnRouter(
    * user is about to create, and XLM floats. A stale rate here prices someone's
    * order wrong, so every ask is a fresh read.
    */
-  router.get("/onramp/rate", async (_req: Request, res: Response) => {
+  router.get("/onramp/rate", async (req: Request, res: Response) => {
+    // `coin` is required, and that is the fix.
+    //
+    // Linq's own rate endpoint accepts a coin and ignores it, handing back the
+    // dollar rate regardless — which is how both naira screens ended up
+    // pricing XLM as though one XLM were one dollar. Defaulting here would
+    // reproduce exactly that: a caller that forgot the coin would get a
+    // plausible number that is wrong by a factor of five. Refusing is the only
+    // answer that cannot be mistaken for an answer.
+    const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
+    if (!resolvedCoin) {
+      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
+      return;
+    }
+
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json({ rate: await getOnrampRate() });
+      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin) });
     } catch (err) {
       sendLinqError(res, err);
     }
@@ -274,6 +393,8 @@ export function createNgnRouter(
       res.status(400).json({ error: "coin must be xlm or usdc" });
       return;
     }
+
+    if (await rejectMispricedRate(res, resolvedCoin, Number(rate))) return;
 
     try {
       res.setHeader("Cache-Control", "no-store");
@@ -364,6 +485,10 @@ export function createNgnRouter(
     // has already paid. A contract here fails at exactly the moment we have
     // promised someone their money is coming back.
     if (rejectContractAddress(res, refundAddress, "refundAddress")) return;
+
+    // The direction that loses the provider money rather than the user: an XLM
+    // bill priced as dollars paid about a fifth of the naira it bought.
+    if (await rejectMispricedRate(res, resolvedCoin, Number(rate))) return;
 
     try {
       res.setHeader("Cache-Control", "no-store");

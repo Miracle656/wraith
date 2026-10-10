@@ -734,3 +734,24 @@ export const offrampOrderStatusResponseSchema = z.object({
 export const offrampErrorResponseSchema = z.object({
   error: z.string(),
 });
+
+export const ngnCustomerStatusQuerySchema = z.object({
+  customerRef: z.string().openapi({
+    description:
+      "Our identifier for the person, stable for the life of their install. " +
+      "Derived from the wallet address, never a provider id.",
+    example: "veil_a1b2c3d4e5f6",
+  }),
+});
+
+export const ngnCustomerStatusResponseSchema = z.object({
+  customerRef: z.string(),
+  verified: z.boolean().openapi({
+    description:
+      "Whether the provider verifies this reference right now. Read-only: " +
+      "asking does not create a customer and does not spend a verification " +
+      "attempt, which is the reason this route exists.",
+  }),
+  status: z.string().optional(),
+});
+

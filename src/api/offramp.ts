@@ -61,7 +61,13 @@ function sendLinqError(res: Response, err: unknown): void {
   if (err instanceof LinqError) {
     // A 5xx from Linq is ours to own as a 502: the caller did nothing wrong.
     const status = err.status >= 500 ? 502 : err.status;
-    res.status(status).json({ error: withoutProviderName(err.message) });
+    // See the note in `api/ngn.ts`: the code is the stable half of the answer.
+    // It is a provider-neutral identifier, so unlike the message it needs no
+    // scrubbing — `withoutProviderName` exists for the prose, not for this.
+    res.status(status).json({
+      error: withoutProviderName(err.message),
+      ...(err.code ? { code: err.code } : {}),
+    });
     return;
   }
   res.status(500).json({ error: "Offramp request failed" });

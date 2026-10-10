@@ -21,6 +21,16 @@ export class LinqError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /**
+     * Linq's machine-readable reason, when it sent one.
+     *
+     * `nin_already_used`, `customer_not_verified`, `customer_not_found` and so
+     * on. Carried because the alternative is what the clients do today: match
+     * on the prose in `message`, which silently starts mis-routing real users
+     * the first time Linq rewords an error. Optional, because older responses
+     * and non-JSON error bodies have none.
+     */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "LinqError";
@@ -132,9 +142,11 @@ async function callOnce<T>(
     if (!res.ok) {
       const message =
         (parsed as { message?: string })?.message || `Linq returned ${res.status}`;
+      const rawCode = (parsed as { code?: unknown })?.code;
+      const code = typeof rawCode === "string" && rawCode ? rawCode : undefined;
       const header = res.headers?.get?.("retry-after");
       const seconds = header == null ? Number.NaN : Number(header);
-      throw Object.assign(new LinqError(message, res.status), {
+      throw Object.assign(new LinqError(message, res.status, code), {
         retryAfterMs: Number.isFinite(seconds)
           ? Math.min(Math.max(0, seconds) * 1_000, MAX_RETRY_DELAY_MS)
           : undefined,
