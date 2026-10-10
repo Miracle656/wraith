@@ -1083,10 +1083,21 @@ export function createApp(): express.Application {
   });
 
   // ─── Global error handler ────────────────────────────────────────────────
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[api] Unhandled error:", err);
-    res.status(500).json({ error: err.message ?? "Internal server error" });
+ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  // Deliberate, already-classified errors keep their own status + message
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+
+  // Anything else is an unhandled internal error — never leak it
+  const correlationId = newCorrelationId();
+  console.error(`[${correlationId}] Unhandled error:`, err); // swap for real logger if one exists
+
+  return res.status(500).json({
+    error: 'Internal server error',
+    correlationId,
   });
+});
 
   return app;
 }
