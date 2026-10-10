@@ -378,6 +378,107 @@
         }
       }
     },
+    "/ngn/customers/status": {
+      "get": {
+        "summary": "Is this customer reference verified?",
+        "description": "Read-only check against the naira provider. Creating nothing is the point: the only previous way to ask was to provision a customer and read `verified` off the reply, which needed a full set of personal details to answer a yes/no question about a reference the caller already held. Rate-limited, because a reference is derived from a wallet address and an unthrottled answer would be an oracle.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Our identifier for the person, stable for the life of their install. Derived from the wallet address, never a provider id.",
+              "example": "veil_a1b2c3d4e5f6"
+            },
+            "required": true,
+            "description": "Our identifier for the person, stable for the life of their install. Derived from the wallet address, never a provider id.",
+            "name": "customerRef",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "customerRef": {
+                      "type": "string"
+                    },
+                    "verified": {
+                      "type": "boolean",
+                      "description": "Whether the provider verifies this reference right now. Read-only: asking does not create a customer and does not spend a verification attempt, which is the reason this route exists."
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "customerRef",
+                    "verified"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "summary": "Prometheus metrics",
