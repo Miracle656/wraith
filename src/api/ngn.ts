@@ -172,6 +172,60 @@ async function rejectMispricedRate(
 }
 
 /**
+ * Linq's naira-per-dollar rate, shared by everyone for a short window.
+ *
+ * Their `/onramprate` is aggressively rate-limited — measured at roughly one
+ * fetch per 90 seconds — and we were calling it on every touch of the rails.
+ * One person buying once costs six: the availability gate, the markets
+ * screen, the buy screen's first read, a coin toggle, the re-read before the
+ * order, and the server-side price check. A handful of users at the same time
+ * and everyone gets "Rate limit exceeded", which reads as the rails being
+ * down.
+ *
+ * The endpoint above used to say this was deliberately never cached, because
+ * the rate is locked into an order and XLM floats. The floating part is true
+ * and is handled where it belongs: the XLM price has its own short cache
+ * against Horizon, which has no such limit. What is cached here is naira per
+ * *dollar*, which moves slowly — and `rejectMispricedRate` tolerates 15%, so
+ * a value two minutes old cannot price anything wrongly. An endpoint that
+ * answers nothing can.
+ */
+const NGN_RATE_CACHE_MS = 120_000;
+
+let ngnRateCache: { rate: number; at: number } | null = null;
+let ngnRateInFlight: Promise<number> | null = null;
+
+async function ngnPerUsdCached(): Promise<number> {
+  const now = Date.now();
+  if (ngnRateCache && now - ngnRateCache.at < NGN_RATE_CACHE_MS) return ngnRateCache.rate;
+
+  // One fetch for a burst, not one per request. Without this a cold cache and
+  // five testers opening the app together is five calls to an endpoint that
+  // allows one — the exact moment the cache is most needed is the moment it
+  // would otherwise be empty for all of them.
+  if (ngnRateInFlight) return ngnRateInFlight;
+
+  ngnRateInFlight = getOnrampRate()
+    .then((rate) => {
+      ngnRateCache = { rate, at: Date.now() };
+      return rate;
+    })
+    .finally(() => {
+      // Failures are not cached: the next caller should try again rather than
+      // inherit an error for two minutes.
+      ngnRateInFlight = null;
+    });
+
+  return ngnRateInFlight;
+}
+
+/** Test seam. Production never clears this; the TTL does. */
+export function __clearNgnRateCache(): void {
+  ngnRateCache = null;
+  ngnRateInFlight = null;
+}
+
+/**
  * Naira per one unit of `coin` — the number a client may divide naira by.
  *
  * Linq gives naira per dollar; this turns it into naira per coin. Every naira
@@ -179,7 +233,7 @@ async function rejectMispricedRate(
  * exactly one place and the rate we quote is the rate we send Linq.
  */
 async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
-  const [ngnPerUsd, usd] = await Promise.all([getOnrampRate(), usdPerCoin(coin)]);
+  const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
   const rate = ngnPerUsd * usd;
   if (!Number.isFinite(rate) || rate <= 0) {
     throw new LinqError("Could not price that asset right now", 502);
@@ -308,7 +362,21 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getCustomerStatus(customerRef));
+      const status = await getCustomerStatus(customerRef);
+      // Three fields by name, never the object Linq handed us.
+      //
+      // Their reply also carries `firstName` and `lastName`. Forwarding it
+      // whole published someone's real name to anyone who could produce their
+      // customerRef — and ours are derived from the wallet address, which is
+      // semi-public, so that is not a hard thing to produce. A declared
+      // interface does not strip anything at runtime; writing the fields out
+      // does. The same rule the NIN follows: what we do not pass on cannot
+      // leak.
+      res.json({
+        customerRef: status.customerRef,
+        verified: status.verified,
+        ...(status.status ? { status: status.status } : {}),
+      });
     } catch (err) {
       sendLinqError(res, err);
     }

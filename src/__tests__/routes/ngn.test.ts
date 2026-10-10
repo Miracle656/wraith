@@ -46,6 +46,7 @@ import { getBillStatus, payBill } from "../../linq/bills";
 import { findNgnOrder, recordNgnOrder } from "../../linq/ngnOrders";
 import { LinqError } from "../../linq/client";
 import { usdPerCoin } from "../../linq/coinPrice";
+import { __clearNgnRateCache } from "../../api/ngn";
 
 const G_ADDRESS = "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z";
 const C_ADDRESS = "CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF";
@@ -67,6 +68,8 @@ beforeEach(() => {
   // mainnet has to be opted into here the same way a real deployment does.
   process.env.NETWORKS = "testnet,mainnet";
   jest.clearAllMocks();
+  // Shared across requests by design, so it must not leak across tests.
+  __clearNgnRateCache();
 });
 
 describe("configuration gate", () => {
@@ -152,6 +155,60 @@ jest.mock("../../linq/coinPrice", () => ({
   usdPerCoin: jest.fn(),
   __clearCoinPriceCache: jest.fn(),
 }));
+
+describe("the naira rate is fetched once for everyone", () => {
+  // Linq allows roughly one fetch per 90 seconds. One person buying once used
+  // to cost six calls, so a few testers at the same time saw "Rate limit
+  // exceeded" and read it as the rails being down.
+  beforeEach(() => {
+    __clearNgnRateCache();
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+  });
+
+  it("serves repeat callers from one fetch", async () => {
+    const app = makeApp();
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    expect(getOnrampRate).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapses a simultaneous burst into one fetch", async () => {
+    // The cold-cache case, which is exactly when a group starts testing.
+    let release: (v: number) => void = () => undefined;
+    (getOnrampRate as jest.Mock).mockReturnValue(
+      new Promise<number>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const app = makeApp();
+    const all = Promise.all(
+      [1, 2, 3, 4, 5].map(() =>
+        mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" })),
+      ),
+    );
+    release(1450);
+    const results = await all;
+
+    expect(getOnrampRate).toHaveBeenCalledTimes(1);
+    for (const res of results) expect(res.body.rate).toBeCloseTo(1450, 6);
+  });
+
+  it("does not cache a failure", async () => {
+    (getOnrampRate as jest.Mock).mockRejectedValueOnce(new LinqError("down", 502));
+    const app = makeApp();
+    const first = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    expect(first.status).toBe(502);
+
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    const second = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    expect(second.status).toBe(200);
+  });
+});
 
 describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
   beforeEach(() => {
@@ -366,9 +423,14 @@ describe("customers", () => {
 });
 
 describe("onramp rate", () => {
-  // Unlike the offramp's indicative rate, this is the number locked into the
-  // order, and XLM floats — so it is never cached.
-  it("is never cached", async () => {
+  // This used to assert the opposite — that the upstream rate is fetched on
+  // every request, because the number is locked into an order and XLM floats.
+  // The floating half is still true and still honoured, just not here: the
+  // XLM price is fetched per quote against Horizon. The naira-per-dollar half
+  // is now shared briefly, because Linq rate-limits it to about one call per
+  // 90 seconds and fetching it six times per purchase took the rails down for
+  // concurrent users. See the cache's own tests above.
+  it("tells clients never to cache it, whatever we do upstream", async () => {
     (getOnrampRate as jest.Mock).mockResolvedValue(1356.15);
     (usdPerCoin as jest.Mock).mockResolvedValue(1);
 
@@ -377,8 +439,9 @@ describe("onramp rate", () => {
     const second = await ask();
 
     expect(first.body.rate).toBe(1356.15);
+    // The one that matters for correctness: a proxy or a client holding this
+    // for minutes would price an order against a rate nobody can see.
     expect(first.headers["cache-control"]).toBe("no-store");
-    expect(getOnrampRate).toHaveBeenCalledTimes(2);
     expect(second.status).toBe(200);
   });
 });
