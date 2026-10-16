@@ -1,16 +1,22 @@
 import "dotenv/config";
-import http from "http";
-import { execSync } from "child_process";
-import { createApp } from "./api";
-import { startAllIndexers } from "./indexer";
-import { prisma } from "./db";
-import { attachWebSocketServer } from "./ws";
-import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
-import { startWebhookWorker } from "./workers/webhooks";
-import { startPartitionRetentionJob } from "./jobs/retention";
-import { initTokenCache } from "./tokenCache";
-import { enabledNetworks } from "./network";
-import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { validateEnv } from "./validateEnv";
+
+validateEnv();
+
+const http = require("http") as typeof import("http");
+const { createApp } = require("./api") as typeof import("./api");
+const { startAllIndexers } = require("./indexer") as typeof import("./indexer");
+const { prisma } = require("./db") as typeof import("./db");
+const { attachWebSocketServer } = require("./ws") as typeof import("./ws");
+const {
+  attachGraphQLSubscriptions,
+  SUBSCRIPTIONS_PATH,
+} = require("./graphql/subscriptions") as typeof import("./graphql/subscriptions");
+const { startWebhookWorker } = require("./workers/webhooks") as typeof import("./workers/webhooks");
+const { startPartitionRetentionJob } = require("./jobs/retention") as typeof import("./jobs/retention");
+const { initTokenCache } = require("./tokenCache") as typeof import("./tokenCache");
+const { enabledNetworks } = require("./network") as typeof import("./network");
+const { onlyAddsUniqueConstraints, pushSchema } = require("./schemaGuard") as typeof import("./schemaGuard");
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
