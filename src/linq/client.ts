@@ -11,6 +11,8 @@
  * code, unsupported coin) far better than anything we would invent.
  */
 
+import { recordDependencyOutcome } from "./dependencyHealth";
+
 const BASE_URL =
   process.env.LINQ_BASE_URL?.trim() ||
   "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
@@ -106,9 +108,12 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     try {
       // Never wait past the deadline, even on the first attempt: a call made
       // late in a shared budget gets what is left of it, not a fresh 15s.
-      return await callOnce<T>(path, init, Math.min(TIMEOUT_MS, remaining));
+      const result = await callOnce<T>(path, init, Math.min(TIMEOUT_MS, remaining));
+      recordDependencyOutcome(path, true);
+      return result;
     } catch (err) {
       if (!(err instanceof LinqError) || err.status !== 429 || attempt >= RATE_LIMIT_RETRIES) {
+        recordDependencyOutcome(path, false, err);
         throw err;
       }
       const wait = (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (attempt + 1), MAX_RETRY_DELAY_MS);

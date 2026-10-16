@@ -1,4 +1,4 @@
-import { statusForClients } from "../../linq/statusForClients";
+import { statusForClients } from "../../link/statusForClients";
 
 // What installed Veil apps treat as a finished order.
 const legacyIsTerminal = (status: string) =>

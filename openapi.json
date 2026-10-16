@@ -500,6 +500,7 @@
     "/status": {
       "get": {
         "summary": "Indexer status",
+        "description": "Reports whether the service itself is up and whether the rails the product depends on are usable. The `dependencies` section reports the last observed outcome of each provider endpoint the product needs, with the time it was observed. A failing dependency does not make the service unhealthy — it is reported as `degraded`, because the indexer keeps indexing and the API keeps answering while the rails are down. The `dependencies` section is refreshed on a bounded interval: at most `dependencyStalenessSeconds` (see `dependencies.maxAgeSeconds`) may pass before a stale entry is reported as `unknown`.",
         "parameters": [
           {
             "schema": {
@@ -533,6 +534,14 @@
                         true
                       ]
                     },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "healthy",
+                        "degraded"
+                      ],
+                      "description": "`healthy` when every dependency the product needs is usable; `degraded` when the service is up but one or more dependencies are failing or unknown. A failing dependency never makes the service unhealthy — the indexer and the API keep running."
+                    },
                     "network": {
                       "type": "string",
                       "enum": [
@@ -561,6 +570,69 @@
                       "type": "integer"
                     }
                   },
+                    "dependencies": {
+                      "type": "object",
+                      "description": "Last observed outcome of each provider endpoint the product needs. Nothing here is probed on request: entries are recorded by real calls and by a cheap, side-effect-free poll of the unauthenticated rate endpoint. A KYC probe is deliberately not invented, because a KYC call moves real personal data.",
+                      "properties": {
+                        "maxAgeSeconds": {
+                          "type": "integer",
+                          "description": "Bound on staleness. An entry older than this is reported as `unknown` rather than as its last known outcome."
+                        },
+                        "checks": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "Provider endpoint the product depends on."
+                              },
+                              "ok": {
+                                "type": "boolean",
+                                "nullable": true,
+                                "description": "Last observed outcome. `null` when nothing has been observed within `maxAgeSeconds`."
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "up",
+                                  "down",
+                                  "unknown"
+                                ],
+                                "description": "`up` when the last observation succeeded, `down` when it failed, `unknown` when the last observation is older than `maxAgeSeconds` or has never happened."
+                              },
+                              "observedAt": {
+                                "type": "string",
+                                "nullable": true,
+                                "format": "date-time",
+                                "description": "When the outcome was observed. `null` when never observed."
+                              },
+                              "ageSeconds": {
+                                "type": "integer",
+                                "nullable": true,
+                                "description": "Seconds since `observedAt`. `null` when never observed."
+                              },
+                              "detail": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Short, non-sensitive reason for the last outcome (for example an HTTP status or a transport error). Never contains personal data."
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "ok",
+                              "status",
+                              "observedAt",
+                              "ageSeconds"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "maxAgeSeconds",
+                        "checks"
+                      ]
+                    }
                   "required": [
                     "ok",
                     "lastIndexedLedger",

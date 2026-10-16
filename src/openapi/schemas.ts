@@ -210,6 +210,15 @@ export const readyzResponseSchema = z.object({
     .optional(),
 });
 
+const dependencyStatusSchema = z.object({
+  name: z.string(),
+  status: z.enum(["ok", "degraded", "down", "unknown"]),
+  lastCheckedAt: z.string().datetime({ offset: true }).nullable(),
+  lastOkAt: z.string().datetime({ offset: true }).nullable(),
+  latencyMs: z.number().int().nullable(),
+  detail: z.string().nullable(),
+});
+
 export const statusResponseSchema = z.object({
   ok: z.literal(true),
   /** The network the top-level fields describe; `networks` reports every loop. */
@@ -220,6 +229,21 @@ export const statusResponseSchema = z.object({
   startedAt: z.string().datetime({ offset: true }),
   uptimeSeconds: z.number().int(),
   totalIndexed: z.number().int(),
+  /**
+   * "healthy" when every dependency the product needs is usable, "degraded"
+   * when the service itself is up but a dependency is not. A failing
+   * dependency does not make the service unhealthy: the process is fine, the
+   * rails are not, and the two must be distinguishable.
+   */
+  status: z.enum(["healthy", "degraded"]),
+  /**
+   * Provider endpoints the product actually needs, with the last observed
+   * outcome. KYC has no side-effect-free probe, so its entry reflects the last
+   * real call rather than a fresh one; `lastCheckedAt` states when that was.
+   * Bounded staleness: entries older than the probe interval are reported as
+   * "unknown" rather than assumed healthy.
+   */
+  dependencies: z.array(dependencyStatusSchema),
 });
 
 export const transferSchema = z.object({

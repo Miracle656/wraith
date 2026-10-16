@@ -4,7 +4,7 @@
  * Installed Veil APKs decide an order is finished only when its status
  * contains "settled", "disbursed", "failed" or "timeout". The provider also
  * ends orders as "refunded" (and can expire, cancel or reverse them), which
- * those apps do not recognise — so a refunded order was shown as still waiting
+ * those apps do not recognise -- so a refunded order was shown as still waiting
  * for payment, with a Pay button pointing at a deposit address that no longer
  * exists. A user got stuck on exactly that screen.
  *

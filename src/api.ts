@@ -32,6 +32,7 @@ import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
 import { toDisplayAmount } from "./amount";
+import { getDependencyStatus, dependencyStatusBoundMs } from "./dependencies";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -454,6 +455,7 @@ export function createApp(): express.Application {
       const rpcSuccess = latestLedgerResult.status === "fulfilled" && typeof latestLedgerResult.value === "number";
       const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
       const stats = getIndexerStats(selected);
+      const dependencies = getDependencyStatus();
 
       // Per-network progress (#161). The top-level fields above stay as they
       // were so existing consumers are unaffected; this reports each loop
@@ -503,6 +505,8 @@ export function createApp(): express.Application {
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
           networks: byNetwork,
+          dependencies,
+          dependency_status_bound_ms: dependencyStatusBoundMs,
         });
       } else {
         res.setHeader("X-Data-Stale", "true");
@@ -524,6 +528,8 @@ export function createApp(): express.Application {
           // usually true of one chain only, and the top-level nulls above
           // cannot say which.
           networks: byNetwork,
+          dependencies,
+          dependency_status_bound_ms: dependencyStatusBoundMs,
         });
       }
     } catch (err) {
