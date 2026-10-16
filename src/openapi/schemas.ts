@@ -215,12 +215,24 @@ export const statusResponseSchema = z.object({
   /** The network the top-level fields describe; `networks` reports every loop. */
   network: z.enum(["testnet", "mainnet"]).optional(),
   lastIndexedLedger: z.number().int().nullable(),
-  latestLedger: z.number().int(),
-  lagLedgers: z.number().int(),
-  startedAt: z.string().datetime({ offset: true }),
-  uptimeSeconds: z.number().int(),
-  totalIndexed: z.number().int(),
-});
+  latestLedger: z.number().int().nullable(),
+  lagLedgers: z.number().int().nullable(),
+  startedAt: z.string().datetime({ offset: true }).optional(),
+  uptimeSeconds: z.number().int().optional(),
+  totalIndexed: z.number().int().optional(),
+  networks: z
+    .record(
+      z.string(),
+      z.object({
+        lastIndexedLedger: z.number().int().nullable(),
+        latestLedger: z.number().int().nullable(),
+        lagLedgers: z.number().int().nullable(),
+        running: z.boolean(),
+        reason: z.string().optional(),
+      }).passthrough()
+    )
+    .optional(),
+}).passthrough();
 
 export const transferSchema = z.object({
   id: z.number().int(),

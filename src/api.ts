@@ -5,7 +5,7 @@ import { jsonApiMiddleware } from "./middleware/jsonapi";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
-import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
+import { getIndexerStats, getAllIndexerStats, runningNetworks, isIndexerRunning, isIndexerStopped, getIndexerUnstartedReason } from "./indexer";
 import { currentNetwork, enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
 import { createWebhooksRouter } from "./api/webhooks";
@@ -219,10 +219,17 @@ export function createApp(): express.Application {
 
     try {
       const net = requestNetwork(req);
+      const indexerStopped =
+        typeof isIndexerStopped === "function"
+          ? isIndexerStopped(net)
+          : false;
       const rpcHealthy = await checkRpcHealth(net);
-      if (!rpcHealthy) {
+      if (indexerStopped || !rpcHealthy) {
         const lastIndexed = await getLastIndexedLedger(net).catch(() => null);
         res.setHeader("X-Data-Stale", "true");
+        if (indexerStopped) {
+          res.setHeader("X-Indexer-Running", "false");
+        }
         if (lastIndexed !== null) {
           res.setHeader("X-As-Of-Ledger", String(lastIndexed));
         }
@@ -232,6 +239,9 @@ export function createApp(): express.Application {
           if (body && typeof body === "object" && !Array.isArray(body) && body.error === undefined) {
             if (body.stale === undefined) {
               body.stale = true;
+            }
+            if (body.indexer_running === undefined && indexerStopped) {
+              body.indexer_running = false;
             }
             if (body.as_of_ledger === undefined && lastIndexed !== null) {
               body.as_of_ledger = lastIndexed;
@@ -459,8 +469,7 @@ export function createApp(): express.Application {
       // were so existing consumers are unaffected; this reports each loop
       // separately, which is the only way to see one chain falling behind
       // while the other is healthy.
-      const active = runningNetworks();
-      const networks: Network[] = active.length > 0 ? active : enabledNetworks();
+      const networks = enabledNetworks();
       const loopStats = getAllIndexerStats();
       const perNetwork = await Promise.all(
         networks.map(async (net) => {
@@ -471,6 +480,14 @@ export function createApp(): express.Application {
           const indexedLedger = indexed.status === "fulfilled" ? indexed.value : null;
           const tipLedger =
             tip.status === "fulfilled" && typeof tip.value === "number" ? tip.value : null;
+          const isRunning =
+            typeof isIndexerRunning === "function"
+              ? isIndexerRunning(net)
+              : (loopStats[net] !== undefined || runningNetworks().includes(net));
+          const unstartedReason =
+            !isRunning && typeof getIndexerUnstartedReason === "function"
+              ? getIndexerUnstartedReason(net)
+              : undefined;
           return [
             net,
             {
@@ -478,9 +495,8 @@ export function createApp(): express.Application {
               latestLedger: tipLedger,
               lagLedgers:
                 tipLedger !== null ? tipLedger - (indexedLedger ?? tipLedger) : null,
-              // A loop that has not started reports no stats rather than zeroes
-              // pretending to be progress.
-              running: loopStats[net] !== undefined,
+              running: isRunning,
+              ...(unstartedReason ? { reason: unstartedReason } : {}),
               ...(loopStats[net] ?? {}),
             },
           ] as const;
