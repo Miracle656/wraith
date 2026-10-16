@@ -5114,9 +5114,26 @@
     },
     "/offramp/rate": {
       "get": {
-        "summary": "Indicative NGN/USDC rate",
+        "summary": "Indicative naira-per-coin rate",
         "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
         "x-internal": true,
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "xlm",
+                "usdc"
+              ],
+              "description": "Asset to price. Required: omitting it would silently return a dollar rate.",
+              "example": "usdc"
+            },
+            "required": true,
+            "description": "Asset to price. Required: omitting it would silently return a dollar rate.",
+            "name": "coin",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -5125,14 +5142,16 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "rate": {
-                      "type": "number"
-                    },
-                    "currency": {
-                      "type": "string"
-                    },
                     "coin": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "xlm",
+                        "usdc"
+                      ]
+                    },
+                    "rate": {
+                      "type": "number",
+                      "description": "Naira per one unit of the requested coin, not naira per dollar."
                     },
                     "indicative": {
                       "type": "boolean",
@@ -5142,9 +5161,8 @@
                     }
                   },
                   "required": [
-                    "rate",
-                    "currency",
                     "coin",
+                    "rate",
                     "indicative"
                   ]
                 }

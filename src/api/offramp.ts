@@ -15,9 +15,10 @@ import {
   checkStellarTrustline,
   createOfframpOrder,
   getOfframpStatus,
-  getRate,
   verifyBank,
 } from "../linq/client";
+import { ngnPerCoin } from "./ngn";
+import { type OnrampCoin } from "../linq/onramp";
 
 /**
  * Offramp router - mounts at /offramp
@@ -110,24 +111,49 @@ export function createOfframpRouter(
     next();
   });
 
-  // Every cash-out screen asks for the rate when it opens, and each ask spends
-  // the provider allowance all users share. The rate is indicative (the binding
-  // one is locked into the order), so a few seconds of reuse costs nothing.
+  // `coin` is required, for the same reason the onramp refuses without one.
+  //
+  // Linq's /b2b/rate returns naira per dollar regardless of which coin is
+  // asked about.  A client that calls this without a coin and divides a naira
+  // amount by the answer gets the right number of USDC (a USDC is a dollar),
+  // but the wrong number of XLM by exactly the price of XLM.  The onramp had
+  // the identical defect and it cost real money: ₦1,000 bought 0.6 XLM
+  // instead of 3.6.  Defaulting here would reproduce that silently, so the
+  // only safe answer to a missing coin is a 400.
+  //
+  // The rate is computed by ngnPerCoin (shared with the onramp), which
+  // multiplies the NGN/USD rate by the coin's USD price so both rails quote
+  // from one source.
+  //
+  // Per-coin cache: every cash-out screen asks for the rate when it opens, and
+  // each ask spends the provider allowance all users share.  The rate here is
+  // indicative (the binding one is locked into the order), so a few seconds of
+  // reuse costs nothing.  Coins are cached separately so an XLM quote does not
+  // evict a USDC quote that arrived a moment before.
+  const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
   const RATE_CACHE_MS = 20_000;
-  let rateCache: { at: number; body: unknown } | null = null;
+  const rateCacheByCoins = new Map<OnrampCoin, { at: number; body: unknown }>();
 
-  router.get("/rate", async (_req: Request, res: Response) => {
-    if (rateCache && Date.now() - rateCache.at < RATE_CACHE_MS) {
-      res.json(rateCache.body);
+  router.get("/rate", async (req: Request, res: Response) => {
+    const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
+    if (!resolvedCoin) {
+      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
       return;
     }
+
+    const cached = rateCacheByCoins.get(resolvedCoin);
+    if (cached && Date.now() - cached.at < RATE_CACHE_MS) {
+      res.json(cached.body);
+      return;
+    }
+
     try {
-      const rate = await getRate();
+      const rate = await ngnPerCoin(resolvedCoin);
       // Flagged indicative on purpose: the binding rate is the one locked into
       // an order at creation, and a client that caches this one quotes a
       // number the payout will not honour.
-      const body = { ...rate, indicative: true };
-      rateCache = { at: Date.now(), body };
+      const body = { coin: resolvedCoin, rate, indicative: true };
+      rateCacheByCoins.set(resolvedCoin, { at: Date.now(), body });
       res.json(body);
     } catch (err) {
       sendLinqError(res, err);

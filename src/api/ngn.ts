@@ -244,8 +244,11 @@ export function __clearNgnRateCache(): void {
  * Linq gives naira per dollar; this turns it into naira per coin. Every naira
  * amount on both rails is denominated this way, so the conversion happens in
  * exactly one place and the rate we quote is the rate we send Linq.
+ *
+ * Exported so the offramp rate endpoint can reuse the same price path rather
+ * than opening a second route to the provider.
  */
-async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
+export async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
   const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
   const rate = ngnPerUsd * usd;
   if (!Number.isFinite(rate) || rate <= 0) {

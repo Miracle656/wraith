@@ -40,6 +40,7 @@ import {
   transferExportQuerySchema,
   binaryExportResponseSchema,
   linqWebhookAckResponseSchema,
+  offrampRateQuerySchema,
   offrampRateResponseSchema,
   offrampVerifyBankBodySchema,
   offrampVerifiedBankSchema,
@@ -465,9 +466,10 @@ const internalErrorResponses = {
 registry.registerPath({
   method: "get",
   path: "/offramp/rate",
-  summary: "Indicative NGN/USDC rate",
+  summary: "Indicative naira-per-coin rate",
   description: internalDescription,
   "x-internal": true,
+  request: { query: offrampRateQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampRateResponseSchema } } },
     ...internalErrorResponses,

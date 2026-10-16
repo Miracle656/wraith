@@ -48,9 +48,14 @@ jest.mock("../../linq/client", () => ({
   getOfframpStatus: jest.fn(),
 }));
 
+jest.mock("../../api/ngn", () => ({
+  ngnPerCoin: jest.fn(),
+}));
+
 import { createOfframpRouter } from "../../api/offramp";
 import { networkMiddleware } from "../../middleware/network";
 import { LinqError, createOfframpOrder, getOfframpStatus } from "../../linq/client";
+import { ngnPerCoin } from "../../api/ngn";
 
 const mockCreate = createOfframpOrder as jest.Mock;
 const mockStatus = getOfframpStatus as jest.Mock;
@@ -461,5 +466,76 @@ describe("retrying an order creation", () => {
     expect(res.body.id).toMatch(/^ofr_[A-Za-z0-9_-]{22}$/);
     expect(rows[0].publicId).toBe(res.body.id);
     expect(JSON.stringify(res.body)).not.toContain(LINQ_ID);
+  });
+});
+
+const mockNgnPerCoin = ngnPerCoin as jest.Mock;
+
+describe("GET /offramp/rate — naira per coin, not naira per dollar", () => {
+  // The bug this fixes: the old handler called getRate() which returns Linq's
+  // /b2b/rate number — naira per dollar.  Dividing a naira amount by that
+  // gives the right USDC figure by coincidence (1 USDC = $1) and the wrong
+  // figure for every other asset by that asset's price.
+
+  beforeEach(() => {
+    // 1,655 NGN per USDC (dollar-pegged, so same as NGN/USD)
+    // 290 NGN per XLM  (XLM ≈ $0.175 × 1,655)
+    mockNgnPerCoin.mockImplementation(async (coin: string) =>
+      coin === "usdc" ? 1655 : 290,
+    );
+  });
+
+  function rateUrl(coin?: string) {
+    const app = makeApp();
+    const req = request(app).get("/offramp/rate");
+    return coin ? req.query({ coin }) : req;
+  }
+
+  it("returns naira per XLM for coin=xlm", async () => {
+    const res = await rateUrl("xlm");
+    expect(res.status).toBe(200);
+    expect(res.body.coin).toBe("xlm");
+    expect(res.body.rate).toBeCloseTo(290, 6);
+    expect(res.body.indicative).toBe(true);
+    expect(mockNgnPerCoin).toHaveBeenCalledWith("xlm");
+  });
+
+  it("returns naira per USDC for coin=usdc", async () => {
+    const res = await rateUrl("usdc");
+    expect(res.status).toBe(200);
+    expect(res.body.coin).toBe("usdc");
+    expect(res.body.rate).toBeCloseTo(1655, 6);
+    expect(res.body.indicative).toBe(true);
+    expect(mockNgnPerCoin).toHaveBeenCalledWith("usdc");
+  });
+
+  it("XLM and USDC rates differ — pins that the old dollar rate is gone", async () => {
+    const xlm = await rateUrl("xlm");
+    const usdc = await rateUrl("usdc");
+    expect(xlm.body.rate).not.toBeCloseTo(usdc.body.rate, 0);
+  });
+
+  it("refuses a request with no coin — cannot silently return a dollar rate", async () => {
+    const res = await rateUrl();
+    expect(res.status).toBe(400);
+    expect(mockNgnPerCoin).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown coin", async () => {
+    const res = await rateUrl("doge");
+    expect(res.status).toBe(400);
+    expect(mockNgnPerCoin).not.toHaveBeenCalled();
+  });
+
+  it("the response carries no currency field — rate is already in NGN", async () => {
+    const res = await rateUrl("usdc");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("currency");
+  });
+
+  it("surfaces a pricing failure rather than returning a stale rate", async () => {
+    mockNgnPerCoin.mockRejectedValueOnce(new LinqError("Could not price XLM right now", 502));
+    const res = await rateUrl("xlm");
+    expect(res.status).toBe(502);
   });
 });

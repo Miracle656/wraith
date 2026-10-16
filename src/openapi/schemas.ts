@@ -635,10 +635,21 @@ export const linqWebhookAckResponseSchema = z.object({
 
 // ─── /offramp/* — cash-out surface (internal) ───────────────────────────────
 
+export const offrampRateQuerySchema = z
+  .object({
+    /** Which asset to price. Required — defaulting silently to the dollar rate was the bug. */
+    coin: z.enum(["xlm", "usdc"]).openapi({
+      description: "Asset to price. Required: omitting it would silently return a dollar rate.",
+      example: "usdc",
+    }),
+  })
+  .passthrough();
+
 export const offrampRateResponseSchema = z.object({
-  rate: z.number(),
-  currency: z.string(),
-  coin: z.string(),
+  coin: z.enum(["xlm", "usdc"]),
+  rate: z.number().openapi({
+    description: "Naira per one unit of the requested coin, not naira per dollar.",
+  }),
   /** Always true: the binding rate is the one locked into an order at creation. */
   indicative: z.literal(true),
 });
