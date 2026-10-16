@@ -4,6 +4,8 @@ import { prisma, toDisplayAmount } from "../db";
 import os from "os";
 import path from "path";
 import fs from "fs";
+import { once } from "events";
+import { finished } from "stream/promises";
 import { z } from "zod";
 import { requestNetwork } from "../middleware/network";
 import { parseOr400 } from "../openapi/validation";
@@ -195,6 +197,8 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
     os.tmpdir(),
     `transfers-${Date.now()}-${Math.random().toString(36).slice(2)}.parquet`,
   );
+  let outputStream: fs.WriteStream | undefined;
+  let outputClosed: Promise<void> | undefined;
 
   try {
     const parsed = parseOr400(exportQuerySchema, req.query, res);
@@ -220,12 +224,20 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
       createdAt:      { type: "UTF8" },
     });
 
-    const writer = await parquet.ParquetWriter.openFile(schema, tmpFile);
-
     // Headers are set after the file is written here, so this could have been
     // detected mid-stream — but it goes through the same helper as CSV so the
     // two endpoints cannot answer differently about the same query.
     const truncated = await hasRowsBeyond(where, effectiveMax);
+
+    // Own the stream so a query, row, or footer failure can close it without
+    // calling close() a second time on a partially closed Parquet writer.
+    outputStream = fs.createWriteStream(tmpFile);
+    outputClosed = new Promise<void>((resolve) => outputStream!.once("close", resolve));
+    const outputFinished = finished(outputStream);
+    // Writer operations can fail before we reach the completion await below.
+    void outputFinished.catch(() => {});
+    await once(outputStream, "open");
+    const writer = await parquet.ParquetWriter.openStream(schema, outputStream);
 
     for await (const row of streamTransfers(where, effectiveMax)) {
       await writer.appendRow({
@@ -246,6 +258,7 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
     }
 
     await writer.close();
+    await outputFinished;
 
     res.setHeader("Content-Type", "application/octet-stream");
     res.setHeader("Content-Disposition", "attachment; filename=\"transfers.parquet\"");
@@ -262,7 +275,12 @@ async function handleParquetExport(req: Request, res: Response, next: NextFuncti
       next(err);
     });
   } catch (err) {
-    fs.unlink(tmpFile, () => {});
+    // Let the writer's initial header write finish before releasing the file.
+    if (outputStream && !outputStream.destroyed && !outputStream.writableEnded) {
+      outputStream.end();
+    }
+    await outputClosed;
+    await fs.promises.unlink(tmpFile).catch(() => {});
     next(err);
   }
 }
