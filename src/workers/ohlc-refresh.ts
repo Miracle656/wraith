@@ -11,7 +11,9 @@ export async function refreshOhlcAggregates(): Promise<OhlcRefreshResult> {
   const start = Date.now();
 
   try {
-    const [result1m, result1h, result1d] = await Promise.all([
+    // Wait for every bucket even if one fails, so the worker cannot start a
+    // new refresh while queries from the previous run are still pending.
+    const results = await Promise.allSettled([
       prisma.$queryRaw<Array<{ rows_inserted: number; rows_updated: number }>>`
         SELECT rows_inserted, rows_updated FROM ohlc.refresh_candles_1m()
       `,
@@ -22,6 +24,10 @@ export async function refreshOhlcAggregates(): Promise<OhlcRefreshResult> {
         SELECT rows_inserted, rows_updated FROM ohlc.refresh_candles_1d()
       `,
     ]);
+    const [result1m, result1h, result1d] = results.map((result) => {
+      if (result.status === "rejected") throw new Error("OHLC refresh failed");
+      return result.value;
+    });
 
     const duration = Date.now() - start;
 
@@ -46,26 +52,27 @@ export async function refreshOhlcAggregates(): Promise<OhlcRefreshResult> {
         : { inserted: 0, updated: 0 },
       duration_ms: duration,
     };
-  } catch (err) {
-    const duration = Date.now() - start;
-    console.error("[ohlc] Refresh failed:", err);
-    throw new Error(
-      `OHLC refresh failed after ${duration}ms: ${(err as Error).message}`,
-    );
+  } catch {
+    throw new Error("OHLC refresh failed");
   }
 }
 
 export function startOhlcRefreshWorker(
   interval_ms: number = 60_000,
 ): () => void {
+  let running = false;
   const intervalId = setInterval(async () => {
+    if (running) return;
+    running = true;
     try {
       const result = await refreshOhlcAggregates();
       console.log(
         `[ohlc] Refreshed aggregates (${result.duration_ms}ms): 1m=${result.oneMinute.inserted}, 1h=${result.oneHour.inserted}, 1d=${result.oneDay.inserted}`,
       );
-    } catch (err) {
-      console.error("[ohlc] Refresh error:", err);
+    } catch {
+      console.error("[ohlc] Refresh failed; retrying on the next interval.");
+    } finally {
+      running = false;
     }
   }, interval_ms);
 

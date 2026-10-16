@@ -11,6 +11,8 @@ import { startPartitionRetentionJob } from "./jobs/retention";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
+import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -78,8 +80,10 @@ async function main() {
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
+  let stopOhlcRefreshWorker: (() => void) | undefined;
   const shutdown = async (signal: string) => {
     console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
+    stopOhlcRefreshWorker?.();
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -112,6 +116,12 @@ async function main() {
   // API-only deployments skip the indexer, so without this explicit seed their
   // displayAmount values would silently fall back to 7 decimals for every token.
   await Promise.all(enabledNetworks().map((network) => initTokenCache(network)));
+
+  // Opt in only after the OHLC tables and refresh functions are available.
+  const ohlcIntervalMs = getOhlcRefreshIntervalMs();
+  if (ohlcIntervalMs !== undefined) {
+    stopOhlcRefreshWorker = startOhlcRefreshWorker(ohlcIntervalMs);
+  }
 
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it

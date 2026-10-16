@@ -684,6 +684,34 @@ curl -OJ "http://localhost:3000/transfers.parquet?fromLedger=5840000&toLedger=58
 
 ***
 
+### `GET /candles/:bucket/:contractId`
+
+Returns OHLC candles from the existing `ohlc` aggregate tables. `bucket` is
+`1m`, `1h`, or `1d`; `contractId` is a 56-character Stellar contract address.
+Pagination uses `limit` (1–1000, default 100) and `offset` (non-negative, default 0).
+Refreshes are owned by the worker; there is no public refresh endpoint.
+
+The database must already contain working `ohlc.candles_*` tables and
+`ohlc.refresh_candles_*()` functions. They are not installed by Prisma's current
+startup path; the legacy `sql/001_ohlc_aggregates.sql` requires separate repair
+and deployment. These legacy aggregates do not separate networks, so they
+must not be used with a database containing transfers from multiple networks.
+
+The read route and scheduled refresh share one opt-in: set
+`OHLC_REFRESH_INTERVAL_MS=60000` to enable both after those database prerequisites
+are met. Unset, invalid, or `0` disables both; `SKIP_INDEXER=true` also disables
+both. They require exactly one enabled network matching `STELLAR_NETWORK`
+(default `testnet`); multi-network configurations leave the route unmounted.
+The worker stops scheduling on shutdown and skips ticks while an earlier
+refresh is still running.
+
+Run `npm run docs:openapi` with the same environment as the deployment. Without
+the opt-in, the generated specification omits the candles route. For an enabled
+single-network deployment, generate it with `OHLC_REFRESH_INTERVAL_MS=60000 npm
+run docs:openapi` (and the deployment's network settings).
+
+***
+
 ## Environment Variables
 
 | Variable              | Default       | Description                                                                                   |
@@ -697,6 +725,7 @@ curl -OJ "http://localhost:3000/transfers.parquet?fromLedger=5840000&toLedger=58
 | `HORIZON_EVENTS_PATH`  | `/events`     | Horizon contract-events path used by the fallback source.                                      |
 | `START_LEDGER`        | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
 | `POLL_INTERVAL_MS`    | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
+| `OHLC_REFRESH_INTERVAL_MS` | disabled | Enables the candles read route and worker with a positive integer interval in ms (max 2147483647). Requires working single-network OHLC aggregates. Invalid, unset, `0`, or `SKIP_INDEXER=true` disables both. |
 | `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
 | `EVENTS_BATCH_SIZE`   | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
