@@ -35,10 +35,20 @@ function splitAndClauses(filter: string): string[] {
       if (char === "(") depth++;
       if (char === ")") depth = Math.max(0, depth - 1);
 
-      if (depth === 0 && filter.slice(index, index + 4).toLowerCase() === " and") {
+      const operator = !/\w/.test(filter[index - 1] ?? "")
+        ? filter.slice(index).match(/^(and|or)\b/i)
+        : null;
+      if (operator?.[1].toLowerCase() === "or") {
+        throw new Error("$filter only supports AND combinations.");
+      }
+      if (
+        operator && depth === 0
+        && /\s/.test(filter[index - 1] ?? "")
+        && /\s/.test(filter[index + operator[0].length] ?? "")
+      ) {
         clauses.push(current.trim());
         current = "";
-        index += 3;
+        index += operator[0].length - 1;
         continue;
       }
     }
@@ -115,10 +125,6 @@ export function parseODataFilter(
 ): Record<string, unknown> | undefined {
   const normalized = filter?.trim();
   if (!normalized) return undefined;
-
-  if (/\bor\b/i.test(normalized)) {
-    throw new Error("$filter only supports AND combinations.");
-  }
 
   const clauses = splitAndClauses(normalized);
   if (clauses.length === 0) return undefined;
