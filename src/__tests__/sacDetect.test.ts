@@ -6,7 +6,7 @@
  * fake instance fetcher is injected throughout.
  */
 
-import { xdr } from "@stellar/stellar-sdk";
+import { Asset, Networks, xdr } from "@stellar/stellar-sdk";
 import {
   executableIsSac,
   instanceValIsSac,
@@ -16,9 +16,6 @@ import {
   _clearSacCache,
   type InstanceFetcher,
 } from "../indexer/sac-detect";
-
-// The native XLM SACs are hard-coded as known SACs in the module.
-const TESTNET_XLM_SAC = "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
 
 function sacInstanceVal(): xdr.ScVal {
   return xdr.ScVal.scvContractInstance(
@@ -67,10 +64,22 @@ describe("instanceValIsSac", () => {
 });
 
 describe("detectSac", () => {
-  it("returns true for a known native XLM SAC without fetching", async () => {
+  it.each([
+    ["mainnet", Networks.PUBLIC],
+    ["testnet", Networks.TESTNET],
+  ] as const)("recognizes the SDK-derived %s native XLM SAC without fetching", async (network, passphrase) => {
     const fetcher = jest.fn<Promise<xdr.ScVal | null>, [string]>();
-    await expect(detectSac(TESTNET_XLM_SAC, fetcher)).resolves.toBe(true);
+    const contractId = Asset.native().contractId(passphrase);
+    await expect(detectSac(contractId, fetcher, network)).resolves.toBe(true);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("does not treat the standalone native SAC as a known mainnet or testnet contract", async () => {
+    const contractId = Asset.native().contractId(Networks.STANDALONE);
+    const fetcher = jest.fn(async () => null);
+    await expect(detectSac(contractId, fetcher, "mainnet")).resolves.toBe(false);
+    await expect(detectSac(contractId, fetcher, "testnet")).resolves.toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("classifies a SAC via the injected fetcher", async () => {
