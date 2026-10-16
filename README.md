@@ -72,8 +72,9 @@ cp .env.example .env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="testnet"
-# SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
-SOROBAN_RPC_URL=
+# SOROBAN_RPC_URL_TESTNET (or legacy SOROBAN_RPC_URL) is optional on testnet —
+# the default public endpoint (https://soroban-testnet.stellar.org) is used automatically
+SOROBAN_RPC_URL_TESTNET=
 
 START_LEDGER=
 SAC_CONTRACT_IDS=
@@ -86,8 +87,10 @@ PORT=3000
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="mainnet"
-# Required on mainnet — no free public Soroban RPC exists
-SOROBAN_RPC_URL="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
+# Required on mainnet — no free public Soroban RPC exists:
+# In multi-network setups (`NETWORKS=testnet,mainnet`), set SOROBAN_RPC_URL_MAINNET.
+# In single-network deployments (`STELLAR_NETWORK=mainnet`), SOROBAN_RPC_URL may also be used.
+SOROBAN_RPC_URL_MAINNET="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
 
 # Strongly recommended on mainnet: filter to specific contracts to reduce load
 SAC_CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
@@ -95,7 +98,7 @@ START_LEDGER=
 PORT=3000
 ```
 
-> **Tip:** If you omit both `SOROBAN_RPC_URL` and `STELLAR_NETWORK`, Wraith will exit immediately with a clear error explaining what to set.
+> **Tip:** In multi-network mode (`NETWORKS=testnet,mainnet`), `SOROBAN_RPC_URL_MAINNET` is required to index mainnet. If omitted, the mainnet indexer will not start and mainnet reads will be marked stale with an explicit staleness indicator (`stale: true`, `indexer_running: false`, header `X-Data-Stale: true`). Single-network deployments may still use `SOROBAN_RPC_URL` with `STELLAR_NETWORK=mainnet`.
 
 ### 3. Start Postgres
 
@@ -686,33 +689,35 @@ curl -OJ "http://localhost:3000/transfers.parquet?fromLedger=5840000&toLedger=58
 
 ## Environment Variables
 
-| Variable              | Default       | Description                                                                                   |
-| --------------------- | ------------- | --------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`        | —             | Postgres connection string (required)                                                         |
-| `DIRECT_DATABASE_URL` | —             | Direct (non-pooled) Postgres URL — required for Prisma migrations on Supabase                 |
-| `STELLAR_NETWORK`     | —             | `testnet` or `mainnet`. Testnet auto-configures the default RPC URL.                          |
-| `SOROBAN_RPC_URL`     | *(see below)* | Soroban RPC endpoint. Overrides any network default. Required when `STELLAR_NETWORK=mainnet`. |
-| `STELLAR_RPC_URL`     | —             | Backward-compat alias for `SOROBAN_RPC_URL`. Used when `SOROBAN_RPC_URL` is unset.            |
-| `HORIZON_URL`         | —             | Optional Horizon endpoint used as a fallback source when RPC is unhealthy.                    |
-| `HORIZON_EVENTS_PATH`  | `/events`     | Horizon contract-events path used by the fallback source.                                      |
-| `START_LEDGER`        | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
-| `POLL_INTERVAL_MS`    | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
-| `CONTRACT_IDS`        | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
-| `EVENTS_BATCH_SIZE`   | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
-| `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
-| `NETWORKS`            | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
-| `PORT`                | `3000`        | REST API port                                                                                 |
-| `EXPORT_MAX_ROWS`     | `50000`       | Default row cap for `/transfers.csv` and `/transfers.parquet`. Clamped to 500 000; a caller may ask for less with `?maxRows=`. |
+| Variable                   | Default       | Description                                                                                   |
+| -------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`             | —             | Postgres connection string (required)                                                         |
+| `DIRECT_DATABASE_URL`      | —             | Direct (non-pooled) Postgres URL — required for Prisma migrations on Supabase                 |
+| `STELLAR_NETWORK`          | —             | `testnet` or `mainnet`. Default single-network mode.                                          |
+| `SOROBAN_RPC_URL_TESTNET`  | `https://soroban-testnet.stellar.org` | Explicit Soroban RPC endpoint for testnet. |
+| `SOROBAN_RPC_URL_MAINNET`  | —             | Explicit Soroban RPC endpoint for mainnet. Required to index mainnet in multi-network setups. |
+| `SOROBAN_RPC_URL`          | *(see below)* | Legacy Soroban RPC endpoint. Scoped to the configured `STELLAR_NETWORK`. Required when `STELLAR_NETWORK=mainnet` if `SOROBAN_RPC_URL_MAINNET` is unset. |
+| `STELLAR_RPC_URL`          | —             | Backward-compat alias for `SOROBAN_RPC_URL`. Used when `SOROBAN_RPC_URL` is unset.            |
+| `HORIZON_URL`              | —             | Optional Horizon endpoint used as a fallback source when RPC is unhealthy.                    |
+| `HORIZON_EVENTS_PATH`       | `/events`     | Horizon contract-events path used by the fallback source.                                      |
+| `START_LEDGER`             | *(tip)*       | Ledger to start indexing from. Leave blank to resume from DB state or start near the tip.     |
+| `POLL_INTERVAL_MS`         | `6000`        | Polling interval in ms (\~1 ledger ≈ 6 s)                                                     |
+| `CONTRACT_IDS`             | *(all)*       | Comma-separated token contract IDs to watch. Empty = watch all (very heavy on mainnet)        |
+| `EVENTS_BATCH_SIZE`        | `10000`       | Max events per RPC call (Stellar RPC hard-cap is 10 000)                                      |
+| `RETENTION_DAYS`           | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
+| `NETWORKS`                 | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
+| `PORT`                     | `3000`        | REST API port                                                                                 |
+| `EXPORT_MAX_ROWS`          | `50000`       | Default row cap for `/transfers.csv` and `/transfers.parquet`. Clamped to 500 000; a caller may ask for less with `?maxRows=`. |
 
 ### RPC URL Resolution
 
-Wraith resolves the RPC endpoint in this order and fails fast at startup if nothing is configured:
+Wraith resolves the RPC endpoint per network:
 
-1. `SOROBAN_RPC_URL` — explicit; always wins
-2. `STELLAR_RPC_URL` — backward-compat alias
-3. `STELLAR_NETWORK=testnet` → `https://soroban-testnet.stellar.org` (free public endpoint)
-4. `STELLAR_NETWORK=mainnet` → **error**: requires explicit `SOROBAN_RPC_URL`
-5. Nothing set → **error**: clear message explaining what to configure
+1. `SOROBAN_RPC_URL_<NETWORK>` (or `STELLAR_RPC_URL_<NETWORK>`) — explicit per-network variable (`SOROBAN_RPC_URL_TESTNET`, `SOROBAN_RPC_URL_MAINNET`). Always wins for that network.
+2. `SOROBAN_RPC_URL` / `STELLAR_RPC_URL` — legacy variable; honoured **only for the configured network** (`STELLAR_NETWORK`), preventing accidental cross-network configuration.
+3. `testnet` default → `https://soroban-testnet.stellar.org` (free public endpoint).
+4. `mainnet` default → **error**: requires explicit `SOROBAN_RPC_URL_MAINNET` (or `SOROBAN_RPC_URL` with `STELLAR_NETWORK=mainnet`). There is no free public mainnet Soroban RPC.
+5. If `startAllIndexers` encounters an unconfigured RPC for an enabled network (e.g. mainnet missing `SOROBAN_RPC_URL_MAINNET`), that network loop is marked not started, `/status` reports `running: false` with the exact error, and read endpoints for that network serve existing indexed data with explicit staleness markers (`stale: true`, `indexer_running: false`, `X-Data-Stale: true`).
 
 ### Indexer Source Fallback
 

@@ -15,6 +15,9 @@ import {
   resolveNftContractIds,
   resolveSacContractIds,
   runningNetworks,
+  startAllIndexers,
+  isIndexerRunning,
+  getIndexerUnstartedReason,
   _resetIndexerLoops,
 } from "../indexer";
 import { getRpc, validateNetworkConfig, _resetRpcClients } from "../rpc";
@@ -208,4 +211,24 @@ describe("loop state isolation", () => {
     process.env.STELLAR_NETWORK = "testnet";
     expect(currentNetwork()).toBe("testnet");
   });
+
+  it("handles unconfigured RPC path gracefully and tracks unstarted status (#238)", () => {
+    // testnet has public default; mainnet has no SOROBAN_RPC_URL_MAINNET
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+    const consoleLog = jest.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      // Pass both networks where mainnet is missing its RPC endpoint
+      const runnable = startAllIndexers(["testnet", "mainnet"]);
+
+      expect(runnable).toContain("testnet");
+      expect(runnable).not.toContain("mainnet");
+      expect(isIndexerRunning("mainnet")).toBe(false);
+      expect(getIndexerUnstartedReason("mainnet")).toMatch(/SOROBAN_RPC_URL_MAINNET is required/);
+    } finally {
+      consoleError.mockRestore();
+      consoleLog.mockRestore();
+    }
+  });
 });
+
