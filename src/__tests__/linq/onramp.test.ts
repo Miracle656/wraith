@@ -459,3 +459,169 @@ describe("call() error parsing", () => {
     expect(err.code).toBeUndefined();
   });
 });
+
+// ─── Shape tests using the fake ───────────────────────────────────────────────
+//
+// These tests exercise the full `onramp.ts` call stack against the fake
+// provider. The fake is the single source of truth for provider wire shapes:
+// correcting it here corrects any test that uses it.
+//
+// The ad-hoc mocks above test internal error-parsing logic (which key the
+// client reads a code from, how it handles HTML bodies, etc.) and must stay.
+// These tests verify that the shapes `onramp.ts` sends and reads are the
+// documented ones.
+
+import { installFakeLinq, fakeLinq } from "../fakeLinq";
+
+describe("onramp.ts against the fake provider", () => {
+  beforeEach(() => {
+    process.env.LINQ_API_KEY = "biz_live_test";
+    process.env.LINQ_BASE_URL = "https://fake.linq.test";
+    installFakeLinq();
+  });
+
+  afterAll(() => {
+    fakeLinq.restore();
+    delete process.env.LINQ_BASE_URL;
+  });
+
+  describe("provisionCustomer shapes", () => {
+    it("sends the documented fields and reads customerRef/verified/created", async () => {
+      const result = await provisionCustomer({
+        customerRef: "veil_shape_01",
+        firstName: "Ada",
+        lastName: "Obi",
+        email: "ada.shape@example.com",
+        phone: "08012345678",
+      });
+      expect(result.customerRef).toBe("veil_shape_01");
+      expect(result.verified).toBe(false);
+      expect(result.created).toBe(true);
+    });
+
+    it("is idempotent: second call returns created:false with the same ref", async () => {
+      const params = {
+        customerRef: "veil_shape_idem",
+        firstName: "Ada",
+        lastName: "Obi",
+        email: "idem.shape@example.com",
+        phone: "080",
+      };
+      await provisionCustomer(params);
+      const second = await provisionCustomer(params);
+      expect(second.created).toBe(false);
+      expect(second.customerRef).toBe("veil_shape_idem");
+    });
+
+    it("adopts the reference Linq names when the email is already registered", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_existing", "conflict@example.com");
+
+      const result = await provisionCustomer({
+        customerRef: "veil_new",
+        firstName: "Ada",
+        lastName: "Obi",
+        email: "conflict@example.com",
+        phone: "080",
+      });
+      expect(result.customerRef).toBe("veil_existing");
+      expect(result.reusedExistingRef).toBe(true);
+      // The adopted reference is already verified, so it reports that.
+      expect(result.verified).toBe(true);
+    });
+  });
+
+  describe("submitCustomerKyc shapes", () => {
+    it("marks the customer verified and returns the documented shape", async () => {
+      fakeLinq.seedUnverifiedCustomer("veil_kyc_shape");
+      const result = await submitCustomerKyc("veil_kyc_shape", "12345678901");
+      expect(result.customerRef).toBe("veil_kyc_shape");
+      expect(result.verified).toBe(true);
+      expect(result.status).toBe("verified");
+    });
+
+    it("forwards nin_already_used as a LinqError with the correct code", async () => {
+      fakeLinq.seedUnverifiedCustomer("veil_nin_dup");
+      fakeLinq.failNext(
+        "POST /b2b/customers/kyc",
+        409,
+        "nin_already_used",
+        "NIN already used",
+      );
+      const error = await submitCustomerKyc("veil_nin_dup", "11122233344").catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.code).toBe("nin_already_used");
+      expect(error.status).toBe(409);
+    });
+  });
+
+  describe("getOnrampRate shapes", () => {
+    it("parses the bare-number response the provider sends", async () => {
+      fakeLinq.setRate(1356.15);
+      await expect(getOnrampRate()).resolves.toBeCloseTo(1356.15, 4);
+    });
+  });
+
+  describe("createOnrampOrder shapes", () => {
+    it("returns the bank account details in the documented shape", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_order_shape");
+      const result = await createOnrampOrder({
+        customerRef: "veil_order_shape",
+        amountStableCoin: 10,
+        walletAddress: "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z",
+        rate: 290,
+        coin: "xlm",
+      });
+      expect(result.orderId).toMatch(/^fake-order-/);
+      expect(result.accountNumber).toBeTruthy();
+      expect(result.bankName).toBeTruthy();
+      expect(result.amountNgn).toBeGreaterThan(0);
+      expect(result.status).toBe("awaiting payment");
+    });
+
+    it("forwards customer_not_verified with the documented code", async () => {
+      fakeLinq.seedUnverifiedCustomer("veil_unverified_shape");
+      const error = await createOnrampOrder({
+        customerRef: "veil_unverified_shape",
+        amountStableCoin: 5,
+        walletAddress: "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z",
+        rate: 290,
+        coin: "xlm",
+      }).catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.code).toBe("customer_not_verified");
+      expect(error.status).toBe(422);
+    });
+  });
+
+  describe("getOnrampStatus shapes", () => {
+    it("returns the documented status shape for an existing order", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_status_shape");
+      const order = await createOnrampOrder({
+        customerRef: "veil_status_shape",
+        amountStableCoin: 6,
+        walletAddress: "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z",
+        rate: 290,
+        coin: "xlm",
+      });
+      const status = await getOnrampStatus("veil_status_shape", order.orderId);
+      expect(status.orderId).toBe(order.orderId);
+      expect(status.status).toBe("awaiting payment");
+      expect(status.accountNumber).toBe("9876543210");
+    });
+
+    it("returns order_not_found for a different customer's order", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_owner_shape");
+      const order = await createOnrampOrder({
+        customerRef: "veil_owner_shape",
+        amountStableCoin: 6,
+        walletAddress: "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z",
+        rate: 290,
+        coin: "xlm",
+      });
+      const error = await getOnrampStatus("veil_thief", order.orderId).catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.code).toBe("order_not_found");
+      expect(error.status).toBe(404);
+    });
+  });
+});

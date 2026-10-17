@@ -165,3 +165,123 @@ describe('getBillStatus', () => {
     expect(url).toContain('orderId=9e4b1f2a');
   });
 });
+
+// ─── Shape tests using the fake ───────────────────────────────────────────────
+//
+// These tests verify that bills.ts sends and reads the documented wire shapes.
+// The fake is the single source of truth for provider shapes.
+
+import { installFakeLinq, fakeLinq } from "../fakeLinq";
+
+describe("bills.ts against the fake provider", () => {
+  const G_ADDR = "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z";
+
+  beforeEach(() => {
+    process.env.LINQ_API_KEY = "biz_live_test";
+    process.env.LINQ_BASE_URL = "https://fake.linq.test";
+    installFakeLinq();
+  });
+
+  afterAll(() => {
+    fakeLinq.restore();
+    delete process.env.LINQ_BASE_URL;
+  });
+
+  describe("payBill shapes", () => {
+    it("returns the documented bill order shape", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_bill_shape");
+      const result = await payBill({
+        customerRef: "veil_bill_shape",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "08012345678",
+        amountNgn: 1000,
+        amountStableCoin: 0.75,
+        rate: 1333,
+        coin: "xlm",
+        refundAddress: G_ADDR,
+      });
+      expect(result.id).toMatch(/^fake-order-/);
+      expect(result.wallet).toBeTruthy();
+      expect(result.status).toBe("initiated");
+      expect(result.customerRef).toBe("veil_bill_shape");
+    });
+
+    it("forwards customer_not_verified with the documented code", async () => {
+      fakeLinq.seedUnverifiedCustomer("veil_bill_unverified_shape");
+      const error = await payBill({
+        customerRef: "veil_bill_unverified_shape",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "080",
+        amountNgn: 500,
+        amountStableCoin: 0.5,
+        rate: 1000,
+        coin: "xlm",
+        refundAddress: G_ADDR,
+      }).catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.code).toBe("customer_not_verified");
+      expect(error.status).toBe(422);
+    });
+
+    it("forwards a 429 with the rate_limited code", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_bill_rl_shape");
+      fakeLinq.rateLimitNext("POST /b2b/bills/pay", 60);
+      const error = await payBill({
+        customerRef: "veil_bill_rl_shape",
+        billCategory: "data",
+        provider: "Glo",
+        customerId: "080",
+        amountNgn: 1000,
+        amountStableCoin: 0.75,
+        rate: 1333,
+        coin: "xlm",
+        refundAddress: G_ADDR,
+      }).catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.status).toBe(429);
+    });
+  });
+
+  describe("getBillStatus shapes", () => {
+    it("returns the documented status shape", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_bill_status_shape");
+      const order = await payBill({
+        customerRef: "veil_bill_status_shape",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "080",
+        amountNgn: 500,
+        amountStableCoin: 0.5,
+        rate: 1000,
+        coin: "xlm",
+        refundAddress: G_ADDR,
+      });
+      const status = await getBillStatus("veil_bill_status_shape", order.id);
+      expect(status.orderId).toBe(order.id);
+      expect(status.status).toBe("initiated");
+      expect(status.billCategory).toBe("airtime");
+      expect(status.amountNgn).toBe(500);
+    });
+
+    it("returns order_not_found for a different customer's order", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_bill_owner_shape");
+      const order = await payBill({
+        customerRef: "veil_bill_owner_shape",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "080",
+        amountNgn: 500,
+        amountStableCoin: 0.5,
+        rate: 1000,
+        coin: "xlm",
+        refundAddress: G_ADDR,
+      });
+      const error = await getBillStatus("veil_thief_shape", order.id).catch((e) => e);
+      expect(error).toBeInstanceOf(LinqError);
+      expect(error.code).toBe("order_not_found");
+      expect(error.status).toBe(404);
+    });
+  });
+});

@@ -265,6 +265,191 @@ function createLookupLimiter(): RateLimitRequestHandler {
   });
 }
 
+/**
+ * Per-IP limiter for customer provisioning.
+ *
+ * Provisioning creates a record at a third-party provider. An abusive caller
+ * making many requests with different references burns the provider's own rate
+ * limit — the shape the issue calls out: "one abusive caller with many
+ * references."
+ *
+ * Defaults: 10 requests per 10 minutes. Justification: a legitimate user
+ * provisions once per lifetime; even accounting for retries and team testing
+ * this is generous. Linq's own provisioning endpoint is stateful — a failed
+ * retry is free (idempotent), so 10 per 10 minutes is far more than needed.
+ *
+ * Configurable without a deploy via env vars:
+ *   NGN_PROVISION_WINDOW_MS (default: 600_000)
+ *   NGN_PROVISION_MAX       (default: 10)
+ */
+function createProvisionLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_PROVISION_WINDOW_MS ?? "600000", 10),
+    limit: parseInt(process.env.NGN_PROVISION_MAX ?? "10", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    message: {
+      error: "Too many provisioning requests. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
+/**
+ * Per-reference limiter for customer provisioning.
+ *
+ * Catches a single reference being hammered — potentially from different IPs.
+ * The per-IP limiter above catches many references from one caller; this one
+ * catches one reference from many callers, which is a different attack shape
+ * (e.g. a script that rotates proxies to retry the same reference).
+ *
+ * Defaults: 3 requests per 10 minutes per reference. Justification: a legitimate
+ * user provisions once; even a retry after a dropped response is idempotent at
+ * Linq, so 3 is enough for flaky networks.
+ *
+ * Configurable without a deploy via env vars:
+ *   NGN_PROVISION_REF_WINDOW_MS (default: 600_000)
+ *   NGN_PROVISION_REF_MAX       (default: 3)
+ */
+function createProvisionRefLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_PROVISION_REF_WINDOW_MS ?? "600000", 10),
+    limit: parseInt(process.env.NGN_PROVISION_REF_MAX ?? "3", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    keyGenerator: (req: Request) => {
+      const ref = (req.body as Record<string, unknown> | undefined)?.customerRef;
+      return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+    },
+    message: {
+      error: "Too many provisioning requests for this customer. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
+/**
+ * Per-IP limiter for KYC submission.
+ *
+ * A NIN is consumed once. Linq rate-limits KYC on their side, and a burst of
+ * KYC attempts from one IP may be a scraper checking NINs against names.
+ *
+ * Defaults: 5 requests per 30 minutes. Justification: a legitimate user does
+ * this once per lifetime; a tester might do it two or three times across
+ * multiple accounts in a session, so 5 is enough for a team and still catches
+ * automated abuse. Linq allows roughly one attempt every few minutes per
+ * reference, so staying under 5 per 30 minutes is comfortably inside their limit.
+ *
+ * Configurable without a deploy via env vars:
+ *   NGN_KYC_WINDOW_MS (default: 1_800_000)
+ *   NGN_KYC_MAX       (default: 5)
+ */
+function createKycLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_KYC_WINDOW_MS ?? "1800000", 10),
+    limit: parseInt(process.env.NGN_KYC_MAX ?? "5", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    message: {
+      error: "Too many identity verification attempts. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
+/**
+ * Per-reference limiter for KYC submission.
+ *
+ * A NIN verification attempt is one-per-lifetime on Linq's side. A per-reference
+ * limit prevents one customer's reference being retried many times (which burns
+ * the provider's NIMC quota for that identity).
+ *
+ * Configurable via env vars:
+ *   NGN_KYC_REF_WINDOW_MS (default: 1_800_000)
+ *   NGN_KYC_REF_MAX       (default: 2)
+ */
+function createKycRefLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_KYC_REF_WINDOW_MS ?? "1800000", 10),
+    limit: parseInt(process.env.NGN_KYC_REF_MAX ?? "2", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    keyGenerator: (req: Request) => {
+      const ref = (req.body as Record<string, unknown> | undefined)?.customerRef;
+      return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+    },
+    message: {
+      error: "Too many identity verification attempts for this customer. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
+/**
+ * Per-IP limiter for onramp order and bill creation.
+ *
+ * Creating an order calls a third-party provider and locks a rate. A burst of
+ * orders from one IP may be automated and can exhaust the provider's own
+ * creation limit.
+ *
+ * Defaults: 20 requests per 15 minutes. Justification: a typical user places
+ * at most a handful of orders in a session; 20 in 15 minutes is enough for
+ * legitimate exploratory use while catching scripts. Linq has not published a
+ * documented creation rate, but our observations suggest it is around 30–60 per
+ * minute — staying at 20 per 15 minutes (roughly 1.3/minute) is well inside it.
+ *
+ * Configurable without a deploy via env vars:
+ *   NGN_ORDERS_WINDOW_MS (default: 900_000)
+ *   NGN_ORDERS_MAX       (default: 20)
+ */
+function createOrdersLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_ORDERS_WINDOW_MS ?? "900000", 10),
+    limit: parseInt(process.env.NGN_ORDERS_MAX ?? "20", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    message: {
+      error: "Too many order requests. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
+/**
+ * Per-reference limiter for onramp order and bill creation.
+ *
+ * Catches one customer reference being used to create many orders in a burst.
+ * The per-IP limiter catches an attacker with many references; this catches a
+ * single reference being hammered, which protects the user's own account from
+ * automated order creation.
+ *
+ * Configurable via env vars:
+ *   NGN_ORDERS_REF_WINDOW_MS (default: 900_000)
+ *   NGN_ORDERS_REF_MAX       (default: 5)
+ */
+function createOrdersRefLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: parseInt(process.env.NGN_ORDERS_REF_WINDOW_MS ?? "900000", 10),
+    limit: parseInt(process.env.NGN_ORDERS_REF_MAX ?? "5", 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: false,
+    keyGenerator: (req: Request) => {
+      const ref = (req.body as Record<string, unknown> | undefined)?.customerRef;
+      return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+    },
+    message: {
+      error: "Too many order requests for this customer. Please wait before trying again.",
+      code: "veil_rate_limited",
+    },
+  });
+}
+
 const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
 const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
 
@@ -299,10 +484,24 @@ function rejectContractAddress(res: Response, address: unknown, field: string): 
 }
 
 export function createNgnRouter(
-  options: { lookupLimiter?: RateLimitRequestHandler } = {},
+  options: {
+    lookupLimiter?: RateLimitRequestHandler;
+    provisionLimiter?: RateLimitRequestHandler;
+    provisionRefLimiter?: RateLimitRequestHandler;
+    kycLimiter?: RateLimitRequestHandler;
+    kycRefLimiter?: RateLimitRequestHandler;
+    ordersLimiter?: RateLimitRequestHandler;
+    ordersRefLimiter?: RateLimitRequestHandler;
+  } = {},
 ): Router {
   const router = Router();
   const lookupLimiter = options.lookupLimiter ?? createLookupLimiter();
+  const provisionLimiter = options.provisionLimiter ?? createProvisionLimiter();
+  const provisionRefLimiter = options.provisionRefLimiter ?? createProvisionRefLimiter();
+  const kycLimiter = options.kycLimiter ?? createKycLimiter();
+  const kycRefLimiter = options.kycRefLimiter ?? createKycRefLimiter();
+  const ordersLimiter = options.ordersLimiter ?? createOrdersLimiter();
+  const ordersRefLimiter = options.ordersRefLimiter ?? createOrdersRefLimiter();
 
   // 503 rather than 500 says "this deployment has no naira rails", which is
   // what a client gating a CTA needs to hear, and is true of any build without
@@ -332,7 +531,7 @@ export function createNgnRouter(
    * existing customer with `created: false`, so a client retrying after a
    * dropped response cannot create two customers for one person.
    */
-  router.post("/customers", async (req: Request, res: Response) => {
+  router.post("/customers", provisionLimiter, provisionRefLimiter, async (req: Request, res: Response) => {
     const { customerRef, firstName, lastName, email, phone } = req.body ?? {};
 
     if (
@@ -404,7 +603,7 @@ export function createNgnRouter(
    * an error body; a NIN is personal data under the NDPA and the cheapest way
    * to hold it correctly is not to hold it.
    */
-  router.post("/customers/kyc", async (req: Request, res: Response) => {
+  router.post("/customers/kyc", kycLimiter, kycRefLimiter, async (req: Request, res: Response) => {
     const { customerRef, nin } = req.body ?? {};
 
     if (typeof customerRef !== "string" || typeof nin !== "string") {
@@ -459,7 +658,7 @@ export function createNgnRouter(
     }
   });
 
-  router.post("/onramp/orders", async (req: Request, res: Response) => {
+  router.post("/onramp/orders", ordersLimiter, ordersRefLimiter, async (req: Request, res: Response) => {
     const { customerRef, amountStableCoin, walletAddress, rate, coin } = req.body ?? {};
 
     if (typeof customerRef !== "string") {
@@ -529,7 +728,7 @@ export function createNgnRouter(
 
   // ── Bills: paid out of the wallet ──────────────────────────────────────────
 
-  router.post("/bills", async (req: Request, res: Response) => {
+  router.post("/bills", ordersLimiter, ordersRefLimiter, async (req: Request, res: Response) => {
     const {
       customerRef,
       billCategory,

@@ -107,11 +107,31 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
+    const body = parsed as Record<string, unknown> | null;
+    const code =
+      typeof body?.["code"] === "string" ? body["code"] :
+      typeof body?.["errorCode"] === "string" ? body["errorCode"] :
+      typeof body?.["error_code"] === "string" ? body["error_code"] : undefined;
     const message =
-      (parsed as { message?: string; error?: string } | null)?.message ??
-      (parsed as { message?: string; error?: string } | null)?.error ??
-      "Linq rejected the request";
-    throw new LinqError(message, response.status);
+      (typeof body?.["message"] === "string" ? body["message"] : undefined) ??
+      (typeof body?.["error"] === "string" ? body["error"] : undefined) ??
+      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
+    // Read Retry-After for 429s, the same way onramp.ts does.
+    const rawRetryAfter = response.headers?.get?.("retry-after");
+    let retryAfterSeconds: number | undefined;
+    if (rawRetryAfter) {
+      const asNum = Number(rawRetryAfter.trim());
+      if (Number.isFinite(asNum) && asNum > 0) {
+        retryAfterSeconds = Math.ceil(asNum);
+      } else {
+        const asDate = Date.parse(rawRetryAfter);
+        if (Number.isFinite(asDate)) {
+          const seconds = Math.ceil((asDate - Date.now()) / 1000);
+          retryAfterSeconds = seconds > 0 ? seconds : undefined;
+        }
+      }
+    }
+    throw new LinqError(message, response.status, code, retryAfterSeconds);
   }
 
   return parsed as T;
