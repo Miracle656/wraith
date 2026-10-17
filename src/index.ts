@@ -8,28 +8,115 @@ import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
+import { initTokenCache } from "./tokenCache";
+import { enabledNetworks } from "./network";
+import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
+// Bound on how long shutdown will wait for in-flight requests to drain.
+const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS ?? "10000", 10);
+
 async function main() {
-  // Run DB migrations on every startup so Render deployments always have
-  // an up-to-date schema without needing a separate pre-deploy step.
-  console.log("[wraith] Running database migrations…");
-  execSync("npx prisma db push --accept-data-loss", { stdio: "inherit" });
+  // Converge the schema on every startup, so a deploy needs no separate
+  // pre-deploy step.
+  //
+  // This is `db push` rather than `migrate deploy` because the migration
+  // history cannot support the latter: `prisma/migrations` holds 7 migrations
+  // covering 5 tables, while the schema defines 15. TokenTransfer,
+  // AccountSummary, IndexerState and OfframpOrder have no migration at all —
+  // this database was built by `db push` from the beginning. Switching without
+  // baselining production first would create five tables and leave the app
+  // crashing on the other ten.
+  //
+  // `--accept-data-loss` was removed deliberately. With it, any change Prisma
+  // reads as destructive — a renamed column, a narrowed type, a dropped field
+  // — applied silently on the next deploy, taking the column and everything in
+  // it. This database holds offramp orders: records of real naira paid to real
+  // bank accounts. A deploy that refuses to start is a problem someone fixes in
+  // minutes; a column of payment records that vanished during a routine deploy
+  // is not recoverable.
+  //
+  // Additive changes — a new table, a new nullable column — still apply on
+  // their own. Anything destructive now fails loudly here instead.
+  console.log("[wraith] Converging database schema…");
+  const first = pushSchema();
+  if (!first.ok) {
+    // `--accept-data-loss` consents to two very different things at once, and
+    // Prisma gives no way to agree to one without the other.
+    //
+    // Adding a unique constraint is NOT data loss: the index either builds or
+    // fails on a duplicate, and nothing is dropped either way. Refusing it put
+    // the service in a crash loop over a change that cannot destroy a row —
+    // which is exactly how this guard took wraith down once.
+    //
+    // Dropping a column IS data loss, and that is what the guard is for.
+    //
+    // So the warnings get read rather than counted: if every one is an added
+    // unique constraint, consent and retry. If even one is anything else,
+    // refuse exactly as before.
+    if (onlyAddsUniqueConstraints(first.output)) {
+      console.warn(
+        "[wraith] Schema diff is unique constraints only — no column is dropped.\n" +
+          "[wraith] Applying. A duplicate would fail the index, not delete a row.",
+      );
+      const retry = pushSchema("--accept-data-loss");
+      if (!retry.ok) {
+        console.error(
+          "[wraith] The constraint could not be applied — most likely duplicate\n" +
+            "[wraith] rows already exist for it. Nothing was dropped. Resolve the\n" +
+            "[wraith] duplicates and redeploy.",
+        );
+        process.exit(1);
+      }
+    } else {
+      console.error(
+        "[wraith] Schema convergence refused: the pending change is destructive.\n" +
+          "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
+          "[wraith] change needs a deliberate migration, not --accept-data-loss.",
+      );
+      process.exit(1);
+    }
+  }
   console.log("[wraith] Database ready.");
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
+  // `server` is created below; shutdown only runs on a signal, by which point
+  // it is assigned. Declared here so the handler can close over it.
+  let server: http.Server | undefined;
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
-    await prisma.$disconnect();
-    process.exit(0);
+    try {
+      if (server) {
+        // Stop accepting new connections and wait for in-flight requests to
+        // finish, bounded by a timeout so a stuck request cannot block exit.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            console.warn(
+              `[wraith] Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — forcing exit.`,
+            );
+            resolve();
+          }, SHUTDOWN_TIMEOUT_MS);
+          server!.close(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      }
+      await prisma.$disconnect();
+    } finally {
+      process.exit(0);
+    }
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   // ── Start REST API + WebSocket server ─────────────────────────────────────
   const app = createApp();
-  const server = http.createServer(app);
+  server = http.createServer(app);
 
   // Attach WebSocket upgrade handler — clients connect to /subscribe/:address
   attachWebSocketServer(server);
@@ -49,14 +136,10 @@ async function main() {
   // ── Start partition retention scheduler ───────────────────────────────────
   startPartitionRetentionJob();
 
-  // API-only mode. The integration harness starts the service to exercise HTTP
-  // routes against a seeded database; letting the indexer loop run there would
-  // make every request race an ingest that is also writing to the same tables,
-  // and would need live RPC the harness has no reason to depend on.
-  if (process.env.SKIP_INDEXER === "true") {
-    console.log("[wraith] SKIP_INDEXER=true — API-only mode, indexer not started.");
-    return;
-  }
+  // Seed token metadata for every served network before handling read paths.
+  // API-only deployments skip the indexer, so without this explicit seed their
+  // displayAmount values would silently fall back to 7 decimals for every token.
+  await Promise.all(enabledNetworks().map((network) => initTokenCache(network)));
 
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
@@ -76,4 +159,9 @@ async function main() {
   }
 }
 
-main();
+main().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[wraith] Fatal error during start-up: ${message}`);
+  process.exit(1);
+});
+
