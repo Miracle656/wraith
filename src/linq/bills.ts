@@ -36,86 +36,14 @@
  * every call moves real money. See `assertOnrampNetwork` in `./onramp`.
  */
 
-import { LinqError, retryOnProviderFailure } from "./client";
-
-const BASE_URL =
-  process.env.LINQ_BASE_URL?.trim() ||
-  "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
-
-const TIMEOUT_MS = 15_000;
-const TOTAL_BUDGET_MS = 35_000;
-
-function apiKey(): string {
-  const key = process.env.LINQ_API_KEY?.trim();
-  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500);
-  return key;
-}
-
-type CallInit = {
-  method?: string;
-  body?: unknown;
-  deadline?: number;
-  query?: Record<string, string>;
-};
+import { LinqError, linqCall, retryOnProviderFailure, TOTAL_BUDGET_MS } from "./http";
 
 /**
- * One request. Nothing here logs a request body: these carry the customer's
- * phone number and meter number, and an error handler that prints the body it
- * failed on is how personal data reaches a log aggregator.
+ * Every bill request goes through the shared client in `./http`. Bodies here
+ * carry the customer's phone or meter number; that client never logs a
+ * request body, and redacts long digit runs from any response it logs.
  */
-async function call<T>(path: string, init: CallInit = {}): Promise<T> {
-  const { method = "GET", body, deadline, query } = init;
-
-  const url = new URL(path, BASE_URL);
-  for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
-
-  const remaining = deadline ? deadline - Date.now() : TIMEOUT_MS;
-  if (remaining <= 0) throw new LinqError("Linq did not respond in time", 504);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(remaining, TIMEOUT_MS));
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      signal: controller.signal,
-      headers: {
-        "X-API-Key": apiKey(),
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new LinqError("Linq did not respond in time", 504);
-    }
-    throw new LinqError("Could not reach Linq", 502);
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const text = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    throw new LinqError(
-      response.ok ? "Linq returned a response we could not read" : "Linq rejected the request",
-      response.ok ? 502 : response.status,
-    );
-  }
-
-  if (!response.ok) {
-    const message =
-      (parsed as { message?: string; error?: string } | null)?.message ??
-      (parsed as { message?: string; error?: string } | null)?.error ??
-      "Linq rejected the request";
-    throw new LinqError(message, response.status);
-  }
-
-  return parsed as T;
-}
+const call = linqCall;
 
 // ─── Categories ──────────────────────────────────────────────────────────────
 
