@@ -354,6 +354,8 @@ instance can outlast that.
 | `SOROBAN_RPC_URL_MAINNET` | for indexing | **Not needed by these rails** — they are plain HTTP to Linq. But listing `mainnet` in `NETWORKS` turns on the mainnet *indexer*, which does need it. Without it the indexer skips mainnet and says so; the API, and everything here, keeps serving. |
 | `OFFRAMP_LOOKUP_MAX_FAILURES` | no (`10`) | Offramp failed lookups per window. |
 | `OFFRAMP_LOOKUP_WINDOW_MS` | no (`900000`) | Offramp lookup window. |
+| `OFFRAMP_MAX_AMOUNT_NGN` | no (`10000000`) | Largest `amountNGN` an offramp order may carry. |
+| `OFFRAMP_MAX_AMOUNT_STABLECOIN` | no (`10000`) | Largest `amountStableCoin` an offramp order may carry. |
 
 ## Schema convergence
 

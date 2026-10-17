@@ -398,6 +398,12 @@ model OfframpOrder {
   idempotencyKey  String
   // Which wallet placed it, so a user can be shown their own orders.
   walletAddress   String
+  // Keyed hash (HMAC-SHA256) of what the idempotencyKey was used to request: the
+  // amounts, bank account, bank code, account name, refund address and wallet. A
+  // replay is only a replay when it hashes the same. Keyed rather than a bare
+  // hash because an account number has too few digits to survive one. Null on
+  // rows written before this existed; those are checked on amount alone.
+  requestHash     String?
 
   chain             String  @default("stellar")
   coin              String  @default("usdc")

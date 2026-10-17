@@ -1,5 +1,8 @@
+import { createHmac } from "crypto";
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
+import type { OfframpOrder } from "@prisma/client";
+import { z } from "zod";
 
 import { prisma } from "../db";
 import { requestNetwork } from "../middleware/network";
@@ -71,6 +74,151 @@ function sendLinqError(res: Response, err: unknown): void {
     return;
   }
   res.status(500).json({ error: "Offramp request failed" });
+}
+
+/**
+ * The most one order may move, per currency. A naira ceiling is meaningless as a
+ * stablecoin one, so each has its own; both can be set in the environment. A value
+ * that is not a positive finite number is ignored rather than trusted: a typo in
+ * config must not turn into a bound of NaN that rejects every amount.
+ */
+const DEFAULT_MAX_AMOUNT_NGN = 10_000_000;
+const DEFAULT_MAX_AMOUNT_STABLECOIN = 10_000;
+
+function amountCeiling(envName: string, fallback: number): number {
+  const parsed = Number(process.env[envName]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * An amount arrives as a JSON number or a decimal string. Anything else is
+ * refused rather than coerced: `Number("abc")` is NaN, `Number(true)` is 1 and
+ * `Number([5])` is 5, none of which is an amount somebody meant to send.
+ */
+function amountSchema(max: number) {
+  return z
+    .union([z.number(), z.string().trim().regex(/^\d+(\.\d+)?$/)])
+    .transform(Number)
+    .pipe(z.number().positive().max(max));
+}
+
+/**
+ * Keyed hash of what an idempotency key was used to ask for.
+ *
+ * The key alone only says "this is the same attempt"; this says "and it asked for
+ * the same thing". Amounts are normalised numerically so "50" and "50.00" match.
+ * HMAC with the provider key, which is never stored beside the row, because a
+ * plain hash of a ten-digit account number can be reversed by trying them all.
+ */
+function requestFingerprint(r: {
+  amountNGN?: unknown;
+  amountStableCoin?: unknown;
+  bankAccount: string;
+  bankCode: string;
+  accountName: string;
+  refundAddress: unknown;
+  walletAddress: string;
+}): string {
+  const amount = (v: unknown) => (v == null ? "" : String(Number(v)));
+  return createHmac("sha256", process.env.LINQ_API_KEY ?? "")
+    .update(
+      JSON.stringify([
+        amount(r.amountNGN),
+        amount(r.amountStableCoin),
+        r.bankAccount,
+        r.bankCode,
+        r.accountName,
+        typeof r.refundAddress === "string" ? r.refundAddress : "",
+        r.walletAddress,
+      ]),
+    )
+    .digest("hex");
+}
+
+/** True for Prisma's unique-constraint violation, without depending on its class. */
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === "P2002";
+}
+
+/**
+ * Answers a request whose idempotency key already has an order.
+ *
+ * Shared by the up-front lookup and by the insert that loses a race, so a
+ * concurrent duplicate gets exactly the checks a sequential one does: it is not
+ * a way round the wallet or request comparison, and it hands back our id and a
+ * fresh token, never the provider's id.
+ */
+async function replayOrder(
+  res: Response,
+  existing: OfframpOrder,
+  request: {
+    walletAddress: string;
+    amountNGN?: unknown;
+    amountStableCoin?: unknown;
+    requestHash: string;
+  },
+): Promise<void> {
+  // The key alone is not proof of ownership; the wallet that placed the order
+  // has to match too, and nothing about the order is said otherwise.
+  if (existing.walletAddress !== request.walletAddress) {
+    res.status(409).json({ error: "This idempotencyKey has already been used" });
+    return;
+  }
+  // An idempotency key promises "this key means this request". Replaying it with
+  // different figures used to return 200 carrying the FIRST order's amount, rate
+  // and deposit address, so a caller that reused a key with a changed amount was
+  // told its new payout had been accepted while the money followed the original
+  // order. On the only money-moving router here, a silent success for a request
+  // nobody made is the worst available outcome.
+  //
+  // Compared numerically because both sides are decimal strings: "2000" and
+  // "2000.00" are the same request and must not 409.
+  const sameAmount = (stored: string, supplied: unknown): boolean =>
+    supplied == null ? false : Number(stored) === Number(supplied);
+  const amountMatches =
+    request.amountNGN != null
+      ? sameAmount(existing.amountNGN, request.amountNGN)
+      : request.amountStableCoin != null
+        ? sameAmount(existing.amountStableCoin, request.amountStableCoin)
+        : false;
+  if (!amountMatches) {
+    res.status(409).json({
+      error:
+        "This idempotencyKey was used for a different request. Use a new key for a new order.",
+    });
+    return;
+  }
+  // The amounts above are all the row stores of its own accord, so a replay that
+  // changed only the destination used to pass. The stored fingerprint covers the
+  // rest. A row without one predates it and can only be held to the amount.
+  if (existing.requestHash != null && existing.requestHash !== request.requestHash) {
+    res.status(409).json({
+      error: "This idempotencyKey was used with different order details",
+    });
+    return;
+  }
+  // A retry usually means the first response never arrived, and with it the
+  // access token. Only its hash is stored, so a new one is issued and the old
+  // one stops working.
+  const creds = issueOrderCredentials(existing.publicId ?? undefined);
+  await prisma.offrampOrder.update({
+    where: { id: existing.id },
+    data: { publicId: creds.orderId, accessTokenHash: creds.tokenHash },
+  });
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({
+    id: creds.orderId,
+    accessToken: creds.token,
+    walletAddress: existing.depositAddress,
+    chain: existing.chain,
+    coin: existing.coin,
+    amountStableCoin: Number(existing.amountStableCoin),
+    amountNGN: Number(existing.amountNGN),
+    rate: Number(existing.rate),
+    status: statusForClients(existing.status),
+    providerStatus: existing.status,
+    replayed: true,
+  });
 }
 
 /**
@@ -201,6 +349,50 @@ export function createOfframpRouter(
       return;
     }
 
+    // Checked before the idempotency lookup and before anything reaches the
+    // provider: `Number("abc")` is NaN and `Number` also accepts negatives and
+    // Infinity, and none of those should be able to start a payout.
+    if (amountNGN == null && amountStableCoin == null) {
+      res.status(400).json({ error: "amountNGN or amountStableCoin is required" });
+      return;
+    }
+    const parsedAmounts: { amountNGN?: number; amountStableCoin?: number } = {};
+    if (amountNGN != null) {
+      const max = amountCeiling("OFFRAMP_MAX_AMOUNT_NGN", DEFAULT_MAX_AMOUNT_NGN);
+      const parsed = amountSchema(max).safeParse(amountNGN);
+      if (!parsed.success) {
+        res
+          .status(400)
+          .json({ error: `amountNGN must be a positive number no greater than ${max}` });
+        return;
+      }
+      parsedAmounts.amountNGN = parsed.data;
+    }
+    if (amountStableCoin != null) {
+      const max = amountCeiling(
+        "OFFRAMP_MAX_AMOUNT_STABLECOIN",
+        DEFAULT_MAX_AMOUNT_STABLECOIN,
+      );
+      const parsed = amountSchema(max).safeParse(amountStableCoin);
+      if (!parsed.success) {
+        res.status(400).json({
+          error: `amountStableCoin must be a positive number no greater than ${max}`,
+        });
+        return;
+      }
+      parsedAmounts.amountStableCoin = parsed.data;
+    }
+
+    const requestHash = requestFingerprint({
+      ...parsedAmounts,
+      bankAccount,
+      bankCode,
+      accountName,
+      refundAddress,
+      walletAddress,
+    });
+    const replayOf = { walletAddress, ...parsedAmounts, requestHash };
+
     try {
       // The key comes from the caller and is never generated here: regenerating
       // it on a retry is precisely how one order becomes two, and the second one
@@ -209,72 +401,12 @@ export function createOfframpRouter(
         where: { network_idempotencyKey: { network: net, idempotencyKey } },
       });
       if (existing) {
-        // The key alone is not proof of ownership; the wallet that placed the
-        // order has to match too, and nothing about the order is said otherwise.
-        if (existing.walletAddress !== walletAddress) {
-          res.status(409).json({ error: "This idempotencyKey has already been used" });
-          return;
-        }
-        // An idempotency key promises "this key means this request". Replaying it
-        // with different figures used to return 200 carrying the FIRST order's
-        // amount, rate and deposit address, so a caller that reused a key with a
-        // changed amount was told its new payout had been accepted while the money
-        // followed the original order. On the only money-moving router here, a
-        // silent success for a request nobody made is the worst available outcome.
-        //
-        // Compared numerically because both sides are decimal strings: "2000" and
-        // "2000.00" are the same request and must not 409.
-        //
-        // PARTIAL, deliberately: the row stores the amounts but not bankAccount,
-        // bankCode, bankName or accountName, so a replay that changes only the
-        // destination still passes here. Closing that needs a stored hash of the
-        // idempotency-relevant fields, which needs a column and a migration —
-        // see the note in docs/ rather than guessing at one on a shared database.
-        const sameAmount = (stored: string, supplied: unknown): boolean =>
-          supplied == null ? false : Number(stored) === Number(supplied);
-        const amountMatches =
-          amountNGN != null
-            ? sameAmount(existing.amountNGN, amountNGN)
-            : amountStableCoin != null
-              ? sameAmount(existing.amountStableCoin, amountStableCoin)
-              : false;
-        if (!amountMatches) {
-          res.status(409).json({
-            error:
-              "This idempotencyKey was used for a different request. Use a new key for a new order.",
-          });
-          return;
-        }
-        // A retry usually means the first response never arrived, and with it the
-        // access token. Only its hash is stored, so a new one is issued and the
-        // old one stops working.
-        const creds = issueOrderCredentials(existing.publicId ?? undefined);
-        await prisma.offrampOrder.update({
-          where: { id: existing.id },
-          data: { publicId: creds.orderId, accessTokenHash: creds.tokenHash },
-        });
-        res.setHeader("Cache-Control", "no-store");
-        res.status(200).json({
-          id: creds.orderId,
-          accessToken: creds.token,
-          walletAddress: existing.depositAddress,
-          chain: existing.chain,
-          coin: existing.coin,
-          amountStableCoin: Number(existing.amountStableCoin),
-          amountNGN: Number(existing.amountNGN),
-          rate: Number(existing.rate),
-          status: statusForClients(existing.status),
-          providerStatus: existing.status,
-          replayed: true,
-        });
+        await replayOrder(res, existing, replayOf);
         return;
       }
 
       const order = await createOfframpOrder({
-        ...(amountNGN != null ? { amountNGN: Number(amountNGN) } : {}),
-        ...(amountStableCoin != null
-          ? { amountStableCoin: Number(amountStableCoin) }
-          : {}),
+        ...parsedAmounts,
         bankAccount,
         bankCode,
         bankName,
@@ -299,6 +431,7 @@ export function createOfframpRouter(
           accessTokenHash: creds.tokenHash,
           idempotencyKey,
           walletAddress,
+          requestHash,
           chain: order.chain ?? "stellar",
           coin: order.coin ?? "usdc",
           depositAddress: order.walletAddress,
@@ -312,7 +445,24 @@ export function createOfframpRouter(
       res.setHeader("Cache-Control", "no-store");
       res.status(201).json({ ...order, id: creds.orderId, accessToken: creds.token });
     } catch (err) {
-      sendLinqError(res, err);
+      // Two taps of the same request both miss the lookup above; the provider
+      // dedupes them to one order, and the second insert then trips
+      // @@unique([network, idempotencyKey]). The order exists and is fine, so the
+      // loser is answered as the replay it is instead of with a 500.
+      if (isUniqueViolation(err)) {
+        try {
+          const winner = await prisma.offrampOrder.findUnique({
+            where: { network_idempotencyKey: { network: net, idempotencyKey } },
+          });
+          if (winner) {
+            await replayOrder(res, winner, replayOf);
+            return;
+          }
+        } catch {
+          // Nothing of the database failure is passed on; fall through.
+        }
+      }
+      if (!res.headersSent) sendLinqError(res, err);
     }
   });
 

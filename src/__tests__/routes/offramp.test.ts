@@ -18,15 +18,17 @@ const mockFindUnique = jest.fn(async ({ where }: { where: Record<string, any> })
   return rows.find((r) => fields.every((f) => r[f] === value[f])) ?? null;
 });
 
+const mockRowCreate = jest.fn(async ({ data }: { data: Row }) => {
+  const row = { id: nextId++, createdAt: new Date("2026-01-01T00:00:00Z"), ...data };
+  rows.push(row);
+  return row;
+});
+
 jest.mock("../../db", () => ({
   prisma: {
     offrampOrder: {
       findUnique: (args: any) => mockFindUnique(args),
-      create: jest.fn(async ({ data }: { data: Row }) => {
-        const row = { id: nextId++, createdAt: new Date("2026-01-01T00:00:00Z"), ...data };
-        rows.push(row);
-        return row;
-      }),
+      create: (args: any) => mockRowCreate(args),
       update: jest.fn(async ({ where, data }: { where: Row; data: Row }) => {
         const row = where.id
           ? rows.find((r) => r.id === where.id)
@@ -106,6 +108,7 @@ beforeEach(() => {
   mockCreate.mockReset();
   mockStatus.mockReset();
   mockFindUnique.mockClear();
+  mockRowCreate.mockClear();
   mockCreate.mockImplementation(async () => linqOrder());
   mockStatus.mockImplementation(async (id: string) => ({
     id,
@@ -117,6 +120,8 @@ beforeEach(() => {
     updated: "2026-01-01T00:00:00Z",
   }));
   delete process.env.OFFRAMP_LOOKUP_MAX_FAILURES;
+  delete process.env.OFFRAMP_MAX_AMOUNT_NGN;
+  delete process.env.OFFRAMP_MAX_AMOUNT_STABLECOIN;
 });
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -461,5 +466,240 @@ describe("retrying an order creation", () => {
     expect(res.body.id).toMatch(/^ofr_[A-Za-z0-9_-]{22}$/);
     expect(rows[0].publicId).toBe(res.body.id);
     expect(JSON.stringify(res.body)).not.toContain(LINQ_ID);
+  });
+});
+
+describe("validating the amount", () => {
+  // Every one of these used to reach the provider: Number("abc") is NaN, and
+  // Number() also accepts negatives, zero, "" and booleans.
+  it.each([
+    ["a non-numeric string", "abc"],
+    ["a negative number", -5],
+    ["zero", 0],
+    ["an empty string", ""],
+    ["Infinity as a string", "Infinity"],
+    ["an exponent that overflows", "1e999"],
+    ["a boolean", true],
+    ["an array", [5]],
+    ["an object", { value: 5 }],
+  ])("answers 400 before any provider call for %s", async (_label, bad) => {
+    const res = await place(makeApp(), { amountStableCoin: bad });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/amountStableCoin/);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockFindUnique).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(0);
+  });
+
+  it("answers 400 for a non-numeric amountNGN, and names that field", async () => {
+    const res = await place(makeApp(), { amountStableCoin: undefined, amountNGN: "abc" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/amountNGN/);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("requires an amount of some kind", async () => {
+    const res = await place(makeApp(), { amountStableCoin: undefined });
+
+    expect(res.status).toBe(400);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("accepts an amount sent as a decimal string and passes the number on", async () => {
+    const res = await place(makeApp(), { amountStableCoin: "50.50" });
+
+    expect(res.status).toBe(201);
+    expect(mockCreate.mock.calls[0][0].amountStableCoin).toBe(50.5);
+  });
+
+  it("bounds naira and stablecoin separately", async () => {
+    // 200,000 is a small naira payout and an enormous USDC one.
+    const naira = await place(makeApp(), {
+      amountStableCoin: undefined,
+      amountNGN: 200_000,
+      idempotencyKey: "key-naira",
+    });
+    const usdc = await place(makeApp(), {
+      amountStableCoin: 200_000,
+      idempotencyKey: "key-usdc",
+    });
+
+    expect(naira.status).toBe(201);
+    expect(usdc.status).toBe(400);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an amount above the configured ceiling", async () => {
+    process.env.OFFRAMP_MAX_AMOUNT_STABLECOIN = "100";
+
+    const over = await place(makeApp(), { amountStableCoin: 101 });
+    const at = await place(makeApp(), { amountStableCoin: 100, idempotencyKey: "key-at" });
+
+    expect(over.status).toBe(400);
+    expect(at.status).toBe(201);
+  });
+
+  it("falls back to the default bound when the configured one is not a number", async () => {
+    // A typo in config used to become a bound of NaN, which rejects everything.
+    process.env.OFFRAMP_MAX_AMOUNT_STABLECOIN = "ten thousand";
+    process.env.OFFRAMP_MAX_AMOUNT_NGN = "-1";
+
+    const usdc = await place(makeApp(), { amountStableCoin: 50 });
+    const tooMuch = await place(makeApp(), {
+      amountStableCoin: 10_001,
+      idempotencyKey: "key-too-much",
+    });
+    const naira = await place(makeApp(), {
+      amountStableCoin: undefined,
+      amountNGN: 10_000_001,
+      idempotencyKey: "key-naira",
+    });
+
+    expect(usdc.status).toBe(201);
+    expect(tooMuch.status).toBe(400);
+    expect(naira.status).toBe(400);
+  });
+});
+
+describe("binding an idempotency key to the request", () => {
+  it("stores a keyed fingerprint that does not contain the bank details", async () => {
+    await place(makeApp());
+
+    expect(rows[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].requestHash).not.toContain("0123456789");
+  });
+
+  it.each([
+    ["bankAccount", { bankAccount: "9999999999" }],
+    ["bankCode", { bankCode: "044" }],
+    ["accountName", { accountName: "Someone Else" }],
+    [
+      "refundAddress",
+      { refundAddress: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBKOH" },
+    ],
+  ])("refuses a replay that changes only the %s", async (_field, change) => {
+    const app = makeApp();
+    const first = await place(app);
+    expect(first.status).toBe(201);
+    const tokenHash = rows[0].accessTokenHash;
+
+    const replay = await place(app, change);
+
+    expect(replay.status).toBe(409);
+    expect(replay.body.error).toMatch(/different order details/i);
+    expect(replay.body.accessToken).toBeUndefined();
+    expect(replay.body.replayed).toBeUndefined();
+    // Nothing new reached the provider, and the first order's token is untouched.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].accessTokenHash).toBe(tokenHash);
+  });
+
+  it("still treats an identical retry as a replay", async () => {
+    const app = makeApp();
+    await place(app);
+    const retry = await place(app);
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.replayed).toBe(true);
+  });
+
+  it("keeps the same fingerprint for the same request, and a different one for another", async () => {
+    await place(makeApp(), { idempotencyKey: "key-a" });
+    await place(makeApp(), { idempotencyKey: "key-b" });
+    await place(makeApp(), { idempotencyKey: "key-c", bankAccount: "9999999999" });
+
+    expect(rows[0].requestHash).toBe(rows[1].requestHash);
+    expect(rows[2].requestHash).not.toBe(rows[0].requestHash);
+  });
+});
+
+describe("concurrent duplicates", () => {
+  const uniqueViolation = () =>
+    Object.assign(
+      new Error("Unique constraint failed on the fields: (`network`,`idempotencyKey`)"),
+      { code: "P2002" },
+    );
+
+  // The second of two simultaneous taps: its lookup ran before the first tap's row
+  // was written (so it finds nothing), it created the order at the provider, and
+  // its insert then loses to the row that now exists.
+  async function placeLosingTheRace(app: express.Express, over: Record<string, unknown> = {}) {
+    mockFindUnique.mockImplementationOnce(async () => null);
+    mockRowCreate.mockImplementationOnce(async () => {
+      throw uniqueViolation();
+    });
+    return place(app, over);
+  }
+
+  it("answers 200 replayed, not 500, and returns our id and a fresh token", async () => {
+    const app = makeApp();
+    const first = await place(app);
+    expect(first.status).toBe(201);
+
+    const loser = await placeLosingTheRace(app);
+
+    expect(loser.status).toBe(200);
+    expect(loser.body.replayed).toBe(true);
+    expect(loser.body.id).toBe(first.body.id);
+    expect(loser.body.id).toMatch(/^ofr_[A-Za-z0-9_-]{22}$/);
+    expect(loser.body.accessToken).toMatch(/^oft_[A-Za-z0-9_-]{43}$/);
+    expect(loser.body.accessToken).not.toBe(first.body.accessToken);
+    expect(loser.headers["cache-control"]).toBe("no-store");
+    expect(rows).toHaveLength(1);
+
+    // The id is one the lookup route accepts, and the token it returns opens it.
+    const read = await request(makeApp())
+      .get(`/offramp/orders/${loser.body.id}`)
+      .set(auth(loser.body.accessToken));
+    expect(read.status).toBe(200);
+  });
+
+  it("never returns the provider's order id", async () => {
+    const app = makeApp();
+    await place(app);
+
+    const loser = await placeLosingTheRace(app);
+
+    expect(JSON.stringify(loser.body)).not.toContain(LINQ_ID);
+  });
+
+  it("does not let the race answer for a different wallet", async () => {
+    const app = makeApp();
+    await place(app);
+
+    const loser = await placeLosingTheRace(app, {
+      walletAddress: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBKOH",
+    });
+
+    expect(loser.status).toBe(409);
+    expect(loser.body.accessToken).toBeUndefined();
+    expect(loser.body.id).toBeUndefined();
+    expect(loser.text).not.toContain("GDEPOSITADDRESS");
+  });
+
+  it("does not let the race answer for different order details", async () => {
+    const app = makeApp();
+    await place(app);
+
+    const loser = await placeLosingTheRace(app, { bankAccount: "9999999999" });
+
+    expect(loser.status).toBe(409);
+    expect(loser.body.accessToken).toBeUndefined();
+  });
+
+  it("does not leak the database error if the winning row cannot be read back", async () => {
+    const app = makeApp();
+    mockRowCreate.mockImplementationOnce(async () => {
+      throw uniqueViolation();
+    });
+    // Nothing is there to adopt: the insert failed on a constraint we cannot explain.
+    const res = await place(app);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Offramp request failed" });
+    expect(res.text).not.toMatch(/Unique constraint|idempotencyKey|P2002/);
   });
 });
