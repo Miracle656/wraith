@@ -158,9 +158,21 @@ cheapest way to hold it correctly is not to hold it. **Any future change that ad
 a NIN to a stored shape changes what this service legally is.**
 
 An 11-digit shape check runs here so an obvious typo is answered without spending
-a verification attempt, which Linq rate-limits. `submitCustomerKyc` is
-deliberately **not** retried — a retried identity submission is a second
-verification attempt against that limit.
+a verification attempt, which Linq rate-limits.
+
+**Retries.** A NIN verifies once, ever, so a provider blip must not read as a
+refusal. `submitCustomerKyc` retries a provider **5xx** or a connection that got
+no answer, with 1s then 2s backoff, at most three attempts, all inside one 35s
+budget, which is under the clients' 40s ceiling. It never retries a **4xx**
+(`nin_already_used`, `invalid_nin_format`, a 429): those are answers, and each
+retry spends a rate-limited attempt. It never retries **its own timeout**
+either, because the provider may still be working on the NIN it already sent.
+
+Before any resend it asks `GET /b2b/customers/status`, which takes the reference
+alone. If the customer is already verified (the attempt landed and only the
+answer was lost), that is returned and the NIN is not sent again. If the status
+cannot be read either, the original failure is returned rather than resending
+blind.
 
 ### 3. Lock a rate
 

@@ -109,6 +109,20 @@ function retryAfterSeconds(response: Response): number | undefined {
 }
 
 /**
+ * How a request failed without an HTTP answer, when it did.
+ *
+ * The status alone cannot say: our own abort and a provider's 504 are both
+ * 504, and "unreachable" and a provider's 502 are both 502. The difference
+ * decides whether a NIN may be sent again — see {@link isRetryableKycFailure}.
+ */
+type Transport = "timeout" | "unreachable";
+type TransportError = LinqError & { transport?: Transport };
+
+function tagTransport(err: LinqError, transport: Transport): TransportError {
+  return Object.assign(err, { transport });
+}
+
+/**
  * One request. Returns typed data or throws {@link LinqError} carrying Linq's
  * own message, because their 400s name the actual problem — an unverified
  * customer, an unsupported coin — far better than anything we would invent.
@@ -152,12 +166,12 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     const waited = Date.now() - startedAt;
     if (err instanceof Error && err.name === "AbortError") {
       console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
-      throw new LinqError("Linq did not respond in time", 504);
+      throw tagTransport(new LinqError("Linq did not respond in time", 504), "timeout");
     }
     console.warn(
       `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    throw new LinqError("Could not reach Linq", 502);
+    throw tagTransport(new LinqError("Could not reach Linq", 502), "unreachable");
   } finally {
     clearTimeout(timer);
   }
@@ -372,6 +386,51 @@ export interface CustomerKycResult {
 }
 
 /**
+ * The whole NIN check's budget, retries, waits and status checks included.
+ *
+ * Under the clients' own 40s ceiling with room to spare, so a person is never
+ * told the check failed while this server is still running it — and the same
+ * figure every other provider operation here is held to.
+ */
+export const KYC_BUDGET_MS = TOTAL_BUDGET_MS;
+
+/**
+ * One attempt's ceiling. A NIN check reaches NIMC and is routinely slower than
+ * a lookup: at fifteen seconds we were abandoning answers that were on their
+ * way. Each attempt still gets only what is left of {@link KYC_BUDGET_MS}.
+ */
+export const KYC_ATTEMPT_TIMEOUT_MS = 30_000;
+
+/** Attempts in all, so at most two retries. */
+const KYC_MAX_ATTEMPTS = 3;
+
+/** Wait before the n-th retry (1-based): 1s, then 2s. */
+const kycBackoffMs = (retry: number) => 1_000 * retry;
+
+/**
+ * May a failed NIN submission be sent again?
+ *
+ * **Yes** for a provider 5xx — it answered, and the answer was that it failed
+ * (on 2026-10-14 the endpoint returned a 5xx in ~2.2s, consistently) — and for
+ * a connection that never got an answer.
+ *
+ * **Never** for a 4xx. `nin_already_used` and `invalid_nin_format` are answers,
+ * not failures, and a 429 is the provider telling us to stop; each retry would
+ * spend an attempt against a rate-limited provider and change nothing.
+ *
+ * **Not** for our own timeout. The provider may still be working on the NIN we
+ * sent, so sending it again is exactly the duplicate attempt this must never
+ * make. The person is told it timed out, which is true.
+ */
+export function isRetryableKycFailure(err: unknown): boolean {
+  if (!(err instanceof LinqError)) return false;
+  const transport = (err as TransportError).transport;
+  if (transport === "timeout") return false;
+  if (transport === "unreachable") return true;
+  return err.status >= 500;
+}
+
+/**
  * Verify a customer's identity by NIN.
  *
  * One call: Linq checks the NIN with Smile ID and marks the customer verified
@@ -382,22 +441,60 @@ export interface CustomerKycResult {
  * an incidental one, and the absence of a `nin` field on the result type is
  * what enforces it.
  *
- * Not retried. A verification attempt is rate-limited on Linq's side and may
- * have side effects with their identity provider, so a timeout here is
- * reported rather than replayed — the caller can ask the customer to try
- * again, which is honest, instead of us submitting the same identity twice.
+ * ## Retries
+ *
+ * A NIN verifies once, ever, against one customer reference, and a person who
+ * meets a provider blip cannot tell it from a refusal. So a provider failure
+ * is retried — see {@link isRetryableKycFailure} for exactly which — with a
+ * short backoff, inside {@link KYC_BUDGET_MS} for the whole operation.
+ *
+ * **The NIN is never resent to a route that has already answered.** A failure
+ * can hide a success: the provider may have verified the customer and then
+ * failed to tell us. Before any resend we ask `GET /b2b/customers/status`,
+ * which takes the reference alone. Verified already → that is the answer, and
+ * the NIN does not travel again. If even that question cannot be answered, we
+ * do not resend blind; the original failure is reported.
  */
-export function submitCustomerKyc(customerRef: string, nin: string): Promise<CustomerKycResult> {
-  return call<CustomerKycResult>("/b2b/customers/kyc", {
-    method: "POST",
-    body: { customerRef, nin },
-    // A NIN check reaches NIMC and is routinely slower than a lookup. At the
-    // default fifteen seconds we were abandoning answers that were on their
-    // way, and the provider's own reading of our empty error bodies is that
-    // the request is timing out before their response arrives. Still inside
-    // the clients' own 40s ceiling, so they never give up first.
-    timeoutMs: 30_000,
-  });
+export async function submitCustomerKyc(
+  customerRef: string,
+  nin: string,
+): Promise<CustomerKycResult> {
+  const deadline = Date.now() + KYC_BUDGET_MS;
+  const submit = () =>
+    call<CustomerKycResult>("/b2b/customers/kyc", {
+      method: "POST",
+      body: { customerRef, nin },
+      deadline,
+      timeoutMs: KYC_ATTEMPT_TIMEOUT_MS,
+    });
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await submit();
+    } catch (err) {
+      if (!isRetryableKycFailure(err) || attempt >= KYC_MAX_ATTEMPTS) throw err;
+
+      // Did the attempt that "failed" land anyway? Asked before any wait, so a
+      // verification that went through is reported as soon as we can see it.
+      let status: CustomerStatus;
+      try {
+        status = await call<CustomerStatus>("/b2b/customers/status", {
+          query: { customerRef },
+          deadline,
+        });
+      } catch {
+        throw err;
+      }
+      if (status.verified) {
+        return { customerRef, verified: true, status: status.status ?? "verified" };
+      }
+
+      // A wait that ends at or past the deadline leaves nothing to send in.
+      const wait = kycBackoffMs(attempt);
+      if (Date.now() + wait >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 // ─── Rate ────────────────────────────────────────────────────────────────────
