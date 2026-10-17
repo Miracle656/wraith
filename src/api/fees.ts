@@ -1,4 +1,8 @@
+import { createHash, timingSafeEqual } from "crypto";
 import { Router, type Request, type Response } from "express";
+
+import { requestNetwork } from "../middleware/network";
+import { feeReport, recordFeeQuotes } from "./feeLedger";
 
 /**
  * What Veil charges, answered by the server so the number is never in an APK.
@@ -72,6 +76,27 @@ export function feeForAmount(
   if (policy.max !== null) fee = Math.min(fee, policy.max);
   if (policy.min !== null) fee = Math.max(fee, policy.min);
   return fee.toFixed(STROOP_DP).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+/**
+ * Which rule decided a fee — what the ledger records so a charge can be
+ * explained later without re-deriving it from a policy that may have changed.
+ *
+ * `no_amount` is the floor told to a client that sent no amount; `floor` is
+ * the floor overriding a percent that came out smaller.
+ */
+export type FeeBasis = "percent" | "floor" | "cap" | "flat" | "no_amount";
+
+export function feeBasis(fee: PlatformFee, sent?: number): FeeBasis {
+  if (fee.percent === undefined) return "flat";
+  if (sent === undefined) return "no_amount";
+  const charged = Number(fee.amount);
+  const uncapped = Number(
+    feeForAmount(sent, { percent: Number(fee.percent), min: null, max: null }),
+  );
+  if (fee.max !== undefined && charged === Number(fee.max) && uncapped > charged) return "cap";
+  if (fee.min !== undefined && charged === Number(fee.min) && uncapped < charged) return "floor";
+  return "percent";
 }
 
 function validAmount(value: string | undefined): string | null {
@@ -162,6 +187,38 @@ export function configuredFees(sentAmount?: number): Record<string, PlatformFee>
   return fees;
 }
 
+/** The longest range one report may cover, so a request cannot scan the whole ledger. */
+export const MAX_REPORT_DAYS = 92;
+
+/** `YYYY-MM-DD` that is also a real calendar date. */
+function isUtcDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** A validated inclusive date range, or the reason it is not one. */
+export function reportRange(from: string, to: string): { from: string; to: string } | string {
+  if (!isUtcDate(from) || !isUtcDate(to)) return "from and to must be dates in YYYY-MM-DD form (UTC)";
+  const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
+  if (days < 1) return "from must not be after to";
+  if (days > MAX_REPORT_DAYS) return `A report covers at most ${MAX_REPORT_DAYS} days`;
+  return { from, to };
+}
+
+function bearer(req: Request): string {
+  const match = /^Bearer +(\S+)$/i.exec(String(req.headers.authorization ?? "").trim());
+  return match ? match[1] : "";
+}
+
+/** Constant-time comparison; hashing first makes the lengths equal. */
+function sameSecret(given: string, expected: string): boolean {
+  if (!given) return false;
+  const a = createHash("sha256").update(given).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 export function feesRouter(): Router {
   const router = Router();
 
@@ -182,6 +239,53 @@ export function feesRouter(): Router {
     // from "this backend is too old to know about fees" and does not read a
     // deliberate waiver as a failure.
     res.json(assets.length > 0 ? { enabled: true, fees } : { enabled: false, fees: {} });
+
+    // Recorded after the answer is sent, and never awaited: the person is in
+    // the middle of a payment, and a ledger outage must not become a failed
+    // send. `recordFeeQuotes` cannot throw. See `./feeLedger`.
+    void recordFeeQuotes(
+      requestNetwork(req),
+      sent,
+      Object.values(fees).map((fee) => ({ fee, basis: feeBasis(fee, sent) })),
+    );
+  });
+
+  /**
+   * What was charged, per UTC day and asset, and under which policy.
+   *
+   * Behind a bearer token, `VEIL_FEE_REPORT_TOKEN`: nothing in it identifies a
+   * person, but collected totals are the operator's business volume, not
+   * something to publish. Without the token configured the route answers 503,
+   * so a deployment never serves it open by accident.
+   */
+  router.get("/report", async (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    const expected = process.env.VEIL_FEE_REPORT_TOKEN?.trim();
+    if (!expected) {
+      res.status(503).json({ error: "Fee reporting is not configured on this deployment" });
+      return;
+    }
+    if (!sameSecret(bearer(req), expected)) {
+      res.setHeader("WWW-Authenticate", "Bearer");
+      res.status(401).json({ error: "A valid report token is required" });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const from = req.query["from"] === undefined ? today : String(req.query["from"]);
+    const to = req.query["to"] === undefined ? from : String(req.query["to"]);
+    const range = reportRange(from, to);
+    if (typeof range === "string") {
+      res.status(400).json({ error: range });
+      return;
+    }
+
+    try {
+      res.json(await feeReport(requestNetwork(req), range.from, range.to));
+    } catch (err) {
+      console.error(`[fees] report failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Could not read the fee ledger" });
+    }
   });
 
   return router;

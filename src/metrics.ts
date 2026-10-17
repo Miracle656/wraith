@@ -185,6 +185,35 @@ export function recordSkippedLedger(network: Network): void {
   ledgersSkippedTotal.inc({ network });
 }
 
+/**
+ * Fee quotes whose fee exceeded `VEIL_FEE_ALARM_PERCENT` of the amount priced.
+ *
+ * The fee is policy — percent, floor and cap — so a misconfiguration
+ * overcharges every user at once, and until now the only way to notice was
+ * reading the treasury's history on a block explorer. Alert on any increase.
+ * Labelled by asset and network only: never an amount, never an address.
+ */
+export const feeQuoteAlarmsTotal = new Counter({
+  name: "veil_fee_quote_alarms_total",
+  help: "Fee quotes whose fee exceeded VEIL_FEE_ALARM_PERCENT of the amount priced",
+  labelNames: ["network", "asset"] as const,
+  registers: [registry],
+});
+
+/**
+ * Fee quotes that could not be written to the ledger.
+ *
+ * The quote itself still succeeds — the user is mid-payment — so a failed
+ * write is otherwise silent, and a ledger with gaps reports totals that are
+ * quietly too low. Alert on any increase.
+ */
+export const feeQuoteRecordFailuresTotal = new Counter({
+  name: "veil_fee_quote_record_failures_total",
+  help: "Fee quotes that could not be written to the fee ledger",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
 /** Serialize the registry in Prometheus text exposition format. */
 export function renderMetrics(): Promise<string> {
   return registry.metrics();

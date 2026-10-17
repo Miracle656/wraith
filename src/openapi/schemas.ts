@@ -755,3 +755,51 @@ export const ngnCustomerStatusResponseSchema = z.object({
   status: z.string().optional(),
 });
 
+
+export const feeReportQuerySchema = z.object({
+  from: optionalQueryString("First UTC date to report, YYYY-MM-DD. Defaults to today."),
+  to: optionalQueryString("Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it."),
+});
+
+const feePolicySchema = z.object({
+  mode: z.enum(["flat", "percent"]),
+  assetCode: z.string(),
+  assetIssuer: z.string().nullable(),
+  destination: z.string().openapi({ description: "The fee destination — the address `/fees` already publishes." }),
+  percent: z.string().nullable(),
+  min: z.string().nullable(),
+  max: z.string().nullable(),
+  amount: z.string().nullable().openapi({ description: "Flat mode only: the fixed fee." }),
+});
+
+export const feeReportResponseSchema = z.object({
+  network: z.string(),
+  from: z.string(),
+  to: z.string(),
+  alarmPercent: z.number().openapi({ description: "VEIL_FEE_ALARM_PERCENT in force for this report." }),
+  days: z.array(
+    z.object({
+      date: z.string(),
+      assets: z.array(
+        z.object({
+          assetCode: z.string(),
+          assetIssuer: z.string().nullable(),
+          quotes: z.number().int(),
+          feesQuoted: z.string().openapi({ description: "Sum of every fee quoted — what clients were told to charge." }),
+          alarms: z.number().int(),
+          policyIds: z.array(z.string()),
+          collected: z.string().nullable().openapi({
+            description:
+              "What the fee destination received in this asset that day, per the index. " +
+              "Null when the asset is not indexed — which is not zero.",
+          }),
+          collectedNote: z.string().optional(),
+        }),
+      ),
+    }),
+  ),
+  policies: z.record(
+    z.string(),
+    z.object({ firstSeenAt: z.string(), policy: feePolicySchema }),
+  ),
+});

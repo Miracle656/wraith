@@ -16,6 +16,12 @@
     }
   ],
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
     "schemas": {},
     "parameters": {}
   },
@@ -5972,6 +5978,277 @@
           },
           "503": {
             "description": "Offramp not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fees/report": {
+      "get": {
+        "summary": "Platform fees charged, per UTC day and asset, with the policy behind them",
+        "description": "Internal endpoint. Not part of the public data API: an operator report over the fee ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.",
+        "x-internal": true,
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "First UTC date to report, YYYY-MM-DD. Defaults to today."
+            },
+            "required": false,
+            "description": "First UTC date to report, YYYY-MM-DD. Defaults to today.",
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it."
+            },
+            "required": false,
+            "description": "Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it.",
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "alarmPercent": {
+                      "type": "number",
+                      "description": "VEIL_FEE_ALARM_PERCENT in force for this report."
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "assets": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "assetCode": {
+                                  "type": "string"
+                                },
+                                "assetIssuer": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "quotes": {
+                                  "type": "integer"
+                                },
+                                "feesQuoted": {
+                                  "type": "string",
+                                  "description": "Sum of every fee quoted — what clients were told to charge."
+                                },
+                                "alarms": {
+                                  "type": "integer"
+                                },
+                                "policyIds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "collected": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "description": "What the fee destination received in this asset that day, per the index. Null when the asset is not indexed — which is not zero."
+                                },
+                                "collectedNote": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "assetCode",
+                                "assetIssuer",
+                                "quotes",
+                                "feesQuoted",
+                                "alarms",
+                                "policyIds",
+                                "collected"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "assets"
+                        ]
+                      }
+                    },
+                    "policies": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "firstSeenAt": {
+                            "type": "string"
+                          },
+                          "policy": {
+                            "type": "object",
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "flat",
+                                  "percent"
+                                ]
+                              },
+                              "assetCode": {
+                                "type": "string"
+                              },
+                              "assetIssuer": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "destination": {
+                                "type": "string",
+                                "description": "The fee destination — the address `/fees` already publishes."
+                              },
+                              "percent": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "min": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "max": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "amount": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Flat mode only: the fixed fee."
+                              }
+                            },
+                            "required": [
+                              "mode",
+                              "assetCode",
+                              "assetIssuer",
+                              "destination",
+                              "percent",
+                              "min",
+                              "max",
+                              "amount"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "firstSeenAt",
+                          "policy"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "network",
+                    "from",
+                    "to",
+                    "alarmPercent",
+                    "days",
+                    "policies"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong report token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The fee ledger could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Fee reporting is not configured on this deployment",
             "content": {
               "application/json": {
                 "schema": {

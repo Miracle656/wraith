@@ -495,3 +495,55 @@ model NgnOrder {
   @@index([network, status])
   @@schema("wraith")
 }
+
+// ─── Platform fee ledger ─────────────────────────────────────────────────────
+
+/// One fee policy for one asset, as `GET /fees` applied it.
+///
+/// Keyed by a hash of the policy itself, so the same configuration is the same
+/// row however many quotes it prices, and any change — a new percent, floor,
+/// cap, flat amount or destination — is a new row with its own `firstSeenAt`.
+/// That is what lets a fee be explained after the fact: every `FeeQuote` names
+/// the policy that produced it, and this table says when that policy appeared.
+model FeePolicy {
+  /// sha256 of the canonical policy JSON, hex, first 32 characters.
+  id          String   @id
+  /// `{ mode, assetCode, assetIssuer, destination, percent, min, max, amount }`
+  /// — everything that decides a fee, and nothing about who asked.
+  policy      Json
+  firstSeenAt DateTime @default(now())
+
+  @@schema("wraith")
+}
+
+/// One fee quoted by `GET /fees`, per asset.
+///
+/// **Nothing here identifies a person.** No IP, no user agent, no sender
+/// address — the request carries none, and none is taken. The only address
+/// is the fee destination, held inside the policy, which `/fees` publishes to
+/// anyone who asks. The amount and the time are what a quote *is*; neither
+/// names who wanted it.
+model FeeQuote {
+  id            Int      @id @default(autoincrement())
+  network       String
+  assetCode     String
+  /// Null for native XLM.
+  assetIssuer   String?
+  /// The amount priced against, in whole units of the asset. Null when the
+  /// client sent none — an old client, which is told the floor.
+  quotedAgainst String?
+  /// What the client was told to charge.
+  fee           Decimal  @db.Decimal(38, 7)
+  /// Which rule decided the fee: percent | floor | cap | flat | no_amount.
+  basis         String
+  /// The fee as a percentage of `quotedAgainst`. Null without an amount.
+  feePercent    Decimal? @db.Decimal(20, 7)
+  /// The fee exceeded VEIL_FEE_ALARM_PERCENT of the amount.
+  alarm         Boolean  @default(false)
+  policyId      String
+  quotedAt      DateTime @default(now())
+
+  @@index([network, quotedAt])
+  @@index([network, alarm, quotedAt])
+  @@schema("wraith")
+}
