@@ -14,9 +14,6 @@ import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-// Bound on how long shutdown will wait for in-flight requests to drain.
-const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS ?? "10000", 10);
-
 async function main() {
   // Converge the schema on every startup, so a deploy needs no separate
   // pre-deploy step.
@@ -80,43 +77,38 @@ async function main() {
   }
   console.log("[wraith] Database ready.");
 
+  // ── Start REST API + WebSocket server ─────────────────────────────────────
+  const app = createApp();
+  const server = http.createServer(app);
+
   // ── Graceful shutdown ──────────────────────────────────────────────────────
-  // `server` is created below; shutdown only runs on a signal, by which point
-  // it is assigned. Declared here so the handler can close over it.
-  let server: http.Server | undefined;
+  // Bound the drain so a stuck request cannot block shutdown forever.
+  const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS ?? "10000", 10);
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
-    try {
-      if (server) {
-        // Stop accepting new connections and wait for in-flight requests to
-        // finish, bounded by a timeout so a stuck request cannot block exit.
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => {
-            console.warn(
-              `[wraith] Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — forcing exit.`,
-            );
-            resolve();
-          }, SHUTDOWN_TIMEOUT_MS);
-          server!.close(() => {
-            clearTimeout(timer);
-            resolve();
-          });
-        });
-      }
-      await prisma.$disconnect();
-    } finally {
-      process.exit(0);
-    }
+
+    // Stop accepting new connections and wait for in-flight requests to drain.
+    const drained = new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    const timeout = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        console.warn(
+          `[wraith] Shutdown timed out after ${SHUTDOWN_TIMEOUT_MS}ms — forcing exit.`,
+        );
+        resolve();
+      }, SHUTDOWN_TIMEOUT_MS).unref();
+    });
+    await Promise.race([drained, timeout]);
+
+    await prisma.$disconnect();
+    process.exit(0);
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-
-  // ── Start REST API + WebSocket server ─────────────────────────────────────
-  const app = createApp();
-  server = http.createServer(app);
 
   // Attach WebSocket upgrade handler — clients connect to /subscribe/:address
   attachWebSocketServer(server);
@@ -161,7 +153,6 @@ async function main() {
 
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
-  console.error(`[wraith] Fatal error during start-up: ${message}`);
+  console.error(`[wraith] Fatal start-up error: ${message}`);
   process.exit(1);
 });
-
