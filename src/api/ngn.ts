@@ -413,8 +413,14 @@ export function createNgnRouter(
     }
     // Shape-checked here so an obvious typo is answered without spending a
     // verification attempt, which is rate-limited on Linq's side.
+    //
+    // It carries the provider's own documented code for the same condition.
+    // The clients branch on `invalid_nin_format`, and this check is where that
+    // condition is caught almost every time — without the code, the branch the
+    // apps wrote for it was unreachable in practice and a typo fell through to
+    // their generic 400 copy. Same condition, same code: not a mapping.
     if (!/^\d{11}$/.test(nin)) {
-      res.status(400).json({ error: "A NIN is 11 digits" });
+      res.status(400).json({ error: "A NIN is 11 digits", code: "invalid_nin_format" });
       return;
     }
 

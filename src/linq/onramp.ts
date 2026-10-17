@@ -55,6 +55,24 @@ function firstString(...values: unknown[]): string | undefined {
 }
 
 /**
+ * The message for a failure whose body gave no reason a person could read.
+ *
+ * It says what is known and nothing more. A 4xx is the provider refusing the
+ * request, so "rejected" is simply true; a 5xx is the provider failing, and
+ * calling that a rejection tells the user their request was at fault — a cause
+ * nobody sent. The KYC screens branch on `code`, not on this sentence, so the
+ * sentence must never be the thing that implies one. The status and any code
+ * ride along because they are facts, and they are what diagnoses the next one.
+ */
+export function unexplainedFailure(status: number, code?: string): string {
+  if (status >= 400 && status < 500) {
+    return code ? `Linq rejected the request (${code})` : "Linq rejected the request";
+  }
+  const detail = code ? `HTTP ${status}, ${code}` : `HTTP ${status}`;
+  return `Linq returned an error without giving a reason (${detail})`;
+}
+
+/**
  * One logical operation's whole budget, retries included — the same ceiling
  * `client.ts` uses, and for the same reason: a server that answers a person
  * has to finish before their client gives up and tells them it failed.
@@ -181,10 +199,8 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     if (!response.ok && plain && plain.length <= 200 && !/^\s*</.test(plain)) {
       throw new LinqError(plain, response.status, undefined, retryAfterSeconds(response));
     }
-    throw new LinqError(
-      response.ok ? "Linq returned a response we could not read" : "Linq rejected the request",
-      response.ok ? 502 : response.status,
-    );
+    if (response.ok) throw new LinqError("Linq returned a response we could not read", 502);
+    throw new LinqError(unexplainedFailure(response.status), response.status);
   }
 
   if (!response.ok) {
@@ -211,7 +227,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     // difference between diagnosing the next one and asking them to try again.
     const message =
       firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
-      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
+      unexplainedFailure(response.status, code);
     // Linq names the reference an already-registered identity belongs to, in a
     // `customerRef` field beside the code. Reading it is what lets
     // `provisionCustomer` adopt the existing reference instead of stranding the

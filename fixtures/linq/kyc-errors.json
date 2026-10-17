@@ -1,0 +1,146 @@
+{
+  "description": "Linq KYC failure responses for POST /b2b/customers/kyc, and what wraith answers for each on POST /ngn/customers/kyc. Shared by the backend tests and the Veil mobile and web clients; see fixtures/README.md.",
+  "documentedOn": "2026-10-14",
+  "documented": {
+    "invalid_nin_format": 400,
+    "nin_already_used": 409,
+    "nin_verification_failed": 422,
+    "kyc_provider_error": 502,
+    "kyc_internal_error": 500
+  },
+  "cases": [
+    {
+      "id": "invalid_nin_format",
+      "kind": "documented",
+      "provider": {
+        "status": 400,
+        "body": { "message": "The NIN provided is not in a valid format", "code": "invalid_nin_format" }
+      },
+      "veil": {
+        "status": 400,
+        "body": { "error": "The NIN provided is not in a valid format", "code": "invalid_nin_format" }
+      }
+    },
+    {
+      "id": "nin_already_used",
+      "kind": "documented",
+      "provider": {
+        "status": 409,
+        "body": {
+          "message": "This NIN has already been used to verify another customer",
+          "code": "nin_already_used",
+          "customerRef": "veil_fixture_existing_ref"
+        }
+      },
+      "veil": {
+        "status": 409,
+        "body": { "error": "This NIN has already been used to verify another customer", "code": "nin_already_used" }
+      }
+    },
+    {
+      "id": "nin_verification_failed",
+      "kind": "documented",
+      "provider": {
+        "status": 422,
+        "body": { "message": "NIN verification failed", "code": "nin_verification_failed" }
+      },
+      "veil": {
+        "status": 422,
+        "body": { "error": "NIN verification failed", "code": "nin_verification_failed" }
+      }
+    },
+    {
+      "id": "kyc_provider_error",
+      "kind": "documented",
+      "provider": {
+        "status": 502,
+        "body": { "message": "The identity provider returned an error", "code": "kyc_provider_error" }
+      },
+      "veil": {
+        "status": 502,
+        "body": { "error": "The identity provider returned an error", "code": "kyc_provider_error" }
+      }
+    },
+    {
+      "id": "kyc_internal_error",
+      "kind": "documented",
+      "provider": {
+        "status": 500,
+        "body": { "message": "An internal error occurred during KYC", "code": "kyc_internal_error" }
+      },
+      "veil": {
+        "status": 502,
+        "body": { "error": "An internal error occurred during KYC", "code": "kyc_internal_error" }
+      }
+    },
+    {
+      "id": "undocumented_code_with_message",
+      "kind": "undocumented",
+      "provider": {
+        "status": 422,
+        "body": { "message": "Name does not match NIN record", "code": "nin_name_mismatch" }
+      },
+      "veil": {
+        "status": 422,
+        "body": { "error": "Name does not match NIN record", "code": "nin_name_mismatch" }
+      }
+    },
+    {
+      "id": "undocumented_code_without_message",
+      "kind": "undocumented",
+      "provider": {
+        "status": 503,
+        "body": { "code": "kyc_queue_unavailable" }
+      },
+      "veil": {
+        "status": 502,
+        "body": { "error": "Linq returned an error without giving a reason (HTTP 503, kyc_queue_unavailable)", "code": "kyc_queue_unavailable" }
+      }
+    },
+    {
+      "id": "no_code_empty_object_5xx",
+      "kind": "no_code",
+      "provider": { "status": 500, "body": {} },
+      "veil": {
+        "status": 502,
+        "body": { "error": "Linq returned an error without giving a reason (HTTP 500)" }
+      }
+    },
+    {
+      "id": "no_code_unrelated_fields_4xx",
+      "kind": "no_code",
+      "provider": { "status": 422, "body": { "ok": false } },
+      "veil": {
+        "status": 422,
+        "body": { "error": "Linq rejected the request" }
+      }
+    },
+    {
+      "id": "no_code_blank_message_and_code",
+      "kind": "no_code",
+      "provider": { "status": 500, "body": { "message": "   ", "code": "" } },
+      "veil": {
+        "status": 502,
+        "body": { "error": "Linq returned an error without giving a reason (HTTP 500)" }
+      }
+    },
+    {
+      "id": "no_code_empty_body",
+      "kind": "no_code",
+      "provider": { "status": 502, "rawBody": "" },
+      "veil": {
+        "status": 502,
+        "body": { "error": "Linq returned an error without giving a reason (HTTP 502)" }
+      }
+    },
+    {
+      "id": "no_code_html_gateway_page",
+      "kind": "no_code",
+      "provider": { "status": 502, "rawBody": "<html><body><h1>502 Bad Gateway</h1></body></html>" },
+      "veil": {
+        "status": 502,
+        "body": { "error": "Linq returned an error without giving a reason (HTTP 502)" }
+      }
+    }
+  ]
+}

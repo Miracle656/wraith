@@ -417,14 +417,15 @@ describe("call() error parsing", () => {
   });
 
   // An HTML error page is a document, not a message — echoing it would put a
-  // gateway's markup on a user's screen.
+  // gateway's markup on a user's screen. Nor is a gateway failure the request
+  // being "rejected": that would blame the user for a cause nobody sent.
   it("refuses to echo an HTML error page", async () => {
     global.fetch = jest
       .fn()
       .mockResolvedValue(raw(502, "<html><body>502 Bad Gateway</body></html>")) as never;
-    await expect(submitCustomerKyc("veil_abc", "12345678901")).rejects.toThrow(
-      "Linq rejected the request",
-    );
+    const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
+    expect(err.message).toBe("Linq returned an error without giving a reason (HTTP 502)");
+    expect(err.message).not.toContain("<html>");
   });
 
   // Three testers in a row met the bare fallback on a NIN check, which says
@@ -451,11 +452,20 @@ describe("call() error parsing", () => {
     expect(err.message).toBe("Name does not match NIN record");
   });
 
+  // The fallback states what is known — that it failed, and the status — and
+  // nothing more. On a 5xx "rejected the request" would imply the request was
+  // at fault, which is a cause the provider never sent. (W087)
   it("falls back only when the body names no reason at all", async () => {
     global.fetch = jest.fn().mockResolvedValue(raw(500, JSON.stringify({ ok: false }))) as never;
     const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
     expect(err).toBeInstanceOf(LinqError);
-    expect(err.message).toBe("Linq rejected the request");
+    expect(err.message).toBe("Linq returned an error without giving a reason (HTTP 500)");
     expect(err.code).toBeUndefined();
+  });
+
+  it("still calls a reasonless 4xx a rejection, because it is one", async () => {
+    global.fetch = jest.fn().mockResolvedValue(raw(422, JSON.stringify({ ok: false }))) as never;
+    const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
+    expect(err.message).toBe("Linq rejected the request");
   });
 });
