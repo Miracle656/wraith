@@ -330,7 +330,9 @@ export function createNgnRouter(
   /**
    * One-time per person, not per order. Safe to call again: Linq returns the
    * existing customer with `created: false`, so a client retrying after a
-   * dropped response cannot create two customers for one person.
+   * dropped response cannot create two customers for one person. Keyed on
+   * `customerRef` alone — a repeat with different details keeps the first
+   * ones. See `provisionCustomer` and docs/idempotency.md.
    */
   router.post("/customers", async (req: Request, res: Response) => {
     const { customerRef, firstName, lastName, email, phone } = req.body ?? {};

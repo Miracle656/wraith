@@ -105,9 +105,11 @@ type RateLimited = LinqError & { retryAfterMs?: number };
  * All Veil users share one provider key, and the provider limits it. A user
  * creating a cash-out got "rate limit exceeded, please wait" and succeeded on
  * a second tap: the limit had cleared within a second or two, so the app should
- * have waited, not the user. A 429 means the request was refused before any
- * work was done, so repeating it (order creation included, with the same
- * idempotencyKey) cannot create anything twice.
+ * have waited, not the user. A 429 is taken to mean the request was refused
+ * before any work was done, so repeating it (order creation included, with the
+ * same idempotencyKey) cannot create anything twice. That is the conventional
+ * meaning rather than one Linq has stated; the fake provider encodes it, so a
+ * correction there fails the test that relies on it.
  */
 async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   const deadline = init.deadline ?? Date.now() + TOTAL_BUDGET_MS;
@@ -346,8 +348,22 @@ export async function createOfframpOrder(
  * Order creation can fail transiently at the provider — "Wallet generation
  * failed" is it not managing to mint the deposit address — and the user was
  * shown that and left to try again by hand. A 4xx is about the request and
- * is never retried. The retry sends the identical body, idempotencyKey
- * included, so the provider can recognise it as the same order.
+ * is never retried.
+ *
+ * The retry sends the identical body. Whether that is SAFE depends on the
+ * caller, not on this function, because a 5xx or a dropped connection does not
+ * mean nothing was created — Linq may have done the work and lost the answer:
+ *
+ *  - offramp orders carry an idempotencyKey, and Linq is believed to return the
+ *    original order for a key it has seen. Believed, not documented to us.
+ *  - customers are keyed on customerRef, and Linq returns the existing one.
+ *  - onramp orders and bills carry NO key. A retry here after a lost answer
+ *    places a second, unpaid order; the caller is given the second.
+ *
+ * Each case is pinned against the fake provider in
+ * `__tests__/linq/idempotency.test.ts`, and docs/idempotency.md says why the
+ * unkeyed ones do not move money twice. Wrap nothing new in this without
+ * deciding which of those it is.
  *
  * `deadline` bounds the pair. Without it the retry doubled the caller's whole
  * budget, which is how a 35s ceiling silently became 70.

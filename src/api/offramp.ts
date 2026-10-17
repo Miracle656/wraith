@@ -205,6 +205,21 @@ export function createOfframpRouter(
       // The key comes from the caller and is never generated here: regenerating
       // it on a retry is precisely how one order becomes two, and the second one
       // also gets paid for.
+      //
+      // Scope: one key per network, enforced by @@unique([network,
+      // idempotencyKey]). Lifetime: as long as the row, and rows are never
+      // deleted, so a key is spent for good. Full write-up in
+      // docs/idempotency.md.
+      //
+      // This check only covers orders we have RECORDED. Two cases get past it
+      // and are held to one order by Linq deduplicating on the key instead —
+      // a belief about the provider, encoded in the fake and pinned in
+      // __tests__/routes/idempotency.test.ts:
+      //  - Linq created the order but our insert below failed, and the client
+      //    retried. No row, so the retry goes back to Linq with the same key.
+      //  - Two identical requests in flight together. Both miss here; the
+      //    unique index refuses the second insert, and that caller gets a 500
+      //    for an order that exists. Retrying then replays it.
       const existing = await prisma.offrampOrder.findUnique({
         where: { network_idempotencyKey: { network: net, idempotencyKey } },
       });

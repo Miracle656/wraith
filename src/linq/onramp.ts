@@ -272,7 +272,11 @@ export interface ProvisionCustomerParams {
 export interface LinqCustomer {
   customerRef: string;
   verified: boolean;
-  /** False when the customer already existed — provisioning is idempotent. */
+  /**
+   * False when the customer already existed at the moment Linq answered —
+   * provisioning is idempotent. Not "this request created nothing": see
+   * {@link provisionCustomer} on dropped responses.
+   */
   created: boolean;
   /**
    * True when `customerRef` is **not** the one that was asked for.
@@ -291,7 +295,8 @@ export interface LinqCustomer {
  * Safe to call again with the same `customerRef`: Linq returns the existing
  * customer unchanged with `created: false` rather than erroring or duplicating,
  * which means a client that retries after a dropped response cannot create two
- * customers for one person.
+ * customers for one person. That rests on Linq's behaviour, which the fake
+ * provider encodes and `__tests__/linq/idempotency.test.ts` holds us to.
  *
  * **The reference that comes back is not always the one that went in.** An
  * email already registered under another reference is refused with
@@ -308,6 +313,14 @@ export interface LinqCustomer {
  * they sent. A reference that drifts between calls is a permanent lockout for
  * that person — `reusedExistingRef` is set so a caller can tell this happened
  * rather than having to compare strings.
+ *
+ * Two further things it does NOT promise:
+ *  - The details you sent are stored. The key is the reference alone, and an
+ *    existing customer comes back *unchanged* — provisioning again with a
+ *    corrected email or phone silently keeps the old one.
+ *  - `created` says whether *this call* created them. After a dropped response
+ *    the internal retry finds the customer the first attempt made, and answers
+ *    `created: false` for a person who did not exist a second earlier.
  */
 export async function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
@@ -465,6 +478,14 @@ export interface OnrampOrderResponse {
  * carries a warning that funds sent on the wrong chain are unrecoverable. The
  * mapping is therefore explicit and total, so a new coin cannot silently fall
  * through to a default.
+ *
+ * **Not idempotent.** No key is sent and Linq documents none, yet this is
+ * retried on a 5xx or a dropped connection — so a retry after Linq created the
+ * order and lost the answer places a second one, and the customer is shown the
+ * second. That is tolerable only because creating an order moves no money: the
+ * orphan has no deposit and lapses at `expiresAt`. A client that resubmits
+ * gets a second order the same way. Pinned in `__tests__/linq/idempotency.test.ts`;
+ * see docs/idempotency.md before adding a key or removing the retry.
  */
 // `async` deliberately, matching `createOfframpOrder`: the guards below must
 // surface as a rejection rather than a synchronous throw, so a caller that
