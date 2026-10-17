@@ -26,8 +26,8 @@ import { resolveNetwork, type Network } from "../network";
 // The native XLM SAC on mainnet and testnet. These are fixed by the network and
 // never change, so we short-circuit detection (and any RPC call) for them.
 const KNOWN_SAC_IDS = new Set<string>([
-  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", // mainnet native XLM
-  "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4", // testnet native XLM
+  "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA", // mainnet native XLM
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", // testnet native XLM
 ]);
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
