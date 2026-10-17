@@ -60,6 +60,87 @@ export interface LinqWebhookEvent {
 }
 
 /**
+ * Plausible bounds for naira amounts on an onramp/offramp order.
+ *
+ * Justification (not a magic number):
+ *   - Nigeria's per-transaction real-time bank transfer limits are in the low
+ *     millions of naira; the CBN daily outbound cap for retail accounts is
+ *     on the order of ₦10m. An individual onramp order therefore lives
+ *     comfortably below ₅100,000,000 (100 million).
+ *   - The bottom bound is the smallest unit that makes economic sense for a
+ *     stablecoin-linked order: …100 (100 naira). Below that the fees dominate
+ *     the transfer and the order is almost certainly a scale bug.
+ *   - The 2026-10-14 incident was exactly a 100× scale error, so the bounds
+ *     are chosen to be wide enough to accept legitimate orders but narrow
+ *     enough that a 100× drift in either direction falls outside them.
+ */
+export const MIN_PLAUSIBLE_NGN = 100;
+export const MAX_PLAUSIBLE_NGN = 100_000_000;
+
+/**
+ * The factor by which the provider scale was observed to be wrong on
+ * 2026-10-14. Used to detect the old scale in stored rows and in tests.
+ */
+export const NGN_SCALE_FACTOR = 100;
+
+/**
+ * Whether a naira amount is plausible for an order of this size.
+ *
+ * This is a safety check, not a business rule: the goal is to notice a scale
+ * change (like the 100× incident) before it is stored or displayed.
+ */
+export function isPlausibleNgn(amountNGN: number | undefined): boolean {
+  if (typeof amountNGN !== "number" || !Number.isFinite(amountNGN)) return false;
+  return amountNGN >= MIN_PLAUSIBLE_NGN && amountNGN <= MAX_PLAUSIBLE_NGN;
+}
+
+/**
+ * Result of cross-checking a webhook's `amountNGN` against the order's own
+ * naira amount. Both values are known at this point, so a disagreement is a
+ * signal, not an ambiguity.
+ */
+export type NgnCrossCheckResult =
+  | { ok: true }
+  | { ok: false; reason: string; factor?: number };
+
+/**
+ * Cross-check the webhook's `amountNGN` against the order's own naira amount.
+ *
+ * The order amount is the authoritative value wraith created the order with;
+ * the webhook value is what the provider claims happened. They must agree.
+ *
+ * When they disagree by exactly the historical 100× factor, we report that
+ * explicitly so the caller can flag it as the known provider scale bug.
+ */
+export function crossCheckAmountNgn(webhookAmountNGN: number | undefined, orderAmountNGN: number | undefined): NgnCrossCheckResult {
+  if (typeof webhookAmountNGN !== "number" || !Number.isFinite(webhookAmountNGN)) {
+    return { ok: false, reason: "webhook amountNGN missing or non-numeric" };
+  }
+  if (typeof orderAmountNGN !== "number" || !Number.isFinite(orderAmountNGN)) {
+    return { ok: false, reason: "order amountNGN missing or non-numeric" };
+  }
+  if (orderAmountNGN <= 0) {
+    return { ok: false, reason: "order amountNGN not positive" };
+  }
+  if (webhookAmountNGN === orderAmountNGN) return { ok: true };
+
+  const ratio = webhookAmountNGN / orderAmountNGN;
+  const factor = ratio >= 1 ? ratio : 1 / ratio;
+  if (Math.abs(factor - NGN_SCALE_FACTOR) < 0.01) {
+    return {
+      ok: false,
+      reason: `webhook amountNGN is ${NGN_SCALE_FACTOR}× off the order (provider scale bug)`,
+      factor: NGN_SCALE_FACTOR,
+    };
+  }
+  return {
+    ok: false,
+    reason: `webhook amountNGN (${webhookAmountNGN}) disagrees with order amountNGN (${orderAmountNGN})`,
+    factor,
+  };
+}
+
+/**
  * Parse a verified body into an event, or null when it is not one.
  *
  * Signature verification proves the sender, not the shape — a valid signature

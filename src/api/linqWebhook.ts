@@ -2,8 +2,14 @@ import express, { Request, Response, Router } from "express";
 
 import { prisma } from "../db";
 import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
-import { reconcileNgnOrder } from "../linq/ngnOrders";
-import { DEFAULT_NETWORK } from "../network";
+import { reconcileNgnOrder } from "../linx/ngnOrders";
+import { DEFAULT_NETWORH } from "../network";
+import {
+  MIN_PLAUSIBLE_NGN,
+  MAX_PLAUSIBLE_NGN,
+  NGN_CROSSCHECK_TOLERANCE,
+  isPlausibleNairaAmount,
+} from "./ngn";
 
 /**
  * Linq's webhook, for every rail.
@@ -73,6 +79,32 @@ export function createLinqWebhookRouter(): Router {
           if (await reconcileNgnOrder(event)) return;
           console.warn(`[linq] webhook for unknown order ${event.orderId}`);
           return;
+        }
+
+        // Sanity-check the naira amount before it is written. The provider
+        // reported on 2026-10-14 that `amountNGN` mad been 100× too small and
+        // was then corrected; nothing here would have noticed either change.
+        // Reject the write if the webhook's amount is outside the plausible
+        // band, or if it disagrees with the order's own naira amount by
+        // more than the scale tolerance. Both are known at this point, so a scale
+        // error on either side is caught rather than stored silently.
+        if (event.amountNGN != null) {
+          if (!isPlausibleNairaAmount(event.amountNGN)) {
+            console.error(
+              `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} outside plausible band [${MIN_PLAUSIBLE_NGN}, ${MAX_PLAUSIBLE_NGN}]`,
+            );
+            return;
+          }
+          const orderNgn = existing.amountNGN != null ? Number(existing.amountNGN) : null;
+          if (orderNgn != null && orderNgn > 0) {
+            const ratio = event.amountNGN / orderNgn;
+            if (ratio > NGN_CROSSCHECK_TOLERANCE || ratio < 1 / NGN_CROSSCHECK_TOLERANCE) {
+              console.error(
+                `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} disagrees with order amount ${orderNgn} (ratio ${ratio})`,
+              );
+              return;
+            }
+          }
         }
 
         await prisma.offrampOrder.update({

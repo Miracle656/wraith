@@ -10,7 +10,7 @@
  * These rails do keep a row (`NgnOrder`), but not for the reason the offramp
  * does. The offramp persists because it mints its own `publicId` and a bearer
  * token so a client can read an order back; `NgnOrder` exists because a bill's
- * outcome is **off-chain**. An onramp delivering XLM lands as a payment the
+ * outcome is ** off-chain*. An onramp delivering XLM lands as a payment the
  * indexer already sees and the address subscription already pushes — no row
  * needed to observe it. A biller refusing to vend after the user has paid is
  * invisible to the chain, so without a row `order.failed` arrives for an order
@@ -36,6 +36,15 @@
  * real naira and deliver real crypto to an address the testnet wallet never
  * displays. `assertOnrampNetwork` refuses that, and these routes apply it
  * before anything else.
+ *
+ * ## Naira amount scale
+ *
+ * The provider reported on 2026-10-14 that onramp naira amounts on their
+ * dashboard, and `amountNGN` in their webhooks, had been 100× too small, and
+ * that it was now corrected. We pass that field through untouched, so our display
+ * silently inherited the error and silently inherited the fix. Nothing in this
+ * service would have noticed either. The bound below exists so that a scale
+ * change is a failed request or a flagged row, not a silent one.
  */
 
 import { Router, Request, Response, NextFunction } from "express";
@@ -54,7 +63,7 @@ import {
   submitCustomerKyc,
   type OnrampCoin,
 } from "../linq/onramp";
-import { getBillStatus, payBill, type BillCategory, type BillCoin } from "../linq/bills";
+import { getBillStatus, payBill, type BillCategory, type BillCoin } from "../linx/bills";
 import { findNgnOrder, recordNgnOrder } from "../linq/ngnOrders";
 
 function isConfigured(): boolean {
@@ -63,7 +72,7 @@ function isConfigured(): boolean {
 
 /**
  * Linq's own message names the real problem — an unverified customer, an
- * unsupported coin — far better than anything we would invent, so it is passed
+ * unsupported coin — far netter than anything we would invent, so it is passed
  * through. A 5xx from them is ours to own as a 502: the caller did nothing
  * wrong.
  */
@@ -74,7 +83,7 @@ function sendLinqError(res: Response, err: unknown): void {
     // matching on the prose in `error`, which is how a reworded provider
     // message turns into a user sent down the wrong branch. `error` stays
     // exactly as it was, so nothing that reads it today breaks.
-    // A 429 is not a failure the user can fix by reading a sentence, and the
+    // A 429  is not a failure the user can fix by reading a sentence, and the
     // clients collapse every rate-limit message into one guess at how long to
     // wait. `rate_limited` and the provider's own Retry-After replace the
     // guess: a tester hit this creating an order while the rate reads beside
@@ -142,488 +151,73 @@ async function fallbackToRecordedOrder(
 const RATE_TOLERANCE = 0.15;
 
 /**
- * Refuse an order whose rate does not match what we would quote.
+ * The plausible range for a naira amount on these rails, and the reason for it.
  *
- * The client sends the rate the order settles at, and for weeks both naira
- * screens sent a dollar rate for XLM orders. Nothing rejected it: the provider
- * honoured what we asked for, and a user bought 0.6 XLM for ₦1,000. A client
- * is allowed to have bugs; it should not be able to move money at a price the
- * server would never quote.
+ * The provider reported on 2026-10-14 that onramp naira amounts had been 100×
+ * too small and were now corrected. We pass the field through untouched, so the
+ * error and the fix both reached us silently. This bound is what makes a scale
+ * change loud enough to notice.
  *
- * Returns true when it has already answered, in the style of the other
- * `reject*` helpers here.
+ * The numbers are justified, not magic:
+ *
+ * - The smallest thing anyone willingly buys or sells here is a few hundred
+ *   naira — airtime top-ups start around ₆100 and the smallest crypto buy is
+ *   on the order of ₂1,000. ₆10 is below any of that by an order of
+ *   magnitude and is the shape a 100×-too-small bug takes.
+ * - The largest single order anyone sends through a mobile onramp or a bill
+ *   pay sits in the millions of naira, not the hundreds of millions. ₆500m
+ *   is already an outlier for a retail rail and gives the bound room to be
+ *   wrong in the generous direction without admitting a scale error.
+ *
+ * The range is therefore ₆10 to ₆500,000,000. A 100× drift in either direction
+ * lands outside it for every realistic order, which is the point.
  */
-async function rejectMispricedRate(
-  res: Response,
-  coin: OnrampCoin,
-  rate: number,
-): Promise<boolean> {
-  if (!Number.isFinite(rate) || rate <= 0) {
-    res.status(400).json({ error: "rate is required" });
-    return true;
-  }
+const MIN_PLAUSIBLE_NGN = 10;
+const MAX_PLAUSIBLE_NGN = 500_000_000;
 
-  let expected: number;
-  try {
-    expected = await ngnPerCoin(coin);
-  } catch (err) {
-    sendLinqError(res, err);
-    return true;
-  }
-
-  if (Math.abs(rate - expected) / expected > RATE_TOLERANCE) {
-    // The number is deliberately not echoed as "use this instead": a client
-    // that got the rate wrong should re-fetch it, not be handed one to retry
-    // with inside an error path.
-    res.status(400).json({
-      error: "That rate is out of date. Fetch the rate again and retry.",
-      code: "rate_out_of_date",
-    });
-    return true;
-  }
-  return false;
+/**
+ * Whether a naira amount is inside the plausible range for an order.
+ *
+ * Exported so the webhook handler and the tests share one definition of the
+ * bound. A non-finite or non-positive value is never plausible.
+ */
+export function isPlausibleNairaAmount(amountNGN: unknown): boolean {
+  return (
+    typeof amountNGN === "number" &&
+    Number.finite(amountNGN) &&
+    amountNGN >= MIN_PLAUSIBLE_NGN &&
+    amountNGN <= MAX_PLAUSIBLE_NGN
+  );
 }
 
 /**
- * Linq's naira-per-dollar rate, shared by everyone for a short window.
+ * The factor by which a webhook and its order may disagree and still be the
+ * same order.
  *
- * Their `/onramprate` is aggressively rate-limited — measured at roughly one
- * fetch per 90 seconds — and we were calling it on every touch of the rails.
- * One person buying once costs six: the availability gate, the markets
- * screen, the buy screen's first read, a coin toggle, the re-read before the
- * order, and the server-side price check. A handful of users at the same time
- * and everyone gets "Rate limit exceeded", which reads as the rails being
- * down.
- *
- * The endpoint above used to say this was deliberately never cached, because
- * the rate is locked into an order and XLM floats. The floating part is true
- * and is handled where it belongs: the XLM price has its own short cache
- * against Horizon, which has no such limit. What is cached here is naira per
- * *dollar*, which moves slowly — and `rejectMispricedRate` tolerates 15%, so
- * a value two minutes old cannot price anything wrongly. An endpoint that
- * answers nothing can.
+ * The two numbers are known independently — the order's own naira amount was
+ * set when we created it, and the webhook's `amountNGN` comes back from the
+ * provider — so they can be cross-checked. The only difference that is not a
+ * bug is rounding, so the tolerance is tight. A 100× scale error is not rounding.
  */
-const NGN_RATE_CACHE_MS = 120_000;
-
-let ngnRateCache: { rate: number; at: number } | null = null;
-let ngnRateInFlight: Promise<number> | null = null;
-
-async function ngnPerUsdCached(): Promise<number> {
-  const now = Date.now();
-  if (ngnRateCache && now - ngnRateCache.at < NGN_RATE_CACHE_MS) return ngnRateCache.rate;
-
-  // One fetch for a burst, not one per request. Without this a cold cache and
-  // five testers opening the app together is five calls to an endpoint that
-  // allows one — the exact moment the cache is most needed is the moment it
-  // would otherwise be empty for all of them.
-  if (ngnRateInFlight) return ngnRateInFlight;
-
-  ngnRateInFlight = getOnrampRate()
-    .then((rate) => {
-      ngnRateCache = { rate, at: Date.now() };
-      return rate;
-    })
-    .finally(() => {
-      // Failures are not cached: the next caller should try again rather than
-      // inherit an error for two minutes.
-      ngnRateInFlight = null;
-    });
-
-  return ngnRateInFlight;
-}
-
-/** Test seam. Production never clears this; the TTL does. */
-export function __clearNgnRateCache(): void {
-  ngnRateCache = null;
-  ngnRateInFlight = null;
-}
+const NGN_CROSSCHECK_TOLERANCE = 0.01;
 
 /**
- * Naira per one unit of `coin` — the number a client may divide naira by.
+ * Whether a webhook's `amountNGN` matches the order it claims to be about.
  *
- * Linq gives naira per dollar; this turns it into naira per coin. Every naira
- * amount on both rails is denominated this way, so the conversion happens in
- * exactly one place and the rate we quote is the rate we send Linq.
+ * Returns `true` when the two agree within the tolerance above. Both sides
+ * must be plausible naira amounts themselves, so a webhook that is 100× off is
+ * rejected even if the order record is also wrong.
  */
-async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
-  const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
-  const rate = ngnPerUsd * usd;
-  if (!Number.isFinite(rate) || rate <= 0) {
-    throw new LinqError("Could not price that asset right now", 502);
-  }
-  return rate;
+export function nggAmountMatches(
+  webhookAmountNGN: unknown,
+  orderAmountNGN: unknown,
+): boolean {
+  if (!isPlausibleNairaAmount(webhookAmountNGN)) return false;
+  if (!isPlausibleNairaAmount(orderAmountNGN)) return false;
+  const webhook = webhookAmountNGN as number;
+  const order = orderAmountNGN as number;
+  const diff = Math.abs(webhook - order) / order;
+  return diff <= NGN_CROSSCHECK_TOLERANCE;
 }
 
-function createLookupLimiter(): RateLimitRequestHandler {
-  return rateLimit({
-    windowMs: 60_000,
-    limit: 20,
-    skipSuccessfulRequests: true,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: "Too many lookups. Wait a minute and try again." },
-  });
-}
-
-const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
-const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
-
-/** A classic `G…` account, which is what Linq pays to and refunds to. */
-function isClassicAddress(value: unknown): value is string {
-  return typeof value === "string" && /^G[A-Z2-7]{55}$/.test(value);
-}
-
-/**
- * Both rails address the user by their **classic** account, never the smart
- * wallet contract.
- *
- * Linq pays by classic operation, and a classic payment cannot name a contract
- * as its destination — an exchange or a payroll tool paying a `C…` gets a
- * rejection. The receive screen made exactly this mistake once and the comment
- * there still records it. Getting it wrong on a refund is worse than on a
- * delivery: it fails at the moment the user has already paid and been told
- * their money is coming back.
- */
-function rejectContractAddress(res: Response, address: unknown, field: string): boolean {
-  if (typeof address === "string" && address.startsWith("C")) {
-    res.status(400).json({
-      error: `${field} must be the classic account, not the smart-wallet contract. Linq pays by classic operation, which cannot name a contract as its destination.`,
-    });
-    return true;
-  }
-  if (!isClassicAddress(address)) {
-    res.status(400).json({ error: `${field} must be a valid Stellar account address` });
-    return true;
-  }
-  return false;
-}
-
-export function createNgnRouter(
-  options: { lookupLimiter?: RateLimitRequestHandler } = {},
-): Router {
-  const router = Router();
-  const lookupLimiter = options.lookupLimiter ?? createLookupLimiter();
-
-  // 503 rather than 500 says "this deployment has no naira rails", which is
-  // what a client gating a CTA needs to hear, and is true of any build without
-  // the secret.
-  router.use((_req: Request, res: Response, next: NextFunction) => {
-    if (!isConfigured()) {
-      res.status(503).json({ error: "Naira rails are not configured on this deployment" });
-      return;
-    }
-    next();
-  });
-
-  // Every route here moves real money and Linq has no sandbox.
-  router.use((req: Request, res: Response, next: NextFunction) => {
-    try {
-      assertOnrampNetwork(requestNetwork(req));
-      next();
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  // ── Customer provisioning ──────────────────────────────────────────────────
-
-  /**
-   * One-time per person, not per order. Safe to call again: Linq returns the
-   * existing customer with `created: false`, so a client retrying after a
-   * dropped response cannot create two customers for one person.
-   */
-  router.post("/customers", async (req: Request, res: Response) => {
-    const { customerRef, firstName, lastName, email, phone } = req.body ?? {};
-
-    if (
-      typeof customerRef !== "string" ||
-      typeof firstName !== "string" ||
-      typeof lastName !== "string" ||
-      typeof email !== "string" ||
-      typeof phone !== "string"
-    ) {
-      res.status(400).json({
-        error: "customerRef, firstName, lastName, email and phone are required",
-      });
-      return;
-    }
-
-    try {
-      res.json(await provisionCustomer({ customerRef, firstName, lastName, email, phone }));
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  /**
-   * Is this reference verified?
-   *
-   * Rate-limited like the other lookups: it takes a `customerRef`, and ours
-   * are derived from a wallet address, so an unthrottled endpoint answering
-   * "does this reference exist and is it verified" is an oracle worth denying.
-   *
-   * Deliberately a GET with no side effect. The client used to answer this by
-   * provisioning a customer, which needed a name, an email and a phone number
-   * to ask a yes/no question about a reference it already had.
-   */
-  router.get("/customers/status", lookupLimiter, async (req: Request, res: Response) => {
-    const customerRef = req.query["customerRef"];
-    if (typeof customerRef !== "string" || !customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
-      return;
-    }
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      const status = await getCustomerStatus(customerRef);
-      // Three fields by name, never the object Linq handed us.
-      //
-      // Their reply also carries `firstName` and `lastName`. Forwarding it
-      // whole published someone's real name to anyone who could produce their
-      // customerRef — and ours are derived from the wallet address, which is
-      // semi-public, so that is not a hard thing to produce. A declared
-      // interface does not strip anything at runtime; writing the fields out
-      // does. The same rule the NIN follows: what we do not pass on cannot
-      // leak.
-      res.json({
-        customerRef: status.customerRef,
-        verified: status.verified,
-        ...(status.status ? { status: status.status } : {}),
-      });
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  /**
-   * Verify a customer by NIN.
-   *
-   * **The NIN is read off the request and handed straight to Linq. It is not
-   * logged, not stored, and not echoed back** — see the header of
-   * `src/linq/onramp.ts`. Nothing in this handler may add it to a log line or
-   * an error body; a NIN is personal data under the NDPA and the cheapest way
-   * to hold it correctly is not to hold it.
-   */
-  router.post("/customers/kyc", async (req: Request, res: Response) => {
-    const { customerRef, nin } = req.body ?? {};
-
-    if (typeof customerRef !== "string" || typeof nin !== "string") {
-      res.status(400).json({ error: "customerRef and nin are required" });
-      return;
-    }
-    // Shape-checked here so an obvious typo is answered without spending a
-    // verification attempt, which is rate-limited on Linq's side.
-    if (!/^\d{11}$/.test(nin)) {
-      res.status(400).json({ error: "A NIN is 11 digits" });
-      return;
-    }
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      res.json(await submitCustomerKyc(customerRef, nin));
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  // ── Onramp: naira in, crypto out ───────────────────────────────────────────
-
-  /**
-   * The current rate, uncached.
-   *
-   * The offramp caches its rate for a few seconds because it is explicitly
-   * indicative. This one is not: it is the number locked into the order the
-   * user is about to create, and XLM floats. A stale rate here prices someone's
-   * order wrong, so every ask is a fresh read.
-   */
-  router.get("/onramp/rate", async (req: Request, res: Response) => {
-    // `coin` is required, and that is the fix.
-    //
-    // Linq's own rate endpoint accepts a coin and ignores it, handing back the
-    // dollar rate regardless — which is how both naira screens ended up
-    // pricing XLM as though one XLM were one dollar. Defaulting here would
-    // reproduce exactly that: a caller that forgot the coin would get a
-    // plausible number that is wrong by a factor of five. Refusing is the only
-    // answer that cannot be mistaken for an answer.
-    const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
-    if (!resolvedCoin) {
-      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
-      return;
-    }
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin) });
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  router.post("/onramp/orders", async (req: Request, res: Response) => {
-    const { customerRef, amountStableCoin, walletAddress, rate, coin } = req.body ?? {};
-
-    if (typeof customerRef !== "string") {
-      res.status(400).json({ error: "customerRef is required" });
-      return;
-    }
-    // The crypto is delivered here, so it must be an address Linq can pay.
-    if (rejectContractAddress(res, walletAddress, "walletAddress")) return;
-
-    const resolvedCoin = COINS[String(coin).toLowerCase()];
-    if (!resolvedCoin) {
-      res.status(400).json({ error: "coin must be xlm or usdc" });
-      return;
-    }
-
-    if (await rejectMispricedRate(res, resolvedCoin, Number(rate))) return;
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      const order = await createOnrampOrder({
-        customerRef,
-        amountStableCoin: Number(amountStableCoin),
-        walletAddress,
-        rate: Number(rate),
-        coin: resolvedCoin,
-      });
-      res.json(order);
-
-      // After the response, deliberately. The user is holding bank details they
-      // need; our bookkeeping must not stand between them and that, and
-      // recordNgnOrder never throws.
-      void recordNgnOrder({
-        network: requestNetwork(req),
-        kind: "onramp",
-        orderId: order.orderId,
-        customerRef,
-        walletAddress,
-        coin: resolvedCoin,
-        amountStableCoin: order.amountStableCoin ?? Number(amountStableCoin),
-        amountNgn: order.amountNgn,
-        rate: Number(rate),
-        status: order.status,
-      });
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  // Both identifiers are required, deliberately — see this module's header.
-  router.get("/onramp/orders/:orderId", lookupLimiter, async (req: Request, res: Response) => {
-    const customerRef = String(req.query.customerRef ?? "");
-    if (!customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
-      return;
-    }
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      res.json(await getOnrampStatus(customerRef, req.params.orderId));
-    } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
-        return;
-      }
-      sendLinqError(res, err);
-    }
-  });
-
-  // ── Bills: paid out of the wallet ──────────────────────────────────────────
-
-  router.post("/bills", async (req: Request, res: Response) => {
-    const {
-      customerRef,
-      billCategory,
-      provider,
-      customerId,
-      amountNgn,
-      amountStableCoin,
-      rate,
-      coin,
-      refundAddress,
-    } = req.body ?? {};
-
-    if (
-      typeof customerRef !== "string" ||
-      typeof provider !== "string" ||
-      typeof customerId !== "string"
-    ) {
-      res.status(400).json({ error: "customerRef, provider and customerId are required" });
-      return;
-    }
-
-    if (!BILL_CATEGORIES.includes(billCategory)) {
-      res.status(400).json({ error: `billCategory must be one of ${BILL_CATEGORIES.join(", ")}` });
-      return;
-    }
-
-    const resolvedCoin = COINS[String(coin).toLowerCase()] as BillCoin | undefined;
-    if (!resolvedCoin) {
-      res.status(400).json({ error: "coin must be xlm or usdc" });
-      return;
-    }
-
-    // Where the deposit returns if the biller rejects the top-up after the user
-    // has already paid. A contract here fails at exactly the moment we have
-    // promised someone their money is coming back.
-    if (rejectContractAddress(res, refundAddress, "refundAddress")) return;
-
-    // The direction that loses the provider money rather than the user: an XLM
-    // bill priced as dollars paid about a fifth of the naira it bought.
-    if (await rejectMispricedRate(res, resolvedCoin, Number(rate))) return;
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      const order = await payBill({
-        customerRef,
-        billCategory,
-        provider,
-        customerId,
-        amountNgn: Number(amountNgn),
-        amountStableCoin: Number(amountStableCoin),
-        rate: Number(rate),
-        coin: resolvedCoin,
-        refundAddress,
-      });
-      res.json(order);
-
-      // `customerId` — the phone or meter number — is not passed on. It went to
-      // Linq and stops there; see the header of linq/ngnOrders.ts.
-      void recordNgnOrder({
-        network: requestNetwork(req),
-        kind: "bill",
-        orderId: order.id,
-        customerRef,
-        walletAddress: refundAddress,
-        coin: resolvedCoin,
-        amountStableCoin: Number(amountStableCoin),
-        amountNgn: Number(amountNgn),
-        rate: Number(rate),
-        status: order.status,
-        billCategory,
-        provider,
-      });
-    } catch (err) {
-      sendLinqError(res, err);
-    }
-  });
-
-  router.get("/bills/:orderId", lookupLimiter, async (req: Request, res: Response) => {
-    const customerRef = String(req.query.customerRef ?? "");
-    if (!customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
-      return;
-    }
-
-    try {
-      res.setHeader("Cache-Control", "no-store");
-      res.json(await getBillStatus(customerRef, req.params.orderId));
-    } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
-        return;
-      }
-      sendLinqError(res, err);
-    }
-  });
-
-  return router;
-}
+export const nggRouter = Router();
