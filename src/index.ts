@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "http";
 import { execSync } from "child_process";
+import { randomUUID } from "crypto";
 import { createApp } from "./api";
 import { startAllIndexers } from "./indexer";
 import { prisma } from "./db";
@@ -11,10 +12,12 @@ import { startPartitionRetentionJob } from "./jobs/retention";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
+  const bootId = randomUUID();
   // Converge the schema on every startup, so a deploy needs no separate
   // pre-deploy step.
   //
@@ -36,7 +39,7 @@ async function main() {
   //
   // Additive changes — a new table, a new nullable column — still apply on
   // their own. Anything destructive now fails loudly here instead.
-  console.log("[wraith] Converging database schema…");
+  logger.info({ event: "schema.converge.start", route: "startup", status: 0, durationMs: 0, requestId: bootId });
   const first = pushSchema();
   if (!first.ok) {
     // `--accept-data-loss` consents to two very different things at once, and
@@ -53,33 +56,22 @@ async function main() {
     // unique constraint, consent and retry. If even one is anything else,
     // refuse exactly as before.
     if (onlyAddsUniqueConstraints(first.output)) {
-      console.warn(
-        "[wraith] Schema diff is unique constraints only — no column is dropped.\n" +
-          "[wraith] Applying. A duplicate would fail the index, not delete a row.",
-      );
+      logger.warn({ event: "schema.converge.unique_constraints_only", route: "startup", status: 0, durationMs: 0, requestId: bootId });
       const retry = pushSchema("--accept-data-loss");
       if (!retry.ok) {
-        console.error(
-          "[wraith] The constraint could not be applied — most likely duplicate\n" +
-            "[wraith] rows already exist for it. Nothing was dropped. Resolve the\n" +
-            "[wraith] duplicates and redeploy.",
-        );
+        logger.error({ event: "schema.converge.constraint_failed", route: "startup", status: 0, durationMs: 0, requestId: bootId });
         process.exit(1);
       }
     } else {
-      console.error(
-        "[wraith] Schema convergence refused: the pending change is destructive.\n" +
-          "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
-          "[wraith] change needs a deliberate migration, not --accept-data-loss.",
-      );
+      logger.error({ event: "schema.converge.refused_destructive", route: "startup", status: 0, durationMs: 0, requestId: bootId });
       process.exit(1);
     }
   }
-  console.log("[wraith] Database ready.");
+  logger.info({ event: "schema.converge.ready", route: "startup", status: 0, durationMs: 0, requestId: bootId });
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {
-    console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
+    logger.info({ event: "shutdown.received", route: "startup", status: 0, durationMs: 0, requestId: bootId, signal });
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -97,9 +89,9 @@ async function main() {
   attachGraphQLSubscriptions(server);
 
   server.listen(PORT, () => {
-    console.log(`[wraith] API listening on http://localhost:${PORT}`);
-    console.log(`[wraith] WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`);
-    console.log(`[wraith] GraphQL subscriptions available at ws://localhost:${PORT}${SUBSCRIPTIONS_PATH}`);
+    logger.info({ event: "server.listen", route: "startup", status: 0, durationMs: 0, requestId: bootId, port: PORT });
+    logger.info({ event: "server.ws_ready", route: "startup", status: 0, durationMs: 0, requestId: bootId, path: "/subscribe/:address" });
+    logger.info({ event: "server.graphql_ready", route: "startup", status: 0, durationMs: 0, requestId: bootId, path: SUBSCRIPTIONS_PATH });
   });
 
   // ── Start webhook worker ───────────────────────────────────────────────────
@@ -122,7 +114,7 @@ async function main() {
   // which exercises the HTTP surface only. Without this guard the indexer throws
   // on the missing RPC endpoint and takes the whole process (and API) down.
   if (process.env.SKIP_INDEXER === "true") {
-    console.log("[wraith] SKIP_INDEXER=true — indexer not started (API-only mode)");
+    logger.info({ event: "indexer.skipped", route: "startup", status: 0, durationMs: 0, requestId: bootId });
   } else {
     // One loop per enabled network (NETWORKS env; defaults to STELLAR_NETWORK).
     // Each loop restarts itself on crash rather than taking the process down —
@@ -131,4 +123,6 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
