@@ -545,10 +545,12 @@
                       "nullable": true
                     },
                     "latestLedger": {
-                      "type": "integer"
+                      "type": "integer",
+                      "nullable": true
                     },
                     "lagLedgers": {
-                      "type": "integer"
+                      "type": "integer",
+                      "nullable": true
                     },
                     "startedAt": {
                       "type": "string",
@@ -559,17 +561,52 @@
                     },
                     "totalIndexed": {
                       "type": "integer"
+                    },
+                    "networks": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "lastIndexedLedger": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "latestLedger": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "lagLedgers": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "running": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "lastIndexedLedger",
+                          "latestLedger",
+                          "lagLedgers",
+                          "running"
+                        ],
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
                     }
                   },
                   "required": [
                     "ok",
                     "lastIndexedLedger",
                     "latestLedger",
-                    "lagLedgers",
-                    "startedAt",
-                    "uptimeSeconds",
-                    "totalIndexed"
-                  ]
+                    "lagLedgers"
+                  ],
+                  "additionalProperties": {
+                    "nullable": true
+                  }
                 }
               }
             }
