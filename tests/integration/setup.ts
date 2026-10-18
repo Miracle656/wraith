@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { seedTransfers } from "./fixtures";
+import { tokenTransferFixtures } from "../../src/fixtures";
 
 process.env.DATABASE_URL ??= "postgresql://wraith:wraith@localhost:55432/wraith_test";
 process.env.DIRECT_DATABASE_URL ??= "postgresql://wraith:wraith@localhost:55432/wraith_test";
@@ -35,7 +35,7 @@ export async function seedIntegrationFixtures(): Promise<void> {
   try {
     await prisma.tokenTransfer.deleteMany();
     await prisma.indexerState.deleteMany();
-    await prisma.tokenTransfer.createMany({ data: seedTransfers });
+    await prisma.tokenTransfer.createMany({ data: tokenTransferFixtures });
     await prisma.indexerState.create({ data: { network: 'testnet', lastIndexedLedger: 2006 } });
   } finally {
     await prisma.$disconnect();

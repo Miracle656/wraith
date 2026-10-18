@@ -1,10 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { getAccountSummary, queryBalances } from "../db";
-import { toDisplayAmount } from "../api";
+import { toDisplayAmount } from "../amount";
 import { createAccountsTransfersRouter } from "../routes/accounts/transfers";
 import { parseOr400 } from "../openapi/validation";
 import { summaryQuerySchema } from "../openapi/schemas";
 import { requestNetwork } from "../middleware/network";
+import { getCachedTokenDecimals } from "../tokenCache";
 
 type AccountSummaryRow = Awaited<ReturnType<typeof getAccountSummary>>[number];
 
@@ -52,7 +53,7 @@ export function createAccountsRouter(): Router {
           balances: rows.map((row) => ({
             contractId: row.contractId,
             balance: row.balance,
-            displayBalance: toDisplayAmount(row.balance),
+            displayBalance: toDisplayAmount(row.balance, getCachedTokenDecimals(row.contractId, network)),
           })),
           derivedFromLedger: true,
           note:
@@ -74,7 +75,8 @@ export function createAccountsRouter(): Router {
         if (!parsed) return;
         const { address, contractId } = parsed;
 
-        const rows = await getAccountSummary(address, contractId, requestNetwork(req));
+        const network = requestNetwork(req);
+        const rows = await getAccountSummary(address, contractId, network);
 
         const assets = rows.map((row: AccountSummaryRow) => {
           const net = BigInt(row.net);
@@ -83,9 +85,9 @@ export function createAccountsRouter(): Router {
             totalSent:           row.totalSent,
             totalReceived:       row.totalReceived,
             net:                 row.net,
-            displayTotalSent:    toDisplayAmount(row.totalSent),
-            displayTotalReceived:toDisplayAmount(row.totalReceived),
-            displayNet:          toDisplayAmount(net < 0n ? (-net).toString() : row.net) + (net < 0n ? " (negative)" : ""),
+            displayTotalSent:    toDisplayAmount(row.totalSent, getCachedTokenDecimals(row.contractId, network)),
+            displayTotalReceived:toDisplayAmount(row.totalReceived, getCachedTokenDecimals(row.contractId, network)),
+            displayNet:          toDisplayAmount(net < 0n ? (-net).toString() : row.net, getCachedTokenDecimals(row.contractId, network)) + (net < 0n ? " (negative)" : ""),
             txCount:             row.txCount,
             lastActivityAt:      row.lastActivityAt,
           };

@@ -28,7 +28,8 @@ import {
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
 import { typeDefs as baseTypeDefs, resolvers as baseResolvers, formatTransfer, type GraphQLContext } from "./server";
-import { toDisplayAmount } from "../api";
+import { toDisplayAmount } from "../amount";
+import { getCachedTokenDecimals } from "../tokenCache";
 import {
   transferEmitter,
   hostFnLogEmitter,
@@ -219,7 +220,10 @@ function buildSubscriptionSchema(): GraphQLSchema {
           const transfer = payload as TransferEvent;
           return {
             ...formatTransfer(transfer as unknown as Record<string, unknown>),
-            displayAmount: toDisplayAmount(transfer.amount),
+            displayAmount: toDisplayAmount(
+              transfer.amount,
+              getCachedTokenDecimals(transfer.contractId, transfer.network),
+            ),
           };
         },
       },

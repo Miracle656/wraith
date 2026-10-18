@@ -5,7 +5,7 @@ import {
   CONTRACT_A,
   CONTRACT_B,
   MULTI_EVENT_TX_HASH,
-} from "./fixtures";
+} from "../../src/fixtures";
 
 const API_BASE_URL = process.env.INTEGRATION_API_URL ?? "http://localhost:3300";
 

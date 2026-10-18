@@ -88,6 +88,18 @@ const queryIntWithDefault = (defaultValue: number, options: { min?: number; max?
       .openapi({ description: options.description })
   );
 
+const optionalQueryBool = (description?: string) =>
+  z.preprocess(
+    (value) => {
+      const raw = firstValue(value);
+      if (raw === undefined || raw === null || raw === "") return undefined;
+      if (raw === "true" || raw === "1") return true;
+      if (raw === "false" || raw === "0") return false;
+      return raw;
+    },
+    z.boolean().optional().openapi({ description })
+  );
+
 const optionalCommaList = (items: z.ZodTypeAny, description?: string) =>
   z.preprocess(
     (value) => {
@@ -226,7 +238,8 @@ export const transferSchema = z.object({
 });
 
 export const transferListResponseSchema = z.object({
-  total: z.number().int(),
+  total: z.number().int().optional().openapi({ description: "Exact match count. Only present when the request set includeTotal=true" }),
+  hasMore: z.boolean().openapi({ description: "True when another page exists" }),
   limit: z.number().int(),
   offset: z.number().int(),
   nextCursor: z.string().nullable().optional(),
@@ -362,7 +375,8 @@ export const nftTransferSchema = z.object({
 });
 
 export const nftTransfersResponseSchema = z.object({
-  total: z.number().int(),
+  total: z.number().int().optional().openapi({ description: "Exact match count. Only present when the request set includeTotal=true" }),
+  hasMore: z.boolean().openapi({ description: "True when another page exists" }),
   limit: z.number().int(),
   offset: z.number().int(),
   nextCursor: z.string().nullable().optional(),
@@ -455,6 +469,7 @@ export const transferQuerySchema = z.object({
   cursor: optionalQueryString("Opaque pagination cursor"),
   $filter: optionalQueryString("OData filter expression"),
   $select: optionalCommaList(z.string(), "Comma-separated field list"),
+  includeTotal: optionalQueryBool("Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"),
 }).passthrough();
 
 export const summaryQuerySchema = z.object({
@@ -489,6 +504,7 @@ export const nftTransfersQuerySchema = z.object({
   cursor: optionalQueryString("Opaque pagination cursor"),
   $filter: optionalQueryString("OData filter expression"),
   $select: optionalCommaList(z.string(), "Comma-separated field list"),
+  includeTotal: optionalQueryBool("Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate"),
 }).passthrough();
 
 export const nftOwnerParamsSchema = z.object({
@@ -551,3 +567,191 @@ export type TransferQuery = z.infer<typeof transferQuerySchema>;
 export type SummaryQuery = z.infer<typeof summaryQuerySchema>;
 export type HostFnQuery = z.infer<typeof hostFnQuerySchema>;
 export type NftTransfersQuery = z.infer<typeof nftTransfersQuerySchema>;
+
+// ─── GET /accounts/:address/balance ────────────────────────────────────────
+
+export const accountBalanceResponseSchema = z.object({
+  address: stellarAddressSchema,
+  network: z.enum(["testnet", "mainnet"]),
+  balances: z.array(
+    z.object({
+      contractId: contractAddressSchema,
+      balance: z.string(),
+      displayBalance: z.string(),
+    })
+  ),
+  /** Always true: this is a sum over the indexed window, not an on-chain read. */
+  derivedFromLedger: z.literal(true),
+  note: z.string(),
+});
+
+// ─── GET /tokens ────────────────────────────────────────────────────────────
+
+/** Metadata for one token the indexer has seen, as served by GET /tokens. */
+export const tokenMetadataSchema = z.object({
+  network: z.enum(["testnet", "mainnet"]),
+  contractId: contractAddressSchema,
+  symbol: z.string(),
+  name: z.string(),
+  decimals: z.number().int(),
+});
+
+export const tokensQuerySchema = z.object({ ...withNetwork }).passthrough();
+
+export const tokensResponseSchema = z.object({
+  ok: z.literal(true),
+  network: z.enum(["testnet", "mainnet"]),
+  tokens: z.array(tokenMetadataSchema),
+});
+
+// ─── GET /transfers.csv · GET /transfers.parquet ────────────────────────────
+
+/**
+ * Query schema for the full-table export routes.
+ *
+ * The same filters `buildWhere` accepts for the JSON transfer routes, minus
+ * the pagination fields: exports stream the entire matching set rather than a
+ * page, so limit/offset/cursor have nothing to mean there.
+ */
+export const transferExportQuerySchema = z.object({
+  ...withNetwork,
+  address: stellarAddressSchema.optional(),
+  contractId: optionalQueryString("Token contract ID to filter by"),
+  token: contractAddressSchema.optional(),
+  fromLedger: optionalQueryInt({ min: 0 }),
+  toLedger: optionalQueryInt({ min: 0 }),
+  fromDate: optionalQueryDateTime("Inclusive lower bound on ledgerClosedAt"),
+  toDate: optionalQueryDateTime("Inclusive upper bound on ledgerClosedAt"),
+  eventType: eventTypeQuerySchema.openapi({ description: "Comma-separated list of event types" }),
+}).passthrough();
+
+export const binaryExportResponseSchema = z.string().openapi({ format: "binary" });
+
+// ─── /webhooks/linq — provider callback (internal) ─────────────────────────
+
+export const linqWebhookAckResponseSchema = z.object({
+  ok: z.literal(true),
+});
+
+// ─── /offramp/* — cash-out surface (internal) ───────────────────────────────
+
+export const offrampRateResponseSchema = z.object({
+  rate: z.number(),
+  currency: z.string(),
+  coin: z.string(),
+  /** Always true: the binding rate is the one locked into an order at creation. */
+  indicative: z.literal(true),
+});
+
+export const offrampVerifyBankBodySchema = z
+  .object({
+    bankCode: z.string().min(1),
+    accountNumber: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampVerifiedBankSchema = z.object({
+  accountName: z.string(),
+  bankName: z.string(),
+  accountNumber: z.string(),
+  bankCode: z.string(),
+});
+
+export const offrampTrustlineQuerySchema = z
+  .object({
+    /** The classic fee-payer address; contract (C…) addresses are rejected. */
+    address: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampTrustlineResponseSchema = z.object({
+  address: z.string(),
+  valid: z.boolean(),
+  trustsUSDC: z.boolean(),
+});
+
+export const offrampOrderBodySchema = z
+  .object({
+    /** Exactly one of amountNGN / amountStableCoin. */
+    amountNGN: z.number().optional(),
+    amountStableCoin: z.number().optional(),
+    bankAccount: z.string().min(1),
+    bankCode: z.string().min(1),
+    bankName: z.string().min(1),
+    accountName: z.string().min(1),
+    /** Must already hold a USDC trustline — the fee-payer, never the wallet contract. */
+    refundAddress: z.string().optional(),
+    walletAddress: z.string().min(1),
+    /** Caller-generated; replaying a request with the same key returns the original order. */
+    idempotencyKey: z.string().min(1),
+  })
+  .passthrough();
+
+export const offrampOrderStatus = z
+  .enum(["pending", "waiting_for_deposit", "processing", "completed", "failed", "expired"])
+  .openapi({ description: "Client-facing status mapped from the provider's raw one." });
+
+export const offrampOrderResponseSchema = z.object({
+  id: z.string(),
+  walletAddress: z.string().openapi({ description: "Deposit address the stablecoin is sent to." }),
+  chain: z.string(),
+  coin: z.string(),
+  amountStableCoin: z.number(),
+  amountNGN: z.number(),
+  rate: z.number(),
+  status: offrampOrderStatus,
+  providerStatus: z.string().optional().openapi({ description: "Raw provider status, when the order is not a replay." }),
+  /** True when an existing idempotencyKey returned the original order instead of creating one. */
+  replayed: z.boolean().optional(),
+});
+
+export const offrampOrderParamsSchema = z.object({
+  orderId: z.string().min(1),
+}).passthrough();
+
+export const offrampOrderStatusResponseSchema = z.object({
+  id: z.string(),
+  status: offrampOrderStatus,
+  providerStatus: z.string(),
+  amountStableCoin: z.number(),
+  amountNGN: z.number(),
+  depositAddress: z.string(),
+  rate: z.number(),
+  createdAt: z.string().datetime({ offset: true }),
+  /**
+   * "live" when reconciled against the provider, "cache" when the provider was
+   * unreachable and the stored row was served instead.
+   *
+   * This said "linq" until #216 renamed the wire value — a spec that documents
+   * a value the server no longer sends is worse than no spec, and it would have
+   * shipped as the published reference. Dropping the provider's name also keeps
+   * this consistent with `withoutProviderName()` in src/api/offramp.ts, which
+   * exists so the provider is not named to users; openapi.json is published.
+   */
+  source: z.enum(["live", "cache"]),
+});
+
+export const offrampErrorResponseSchema = z.object({
+  error: z.string(),
+});
+
+export const ngnCustomerStatusQuerySchema = z.object({
+  customerRef: z.string().openapi({
+    description:
+      "Our identifier for the person, stable for the life of their install. " +
+      "Derived from the wallet address, never a provider id.",
+    example: "veil_a1b2c3d4e5f6",
+  }),
+});
+
+export const ngnCustomerStatusResponseSchema = z.object({
+  customerRef: z.string(),
+  verified: z.boolean().openapi({
+    description:
+      "Whether the provider verifies this reference right now. Read-only: " +
+      "asking does not create a customer and does not spend a verification " +
+      "attempt, which is the reason this route exists.",
+  }),
+  status: z.string().optional(),
+});
+

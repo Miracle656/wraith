@@ -2,10 +2,21 @@ import express, { Request, Response, Router } from "express";
 
 import { prisma } from "../db";
 import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
+import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { DEFAULT_NETWORK } from "../network";
 
 /**
- * Linq's offramp webhook.
+ * Linq's webhook, for every rail.
+ *
+ * One endpoint carries offramp, onramp and bill events, and the body does not
+ * say which rail an event belongs to — only an `orderId`. So reconciliation is
+ * "find the order that id belongs to": the offramp table first, then the NGN
+ * one. An id in neither is not ours.
+ *
+ * The bill case is what made this necessary. An onramp delivering XLM shows up
+ * on-chain, where the indexer already sees it and the address subscription
+ * pushes it; a biller refusing to vend after the user has paid shows up
+ * nowhere unless this runs.
  *
  * MUST be mounted before express.json(). Linq signs the raw request body, so
  * any middleware that parses and re-serialises it first destroys the ability
@@ -58,6 +69,8 @@ export function createLinqWebhookRouter(): Router {
           where: { orderId: event.orderId },
         });
         if (!existing) {
+          // Not an offramp order — try the onramp/bill table before giving up.
+          if (await reconcileNgnOrder(event)) return;
           console.warn(`[linq] webhook for unknown order ${event.orderId}`);
           return;
         }

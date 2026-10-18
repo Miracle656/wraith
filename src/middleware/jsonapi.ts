@@ -95,11 +95,12 @@ function recordToResource(record: Record<string, unknown>, type: string): JsonAp
   return resource;
 }
 
-function transformTransfersResponse(body: { transfers: Record<string, unknown>[]; total?: number; limit?: number; offset?: number; nextCursor?: string | null }, endpoint: string): { data: JsonApiResource[]; meta: Record<string, unknown> } {
+function transformTransfersResponse(body: { transfers: Record<string, unknown>[]; total?: number; hasMore?: boolean; limit?: number; offset?: number; nextCursor?: string | null }, endpoint: string): { data: JsonApiResource[]; meta: Record<string, unknown> } {
   const type = determineResourceType(endpoint, body) ?? "transfer";
   const data = body.transfers.map((t) => recordToResource(t as Record<string, unknown>, type));
   const meta: Record<string, unknown> = {};
   if (typeof body.total === "number") meta.total = body.total;
+  if (typeof body.hasMore === "boolean") meta.hasMore = body.hasMore;
   if (typeof body.limit === "number") meta.limit = body.limit;
   if (typeof body.offset === "number") meta.offset = body.offset;
   if (body.nextCursor) meta.nextCursor = body.nextCursor;
@@ -131,10 +132,11 @@ function transformAssetsResponse(body: { window: string; by: string; limit: numb
   return { data, meta };
 }
 
-function transformNftTransfersResponse(body: { transfers: Record<string, unknown>[]; total?: number; limit?: number; offset?: number; nextCursor?: string | null }): { data: JsonApiResource[]; meta: Record<string, unknown> } {
+function transformNftTransfersResponse(body: { transfers: Record<string, unknown>[]; total?: number; hasMore?: boolean; limit?: number; offset?: number; nextCursor?: string | null }): { data: JsonApiResource[]; meta: Record<string, unknown> } {
   const data = body.transfers.map((t) => recordToResource(t as Record<string, unknown>, "nft-transfer"));
   const meta: Record<string, unknown> = {};
   if (typeof body.total === "number") meta.total = body.total;
+  if (typeof body.hasMore === "boolean") meta.hasMore = body.hasMore;
   if (typeof body.limit === "number") meta.limit = body.limit;
   if (typeof body.offset === "number") meta.offset = body.offset;
   if (body.nextCursor) meta.nextCursor = body.nextCursor;
@@ -182,7 +184,7 @@ function transformToJsonApi(body: unknown, endpoint: string, statusCode: number 
   const bodyRecord = body as Record<string, unknown>;
 
   if (bodyRecord.transfers && Array.isArray(bodyRecord.transfers)) {
-    return transformTransfersResponse(bodyRecord as { transfers: Record<string, unknown>[]; total?: number; limit?: number; offset?: number; nextCursor?: string | null }, endpoint) as unknown as JsonApiResponse;
+    return transformTransfersResponse(bodyRecord as { transfers: Record<string, unknown>[]; total?: number; hasMore?: boolean; limit?: number; offset?: number; nextCursor?: string | null }, endpoint) as unknown as JsonApiResponse;
   }
 
   if (bodyRecord.tokens && Array.isArray(bodyRecord.tokens)) {

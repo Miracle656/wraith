@@ -70,12 +70,13 @@ cp .env.example .env
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="testnet"
 # SOROBAN_RPC_URL is optional on testnet — the default public endpoint is used automatically
 SOROBAN_RPC_URL=
 
 START_LEDGER=
-CONTRACT_IDS=
+SAC_CONTRACT_IDS=
 PORT=3000
 ```
 
@@ -83,12 +84,13 @@ PORT=3000
 
 ```env
 DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
+DIRECT_DATABASE_URL="postgresql://wraith:wraith@localhost:5432/wraith"
 STELLAR_NETWORK="mainnet"
 # Required on mainnet — no free public Soroban RPC exists
 SOROBAN_RPC_URL="https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>"
 
 # Strongly recommended on mainnet: filter to specific contracts to reduce load
-CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
+SAC_CONTRACT_IDS="CTOKEN1...,CTOKEN2..."
 START_LEDGER=
 PORT=3000
 ```
@@ -98,7 +100,7 @@ PORT=3000
 ### 3. Start Postgres
 
 ```bash
-docker-compose up -d db
+docker compose up -d db
 ```
 
 ### 4. Run database migrations
@@ -107,7 +109,65 @@ docker-compose up -d db
 npx prisma migrate dev --name init
 ```
 
-### 5. Start Wraith
+### 5. Seed the database (optional)
+
+Populate the database with deterministic test data for development and testing:
+
+```bash
+npm run db:seed
+```
+
+By default, this seeds `testnet`. To seed `mainnet`:
+
+```bash
+npm run db:seed -- --network=mainnet
+```
+
+You can now query the seeded data:
+
+```bash
+curl "http://localhost:3000/transfers/incoming/GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+```
+
+Expected response:
+
+```json
+{
+  "total": 2,
+  "limit": 50,
+  "offset": 0,
+  "transfers": [
+    {
+      "id": 1,
+      "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "10000000",
+      "displayAmount": "1.0000000",
+      "ledger": 2001,
+      "ledgerClosedAt": "2025-01-01T00:00:00.000Z",
+      "txHash": "tx-incoming-a-1",
+      "eventId": "integration-001"
+    },
+    {
+      "id": 2,
+      "contractId": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBD2KM",
+      "eventType": "transfer",
+      "fromAddress": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWWHF",
+      "toAddress": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "amount": "40000000",
+      "displayAmount": "4.0000000",
+      "ledger": 2004,
+      "ledgerClosedAt": "2025-02-01T00:00:00.000Z",
+      "txHash": "txhash-integration-multi",
+      "eventId": "integration-004"
+    }
+  ]
+}
+```
+
+### 6. Start Wraith
 
 ```bash
 # Development (hot reload)
@@ -120,7 +180,17 @@ npm run build && npm start
 Or run everything via Docker:
 
 ```bash
-docker-compose up --build
+# Without cache (default)
+docker compose up --build
+
+# With Redis cache enabled
+docker compose --profile cache up --build
+```
+
+To seed the database when running via Docker, run the seed command in a separate terminal after the database is up:
+
+```bash
+npm run db:seed
 ```
 
 ***
@@ -218,7 +288,8 @@ console.log(data);
 
 // Expected response
 // {
-//   "total": 42,
+//   "hasMore": true,
+//   "nextCursor": "MTIzNDU=",
 //   "limit": 10,
 //   "offset": 0,
 //   "transfers": [
@@ -238,6 +309,13 @@ console.log(data);
 //   ]
 // }
 ```
+
+> **Pagination and totals.** List endpoints (`/transfers/*`, `/nfts/transfers`, GraphQL `transfers`)
+> do not run a `COUNT` by default. They fetch one row past the page and return
+> `hasMore` (plus `nextCursor` to continue), which is all pagination needs. Pass
+> `?includeTotal=true` (GraphQL: `includeTotal: true`) to also get an exact
+> `total`. This runs a `COUNT` over every matching row, so it is markedly slower
+> on large result sets. Without it, `total` is absent from the response.
 
 ***
 
@@ -263,7 +341,7 @@ console.log(data);
 
 // Expected response  (same shape as /transfers/incoming — adds "direction" per row)
 // {
-//   "total": 85,
+//   "hasMore": true,
 //   "limit": 20,
 //   "offset": 0,
 //   "transfers": [
@@ -331,6 +409,16 @@ console.log(data);
 
 Base URL: `http://localhost:3000`
 
+Offramp order lookups need a bearer token; see [docs/offramp-orders.md](docs/offramp-orders.md).
+
+`GET /transfers.csv` and `/transfers.parquet` need no filter, and are **capped
+rather than rejected**: a request with nothing narrowing it returns the first
+`maxRows` rows instead of the whole table. When rows were left behind, the
+response says so in `X-Truncated: true` and `X-Row-Limit: <n>`, set before the
+body starts — so a client can tell a complete export from a partial one without
+counting. Narrow with `address`, `contractId`, `fromLedger`/`toLedger` or
+`fromDate`/`toDate`, or raise `maxRows` up to 500 000.
+
 ### Selecting a network
 
 Wraith stores testnet and mainnet rows in the same tables, discriminated by a
@@ -367,8 +455,8 @@ both chains in a single round-trip:
 
 ```graphql
 {
-  testnet: transfers(address: "GABC…", network: TESTNET) { total }
-  mainnet: transfers(address: "GABC…", network: MAINNET) { total }
+  testnet: transfers(address: "GABC…", network: TESTNET, includeTotal: true) { total hasMore }
+  mainnet: transfers(address: "GABC…", network: MAINNET, includeTotal: true) { total hasMore }
 }
 ```
 
@@ -437,8 +525,11 @@ last_indexed_ledger{network="mainnet"} 5842100
 | `ledgers_indexed_total` | counter | `network` | Ledgers the indexer has advanced through. A flat `rate()` on a network whose loop should be running means it has stalled. |
 | `transfers_stored_total` | counter | `network`, `type` | Rows persisted, split `fungible` / `nft` — one parse path can break while the other keeps working. |
 | `rpc_errors_total` | counter | `outcome` | Failed RPC attempts. `retry` counts attempts `withRetry` absorbed, `exhausted` counts calls that gave up — a degrading endpoint shows up in `retry` long before it fails a call. |
+| `events_skipped_total` | counter | `reason` | Events the decoder dropped. `unrecognised` is non-token events (normal); `malformed` is token events that failed to decode — a rising rate points at a non-standard contract or a decoder bug. |
 | `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
 | `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
+| `http_requests_total` | counter | `method`, `route`, `status` | HTTP requests served. `route` is the Express route *pattern*, never the raw URL, so addresses never become label values; an unmatched request reports `route="unknown"`. |
+| `http_request_duration_seconds` | histogram | `method`, `route` | HTTP latency, 5 ms to 10 s. No `status` label — the split is rarely worth the extra series. |
 
 Standard `process_*` and `nodejs_*` metrics are exported alongside these.
 
@@ -524,6 +615,75 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 
 ***
 
+### Changing the OpenAPI spec
+
+`openapi.json` is generated — edit `src/openapi/build.ts` and `schemas.ts`, then:
+
+```bash
+npm run docs:openapi                                  # regenerate the spec
+cd clients/react-query && npm install && npm run generate   # regenerate the client types
+```
+
+Both outputs are committed, and both are checked in CI:
+`src/__tests__/openapiCoverage.test.ts` fails when the spec does not match the
+generator or when a registered route is undocumented, and
+`.github/workflows/react-query-sdk.yml` runs `git diff --exit-code` on
+`clients/react-query/src/schema.d.ts` whenever `openapi.json` changes. Nothing
+near `src/openapi/` mentions that second coupling, which is exactly how it gets
+missed.
+
+Internal routes carry `x-internal: true`, never `deprecated` — `deprecated`
+tells generators and readers the endpoint is being withdrawn, and the client
+would emit `@deprecated` on endpoints the wallet calls today.
+
+***
+
+### `GET /tokens`
+
+All tokens the indexer has encountered and cached, on the selected network.
+Accepts the same `?network=` / `X-Network` selector as every read route.
+
+```bash
+curl "http://localhost:3000/tokens?network=mainnet"
+```
+
+```json
+{
+  "ok": true,
+  "network": "mainnet",
+  "tokens": [
+    {
+      "network": "mainnet",
+      "contractId": "CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B",
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "decimals": 7
+    }
+  ]
+}
+```
+
+***
+
+### `GET /transfers.csv` · `GET /transfers.parquet`
+
+Export the matching transfer set as a CSV or Apache Parquet download — no
+pagination, but **capped**: see the row-cap note above for `maxRows`,
+`X-Truncated` and `X-Row-Limit`. Accepts the same filters as the JSON transfer
+routes (`network`, `address`, `contractId`, `token`, `fromLedger`, `toLedger`,
+`fromDate`, `toDate`, `eventType`) minus the pagination fields; narrow large
+exports with the ledger or date bounds.
+
+```bash
+# Everything for one address on mainnet
+curl -OJ "http://localhost:3000/transfers.csv?address=GABC123...&network=mainnet"
+
+# A ledger window across all addresses, as Parquet
+curl -OJ "http://localhost:3000/transfers.parquet?fromLedger=5840000&toLedger=5850000"
+```
+
+***
+
 ## Environment Variables
 
 | Variable              | Default       | Description                                                                                   |
@@ -542,6 +702,7 @@ curl "http://localhost:3000/transfers/tx/abcdef1234567890..."
 | `RETENTION_DAYS`      | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
 | `NETWORKS`            | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
 | `PORT`                | `3000`        | REST API port                                                                                 |
+| `EXPORT_MAX_ROWS`     | `50000`       | Default row cap for `/transfers.csv` and `/transfers.parquet`. Clamped to 500 000; a caller may ask for less with `?maxRows=`. |
 
 ### RPC URL Resolution
 
@@ -653,6 +814,7 @@ curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123
 | `GET /transfers/tx/:txHash` | `transfer` |
 | `GET /summary/:address` | `token-summary` |
 | `GET /accounts/:address/summary` | `account-summary` |
+| `GET /accounts/:address/balance` | `account-balance` |
 | `GET /accounts/:address/transfers` | `transfer` |
 | `GET /assets/popular` | `popular-asset` |
 | `GET /nfts/transfers` | `nft-transfer` |
@@ -662,6 +824,28 @@ curl -H "Accept: application/vnd.api+json" http://localhost:3000/summary/GABC123
 | `GET /readyz` | `readiness` |
 
 `GET /metrics` is not a JSON:API resource — it serves Prometheus text format.
+
+The routes below are live but outside the JSON:API surface — no resource
+type, no `data` envelope:
+
+| Endpoint | Notes |
+|----------|-------|
+| `GET /tokens` | Cached token metadata for the selected network |
+| `GET /transfers.csv` | Full-set CSV export (no pagination) |
+| `GET /transfers.parquet` | Full-set Parquet export (no pagination) |
+| `GET /accounts/:address/balance` | Derived balances, not on-chain reads |
+
+Internal routes — not part of the public data API, and marked `deprecated: true`
+with a rationale in `openapi.json`:
+
+| Endpoint | Notes |
+|----------|-------|
+| `POST /webhooks/linq` | Signature-verified payout provider callback |
+| `GET /offramp/rate` | Wallet-only cash-out surface (server-side provider API) |
+| `POST /offramp/verify-bank` | Wallet-only cash-out surface (server-side provider API) |
+| `GET /offramp/trustline` | Wallet-only cash-out surface (server-side provider API) |
+| `POST /offramp/orders` | Wallet-only cash-out surface (server-side provider API) |
+| `GET /offramp/orders/:orderId` | Wallet-only cash-out surface (server-side provider API) |
 
 ***
 
