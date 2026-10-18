@@ -157,6 +157,108 @@ describe("provisionCustomer", () => {
     expect(headers['X-API-Key']).toBe('biz_live_test');
     expect(headers).not.toHaveProperty('Authorization');
   });
+
+  /**
+   * Linq refuses a new reference when the email is already registered, and
+   * names the reference it belongs to. Provisioning a second customer for the
+   * same person is what locked a tester out: the identity stays bound to the
+   * first reference, every later call under a new one is refused, and nothing
+   * on our side could see why.
+   */
+  describe('an email already registered under another reference', () => {
+    const ALREADY_IN_USE = {
+      ok: false,
+      status: 409,
+      text: async () =>
+        JSON.stringify({
+          message: 'This email is already registered under customerRef "veil_etn2674mxqhk"',
+          code: 'email_already_in_use',
+          customerRef: 'veil_etn2674mxqhk',
+        }),
+    };
+
+    const PARAMS = {
+      customerRef: 'veil_4sjjjzwamdoe',
+      firstName: 'Ada',
+      lastName: 'Obi',
+      email: 'ada@example.com',
+      phone: '08012345678',
+    };
+
+    it('adopts the reference Linq names instead of failing', async () => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce(ALREADY_IN_USE)
+        .mockResolvedValueOnce(OK({ customerRef: 'veil_etn2674mxqhk', verified: true })) as never;
+
+      const result = await provisionCustomer(PARAMS);
+
+      expect(result.customerRef).toBe('veil_etn2674mxqhk');
+      expect(result.created).toBe(false);
+      expect(result.reusedExistingRef).toBe(true);
+    });
+
+    // Reporting a verified customer as unverified sends them back through a
+    // NIN check that is rate-limited on Linq's side and that they do not need.
+    it('reports the adopted reference as verified when it already is', async () => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce(ALREADY_IN_USE)
+        .mockResolvedValueOnce(OK({ customerRef: 'veil_etn2674mxqhk', verified: true })) as never;
+
+      const result = await provisionCustomer(PARAMS);
+
+      expect(result.verified).toBe(true);
+      expect(lastCall().url).toContain('/b2b/customers/status');
+      expect(lastCall().url).toContain('veil_etn2674mxqhk');
+    });
+
+    // The status lookup is a convenience, not a precondition. If it fails the
+    // reference is still the right one to use, and refusing here would strand
+    // the person over a field they can refresh later.
+    it('still adopts the reference when the status lookup fails', async () => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce(ALREADY_IN_USE)
+        .mockRejectedValueOnce(new Error('network down')) as never;
+
+      const result = await provisionCustomer(PARAMS);
+
+      expect(result.customerRef).toBe('veil_etn2674mxqhk');
+      expect(result.verified).toBe(false);
+      expect(result.reusedExistingRef).toBe(true);
+    });
+
+    // Inventing a reference is how this went wrong in the first place. With
+    // none named there is nothing to adopt, so the error has to surface.
+    it('rethrows when Linq names no reference', async () => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(ERR(409, 'This email is already registered')) as never;
+
+      await expect(provisionCustomer(PARAMS)).rejects.toThrow(LinqError);
+    });
+
+    // The same reference coming back is the ordinary idempotent case wearing
+    // an error's clothes — nothing drifted, so nothing should say it did.
+    it('does not flag a reuse when the reference did not change', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        text: async () =>
+          JSON.stringify({
+            message: 'already registered',
+            code: 'email_already_in_use',
+            customerRef: 'veil_4sjjjzwamdoe',
+          }),
+      }) as never;
+
+      const result = await provisionCustomer(PARAMS);
+
+      expect(result.customerRef).toBe('veil_4sjjjzwamdoe');
+      expect(result.reusedExistingRef).toBeUndefined();
+    });
+  });
 });
 
 describe("getOnrampRate", () => {

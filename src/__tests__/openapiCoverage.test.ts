@@ -14,6 +14,22 @@ import { buildOpenApiDocument } from "../openapi/build";
  * walking the app — `GET /accounts/:address/balance` and the provider
  * callback `POST /webhooks/linq`.
  *
+ * It went red again (W082) when `GET /fees` shipped without a spec entry. It
+ * also appeared to flap, but the route walk is deterministic — ten runs in a
+ * row agree. What changed between runs was the environment, not the route table:
+ *  - `openapi.json` on a Windows checkout had CRLF line endings, so the
+ *    byte comparison below failed until someone ran `npm run docs:openapi`
+ *    (which writes LF), then failed again after the next checkout;
+ *  - before that, it read the gitignored `docs/openapi.json`, which existed
+ *    only on machines that had run the generator.
+ * Both are fixed; see the last test and `.gitattributes`.
+ *
+ * Speed: nearly all of this suite's time is loading the app (the Stellar SDK,
+ * Apollo, Prisma), not the check — walking the routes and building the spec is
+ * ~100ms. ts-jest used to type-check that whole import graph on every cold
+ * run, which CI already does in `npm run typecheck`; `tsconfig.jest.json` now
+ * sets `isolatedModules` so tests are transpiled, not checked twice.
+ *
  * How the app's route table is collected: express stacks every `app.use` and
  * `app.get` as a Layer. A Layer with a `route` is a method route; a Layer
  * whose `handle` has its own `stack` is a mounted router. Express 4 keeps the
@@ -151,6 +167,11 @@ describe("OpenAPI route coverage (W085)", () => {
     expect(keys).toContain("get /summary/:address");
     expect(keys).toContain("get /accounts/:address/balance");
     expect(keys).toContain("get /transfers.csv");
+    expect(keys).toContain("get /fees");
+  });
+
+  it("documents /fees", () => {
+    expect(spec.paths["/fees"]?.get).toBeDefined();
   });
 
   it("documents /tokens", () => {
@@ -192,7 +213,16 @@ describe("OpenAPI route coverage (W085)", () => {
     // every clean clone, CI included, before this test could assert anything.
     // Nothing is lost: the same loop in build.ts writes both from one
     // `document`, so the docs copy cannot drift independently of this one.
-    const committed = readFileSync(path.resolve(process.cwd(), "openapi.json"), "utf8");
+    //
+    // Line endings are normalised: they are not part of the spec, and a
+    // Windows checkout with core.autocrlf rewrote all of them, so this failed
+    // or passed on the same commit depending on whether the file had been
+    // regenerated locally since checkout. `.gitattributes` pins the file to LF
+    // as well; this keeps the assertion about content either way.
+    const committed = readFileSync(path.resolve(process.cwd(), "openapi.json"), "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
     const generated = JSON.stringify(spec, null, 2) + "\n";
 
     expect(committed).toBe(generated);

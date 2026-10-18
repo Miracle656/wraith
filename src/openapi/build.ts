@@ -52,6 +52,8 @@ import {
   offrampErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
+  feesQuerySchema,
+  feesResponseSchema,
 } from "./schemas";
 
 const registry = new OpenAPIRegistry();
@@ -394,6 +396,22 @@ registry.registerPath({
   responses: {
     200: { description: "OK", content: { "application/json": { schema: tokensResponseSchema } } },
     ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/fees",
+  summary: "Veil platform fee",
+  description:
+    "What the wallet should charge on a send, and where to pay it, per asset. The fee " +
+    "is collected on-chain in the same transaction as the send; this only tells the " +
+    "client the amount, so it can change without shipping an app. Unauthenticated and " +
+    "served with `Cache-Control: no-store`, because a stale fee is one the user was " +
+    "shown but did not agree to. `enabled: false` means no fee is configured today.",
+  request: { query: feesQuerySchema },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: feesResponseSchema } } },
   },
 });
 

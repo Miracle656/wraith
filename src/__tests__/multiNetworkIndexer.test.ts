@@ -20,6 +20,7 @@ import {
   getIndexerUnstartedReason,
   _resetIndexerLoops,
 } from "../indexer";
+import { Asset, Networks } from "@stellar/stellar-sdk";
 import { getRpc, validateNetworkConfig, _resetRpcClients } from "../rpc";
 import { currentNetwork, enabledNetworks, parseNetwork } from "../network";
 
@@ -85,6 +86,11 @@ describe("enabledNetworks", () => {
 });
 
 describe("per-network watch lists", () => {
+  it("matches the Stellar SDK's native SAC derivation", () => {
+    expect(DEFAULT_XLM_SAC_MAINNET).toBe(Asset.native().contractId(Networks.PUBLIC));
+    expect(DEFAULT_XLM_SAC_TESTNET).toBe(Asset.native().contractId(Networks.TESTNET));
+  });
+
   it("defaults each network to its own native XLM SAC", () => {
     // The bug this prevents: reading STELLAR_NETWORK inside the resolver, so
     // both loops watch the same chain's SAC and one indexes nothing.

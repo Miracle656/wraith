@@ -767,3 +767,39 @@ export const ngnCustomerStatusResponseSchema = z.object({
   status: z.string().optional(),
 });
 
+
+// ─── GET /fees ──────────────────────────────────────────────────────────────
+
+export const feesQuerySchema = z.object({
+  amount: optionalQueryString(
+    "The amount being sent, in whole units of the asset. When given and a percentage " +
+      "fee is configured, each fee is computed for it; without it each fee is the " +
+      "floor. Optional because shipped clients predate it.",
+  ).openapi({ example: "25" }),
+});
+
+const platformFeeSchema = z.object({
+  amount: z.string().openapi({
+    description: "What to charge, in whole units of the fee asset, as a decimal string.",
+    example: "0.25",
+  }),
+  assetCode: z.string().openapi({ example: "USDC" }),
+  assetIssuer: z.string().nullable().openapi({ description: "Null for native XLM." }),
+  destination: z.string().openapi({ description: "The classic account the fee is paid to." }),
+  percent: z.string().optional().openapi({
+    description: "Percent of the sent amount, when the fee scales. Absent when it is flat.",
+  }),
+  min: z.string().optional().openapi({ description: "Floor; present only alongside percent." }),
+  max: z.string().optional().openapi({ description: "Cap; present only alongside percent." }),
+});
+
+export const feesResponseSchema = z.object({
+  enabled: z.boolean().openapi({
+    description:
+      "False when no fee is configured, so a client can tell a deliberate waiver " +
+      "from a backend too old to know about fees.",
+  }),
+  fees: z.record(z.string(), platformFeeSchema).openapi({
+    description: "Keyed by asset code. Always charged in the asset being sent.",
+  }),
+});

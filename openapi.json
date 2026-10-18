@@ -4676,6 +4676,93 @@
         }
       }
     },
+    "/fees": {
+      "get": {
+        "summary": "Veil platform fee",
+        "description": "What the wallet should charge on a send, and where to pay it, per asset. The fee is collected on-chain in the same transaction as the send; this only tells the client the amount, so it can change without shipping an app. Unauthenticated and served with `Cache-Control: no-store`, because a stale fee is one the user was shown but did not agree to. `enabled: false` means no fee is configured today.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+              "example": "25"
+            },
+            "required": false,
+            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+            "name": "amount",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "False when no fee is configured, so a client can tell a deliberate waiver from a backend too old to know about fees."
+                    },
+                    "fees": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "amount": {
+                            "type": "string",
+                            "description": "What to charge, in whole units of the fee asset, as a decimal string.",
+                            "example": "0.25"
+                          },
+                          "assetCode": {
+                            "type": "string",
+                            "example": "USDC"
+                          },
+                          "assetIssuer": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "Null for native XLM."
+                          },
+                          "destination": {
+                            "type": "string",
+                            "description": "The classic account the fee is paid to."
+                          },
+                          "percent": {
+                            "type": "string",
+                            "description": "Percent of the sent amount, when the fee scales. Absent when it is flat."
+                          },
+                          "min": {
+                            "type": "string",
+                            "description": "Floor; present only alongside percent."
+                          },
+                          "max": {
+                            "type": "string",
+                            "description": "Cap; present only alongside percent."
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "assetCode",
+                          "assetIssuer",
+                          "destination"
+                        ]
+                      },
+                      "description": "Keyed by asset code. Always charged in the asset being sent."
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "fees"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/transfers.csv": {
       "get": {
         "summary": "Export all transfers as CSV",
