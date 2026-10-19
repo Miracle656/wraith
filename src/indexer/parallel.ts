@@ -10,13 +10,16 @@
  * worker processes its own ledger range sequentially with the same fromLedger /
  * toLedger window.  Cross-partition ordering is not guaranteed and is not
  * required by the data model (eventId is the canonical ordering key).
+ *
+ * This module only decides *how* events are fetched and sharded. *What* is done
+ * with them lives in `processEventBatch` (./batch), which the caller injects, so
+ * the sharded path cannot drift from the single-fetch path (#203).
  */
 
-import { fetchEventsSafe } from "../rpc";
+import type { RawEvent } from "../rpc";
 import { resolveNetwork, type Network } from "../network";
-import { parseEvents } from "../decoder";
-import { upsertTransfers, setLastIndexedLedger } from "../db";
-import { emitTransfer } from "../events";
+import { setLastIndexedLedger } from "../db";
+import { batchTotal, type BatchResult } from "./batch";
 
 export const DEFAULT_WORKERS = 4;
 
@@ -42,40 +45,46 @@ interface WorkerResult {
   highestLedger: number;
 }
 
+/**
+ * The two seams the caller provides. Both are required: a sharded run with no
+ * `processBatch` is exactly the silent degradation this module used to have.
+ */
+export interface ParallelIo {
+  fetchEvents: (
+    fromLedger: number,
+    toLedger: number,
+    contractIds: string[],
+    limit: number,
+  ) => Promise<{ events: RawEvent[]; highestLedger: number }>;
+  processBatch: (events: RawEvent[]) => Promise<BatchResult>;
+}
+
 async function runPartitionWorker(
   partition: string[],
   fromLedger: number,
   toLedger: number,
   batchSize: number,
-  network: Network,
+  io: ParallelIo,
 ): Promise<WorkerResult> {
-  const { events, highestLedger } = await fetchEventsSafe(
+  const { events, highestLedger } = await io.fetchEvents(
     fromLedger,
     toLedger,
     partition,
     batchSize,
-    undefined,
-    network,
   );
 
   if (events.length === 0) {
     return { inserted: 0, highestLedger };
   }
 
-  const records = parseEvents(events);
-  const inserted = await upsertTransfers(records, network);
-
-  if (inserted > 0) {
-    records.forEach((record) => emitTransfer(record, network));
-  }
-
+  const inserted = batchTotal(await io.processBatch(events));
   return { inserted, highestLedger };
 }
 
 /**
  * Poll one ledger window across all contract partitions in parallel.
  *
- * @returns Total rows inserted and the highest ledger seen across all workers.
+ * @returns Total rows inserted (every record type) and the highest ledger seen across all workers.
  */
 export async function pollParallel(
   contractIds: string[],
@@ -83,14 +92,15 @@ export async function pollParallel(
   toLedger: number,
   batchSize: number,
   workerCount: number = DEFAULT_WORKERS,
-  network?: Network,
+  network: Network | undefined,
+  io: ParallelIo,
 ): Promise<{ totalInserted: number; highestLedger: number }> {
   const net = resolveNetwork(network);
   const partitions = partitionByContract(contractIds, Math.min(workerCount, contractIds.length || 1));
 
   const results = await Promise.all(
     partitions.map(partition =>
-      runPartitionWorker(partition, fromLedger, toLedger, batchSize, net),
+      runPartitionWorker(partition, fromLedger, toLedger, batchSize, io),
     ),
   );
 

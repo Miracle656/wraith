@@ -2,6 +2,7 @@ import {
   getTokenMetadata,
   initTokenCache,
   getAllCachedTokens,
+  getCachedTokenDecimals,
   _resetTokenCache,
 } from "../tokenCache";
 import { prisma } from "../db";
@@ -129,6 +130,19 @@ describe("Token Cache", () => {
     expect(getAllCachedTokens()).toHaveLength(2);
     expect(getAllCachedTokens("testnet").map((t) => t.contractId)).toEqual(["C123"]);
     expect(getAllCachedTokens("mainnet").map((t) => t.contractId)).toEqual(["CMAIN"]);
+  });
+
+  it("reads cached decimals without triggering DB or RPC", async () => {
+    (prisma.tokenMetadata.findMany as jest.Mock).mockResolvedValue([
+      { ...mockToken, decimals: 6 },
+    ]);
+    await initTokenCache("testnet");
+    jest.clearAllMocks();
+
+    expect(getCachedTokenDecimals("C123", "testnet")).toBe(6);
+    expect(getCachedTokenDecimals("CMISSING", "testnet")).toBeUndefined();
+    expect(prisma.tokenMetadata.findUnique).not.toHaveBeenCalled();
+    expect(fetchTokenMetadata).not.toHaveBeenCalled();
   });
 
   it("keeps serving from RPC when the DB seed fails", async () => {

@@ -1,7 +1,8 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "http";
 import { transferEmitter, TransferEvent } from "./events";
-import { toDisplayAmount } from "./api";
+import { toDisplayAmount } from "./amount";
+import { getCachedTokenDecimals } from "./tokenCache";
 import { currentNetwork, enabledNetworks, isNetwork, NETWORKS, type Network } from "./network";
 
 // Matches /subscribe/<Stellar address>, ignoring any query string (#163).
@@ -38,7 +39,13 @@ export function resolveSocketNetwork(url: string): { network: Network } | { erro
 type WsPayload = TransferEvent & { displayAmount: string };
 
 function buildPayload(t: TransferEvent): WsPayload {
-  return { ...t, displayAmount: toDisplayAmount(t.amount) };
+  return {
+    ...t,
+    displayAmount: toDisplayAmount(
+      t.amount,
+      getCachedTokenDecimals(t.contractId, t.network),
+    ),
+  };
 }
 
 /**

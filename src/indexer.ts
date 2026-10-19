@@ -1,31 +1,17 @@
 import "dotenv/config";
 import { validateNetworkConfig, withRetry } from "./rpc";
-import { parseEvents } from "./decoder";
 import {
-  upsertTransfers,
-  upsertAccountSummaries,
-  upsertNftTransfers,
-  getNftMetadata,
-  upsertNftMetadata,
   getLastIndexedLedger,
   setLastIndexedLedger,
   pruneOldTransfers,
 } from "./db";
-import { emitTransfer, emitHostFnLog } from "./events";
-import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./indexer/host-fn-log";
-import { tagSacTransfers } from "./indexer/sac-detect";
-import {
-  parseLpShareEvents,
-  upsertLpShareTransfers,
-  resolveLpPoolIds,
-  loadKnownLpPools,
-} from "./indexer/lp-shares";
-import { pollParallel } from "./indexer/parallel";
+import { resolveLpPoolIds, loadKnownLpPools } from "./indexer/lp-shares";
+import { pollParallel, type ParallelIo } from "./indexer/parallel";
+import { processEventBatch, batchTotal } from "./indexer/batch";
 import { tombstoneExpiredContracts } from "./indexer/tombstones";
-import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "./ingester/nft";
 import { createSourceSwitcherWithConfig, type SourceSwitcher } from "./indexer/sources";
 import { currentNetwork, enabledNetworks, resolveNetwork, type Network } from "./network";
-import { ledgersIndexedTotal, transfersStoredTotal, lastIndexedLedger } from "./metrics";
+import { ledgersIndexedTotal, lastIndexedLedger } from "./metrics";
 
 // ─── NFT Contract IDs ─────────────────────────────────────────────────────────
 /**
@@ -48,9 +34,9 @@ export function resolveNftContractIds(network?: Network): string[] {
 // These are derived from Asset.native().contractId(Networks.PUBLIC / Networks.TESTNET)
 // and serve as the backwards-compatible default when SAC_CONTRACT_IDS is unset.
 export const DEFAULT_XLM_SAC_MAINNET =
-  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+  "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 export const DEFAULT_XLM_SAC_TESTNET =
-  "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 /**
  * Resolve the list of SAC contract IDs to watch.
@@ -87,7 +73,7 @@ export function resolveSacContractIds(network?: Network): string[] {
   // both loops at the same chain's SAC.
   return [net === "mainnet" ? DEFAULT_XLM_SAC_MAINNET : DEFAULT_XLM_SAC_TESTNET];
 }
-import { initTokenCache, getTokenMetadata } from "./tokenCache";
+import { initTokenCache } from "./tokenCache";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 // These stay process-wide: they describe how hard to poll, not which chain.
@@ -128,7 +114,7 @@ const TOMBSTONE_EVERY_CYCLES = parseInt(
  * whose failover `preferred` field is mutable — a testnet RPC outage would
  * silently repoint the mainnet loop at testnet Horizon.
  */
-type LoopState = {
+export type LoopState = {
   network: Network;
   sacContractIds: string[];
   nftContractIds: string[];
@@ -159,7 +145,7 @@ type LoopState = {
 const loops = new Map<Network, LoopState>();
 
 /** Build the isolated state for one network's loop. */
-function createLoopState(network: Network): LoopState {
+export function createLoopState(network: Network): LoopState {
   const sacContractIds = resolveSacContractIds(network);
   const nftContractIds = resolveNftContractIds(network);
   const suffix = network.toUpperCase();
@@ -225,9 +211,124 @@ export function runningNetworks(): Network[] {
   return [...loops.keys()];
 }
 
-/** Test-only: drops loop state between cases. */
+/** Networks that were enabled but failed to start, with the reason. */
+const unstartedNetworks = new Map<Network, string>();
+
+export function isIndexerRunning(network: Network): boolean {
+  return loops.has(network);
+}
+
+export function isIndexerStopped(network: Network): boolean {
+  return unstartedNetworks.has(network);
+}
+
+export function getIndexerUnstartedReason(network: Network): string | undefined {
+  return unstartedNetworks.get(network);
+}
+
+export function getUnstartedNetworks(): Record<string, string> {
+  return Object.fromEntries(unstartedNetworks);
+}
+
+export function setIndexerUnstarted(network: Network, reason: string): void {
+  unstartedNetworks.set(network, reason);
+}
+
+/**
+ * Restarts scheduled after a loop crashed, kept so a case that started a loop
+ * can cancel it again. Without this the chain outlives whoever called
+ * `startAllIndexers` — see `_resetIndexerLoops`.
+ */
+const restartTimers = new Set<NodeJS.Timeout>();
+
+/**
+ * Networks `startAllIndexers` was asked to keep running.
+ *
+ * A loop that rejects while its network is still in here crashed on its own
+ * and earns a restart. One that rejects after the set was dropped is a case
+ * tearing the database out from under it, and announcing "restarting in 10s"
+ * for a loop someone deliberately stopped would be a lie — with output
+ * arriving after the suite finished, which Jest counts as a failure.
+ */
+const requestedNetworks = new Set<Network>();
+
+/** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
+  for (const timer of restartTimers) clearTimeout(timer);
+  restartTimers.clear();
+  requestedNetworks.clear();
   loops.clear();
+  unstartedNetworks.clear();
+}
+
+/**
+ * Test-only: build one loop's isolated state with an injectable event source.
+ *
+ * The harness (#172) must drive the real `pollOnce`/`pollParallel` code — not
+ * raw `db` upserts — so a missing `network` tag fails the same way production
+ * would. `createLoopState` hard-wires a live RPC/Horizon switcher, so this
+ * builds the same state then swaps in the stub source and registers the loop
+ * (so `/status` sees it via `runningNetworks()`/`getAllIndexerStats()`).
+ */
+export function _createLoopForTesting(
+  network: Network,
+  overrides?: Partial<LoopState>,
+): LoopState {
+  const loop = createLoopState(network);
+  if (overrides) Object.assign(loop, overrides);
+  loop.allContractIds = [...new Set([...loop.sacContractIds, ...loop.nftContractIds])];
+  loops.set(network, loop);
+  return loop;
+}
+
+/** Test-only: drive one real indexer poll step for `loop`. */
+export function _pollOnceForTesting(
+  loop: LoopState,
+  fromLedger: number,
+  latestLedger: number,
+): Promise<number> {
+  return pollOnce(loop, fromLedger, latestLedger);
+}
+
+/**
+ * Test-only: mirror the `ingestWindow` dispatch so the harness covers both the
+ * single-worker (`pollOnce`) and `INGEST_WORKERS > 1` (`pollParallel`) paths
+ * through the same contracts and batch pipeline production uses.
+ *
+ * `fetchEventsOverride` replaces only the fetch half of the parallel `io`
+ * seam; `processBatch` always stays the real `processEventBatch`, so the
+ * sharded path cannot drift from the single path (#219).
+ */
+export async function _pollWindowForTesting(
+  loop: LoopState,
+  fromLedger: number,
+  targetLedger: number,
+  workerCount: number = INGEST_WORKERS,
+  fetchEventsOverride?: ParallelIo["fetchEvents"],
+): Promise<number> {
+  const net = loop.network;
+  if (workerCount > 1 && loop.allContractIds.length > 1) {
+    const { totalInserted, highestLedger } = await pollParallel(
+      loop.allContractIds,
+      fromLedger,
+      targetLedger,
+      BATCH_SIZE,
+      workerCount,
+      net,
+      {
+        fetchEvents:
+          fetchEventsOverride ??
+          ((from, to, contractIds, limit) =>
+            loop.sourceSwitcher.fetchEvents(from, to, contractIds, limit)),
+        processBatch: (events) =>
+          processEventBatch(events, { network: net, knownLpPools: loop.knownLpPools }),
+      },
+    );
+    loop.totalIndexed += totalInserted;
+    recordLedgerProgress(net, fromLedger, highestLedger);
+    return highestLedger;
+  }
+  return pollOnce(loop, fromLedger, targetLedger);
 }
 
 /**
@@ -309,95 +410,9 @@ async function pollOnce(
     return highestLedger;
   }
 
-  // Persist token transfers
-  // Split events by type: NFT (4 topics) vs fungible (3 topics)
-  const fungibleEvents = events.filter((e) => !isNftTransferEvent(e));
-  const nftRawEvents   = events.filter((e) => isNftTransferEvent(e));
-
-  // ── Fungible path ────────────────────────────────────────────────────────────
-  const records  = parseEvents(fungibleEvents);
-  // Tag each transfer with whether its contract is a SAC (#136). Best-effort:
-  // a detection failure must never block ingest, so default to false on error.
-  await tagSacTransfers(records, undefined, net).catch((e: unknown) =>
-    console.error(`[indexer/${net}] SAC detection failed:`, e)
-  );
-  const inserted = await upsertTransfers(records, net);
-
-  // Resolve metadata for every distinct token in this batch. Only a cache miss
-  // reaches RPC, and a miss happens once per contract for the life of the
-  // database — so this is one extra call the first time a token is seen and
-  // free thereafter. Best-effort: a token whose metadata cannot be read is
-  // still worth indexing transfers for.
-  await Promise.all(
-    [...new Set(records.map((r) => r.contractId))].map((contractId) =>
-      getTokenMetadata(contractId, net).catch(() => undefined)
-    )
-  );
-  loop.totalIndexed += inserted;
-  transfersStoredTotal.inc({ network: net, type: "fungible" }, inserted);
-
-  // Update materialized account summaries alongside transfer inserts
-  if (inserted > 0) {
-    await upsertAccountSummaries(records, net).catch((e: unknown) =>
-      console.error(`[indexer/${net}] Account summary upsert failed:`, e)
-    );
-  }
-
-  // Broadcast each new record to WebSocket subscribers
-  if (inserted > 0) {
-    records.forEach((record) => emitTransfer(record, net));
-  }
-
-  // Log every event as a raw host-fn invocation for downstream consumers (#84)
-  const hostFnRecords = events
-    .map(raw => { try { return parseHostFnEvent(raw); } catch { return null; } })
-    .filter((r): r is HostFnRecord => r !== null);
-  if (hostFnRecords.length > 0) {
-    await upsertHostFnLogs(hostFnRecords, net).catch((err: unknown) =>
-      console.error(`[indexer/${net}] host-fn log error:`, err),
-    );
-    hostFnRecords.forEach((record) => emitHostFnLog(record, net));
-  }
-
-  // ── LP-share path ──────────────────────────────────────────────────────────
-  // Decode pool deposits/withdrawals as LP-share transfers tagged with the pool
-  // ID. Best-effort and additive: deposit/withdraw events are ignored by the
-  // fungible path, while a pool's own share mint/burn is recorded here in
-  // addition to its token-transfer row.
-  const lpRecords  = parseLpShareEvents(events, loop.knownLpPools);
-  // A contract that produced an LP-share record has identified itself as a
-  // pool, so its bare mint/burn counts from here on. Learning this is what lets
-  // the bare dialect ever be accepted without an env allowlist.
-  for (const record of lpRecords) loop.knownLpPools.add(record.poolId);
-  const lpInserted = await upsertLpShareTransfers(lpRecords, net).catch((e) => {
-    console.error(`[indexer/${net}] LP-share upsert failed:`, e);
-    return 0;
-  });
-  loop.totalIndexed += lpInserted;
-
-  // ── NFT path ─────────────────────────────────────────────────────────────────
-  const nftParsed   = parseNftEvents(nftRawEvents);
-  const nftRecords  = nftParsed.map((p) => p.record);
-  const nftInserted = await upsertNftTransfers(nftRecords, net);
-  loop.totalIndexed += nftInserted;
-  transfersStoredTotal.inc({ network: net, type: "nft" }, nftInserted);
-
-  // Lazy-load metadata for unique (contractId, tokenId) pairs not yet cached
-  if (nftParsed.length > 0) {
-    const seen = new Set<string>();
-    for (const { record, tokenIdScVal } of nftParsed) {
-      const key = `${record.contractId}:${record.tokenId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const cached = await getNftMetadata(record.contractId, record.tokenId, net);
-      if (!cached) {
-        const meta = await fetchNftMetadata(record.contractId, tokenIdScVal, net).catch(() => ({}));
-        await upsertNftMetadata(record.contractId, record.tokenId, meta, net).catch((e: unknown) =>
-          console.error(`[indexer/${net}] NFT metadata upsert failed:`, e)
-        );
-      }
-    }
-  }
+  const batch = await processEventBatch(events, { network: net, knownLpPools: loop.knownLpPools });
+  const { fungibleInserted: inserted, nftInserted, lpInserted } = batch;
+  loop.totalIndexed += batchTotal(batch);
 
   await setLastIndexedLedger(highestLedger, net);
   recordLedgerProgress(net, fromLedger, highestLedger);
@@ -407,6 +422,45 @@ async function pollOnce(
   );
 
   return highestLedger;
+}
+
+// ─── One ingest window ────────────────────────────────────────────────────────
+/**
+ * Ingest ledgers `fromLedger`..`toLedger`, sequentially or sharded across
+ * `workers` (default `INGEST_WORKERS`). Returns the highest ledger seen.
+ *
+ * `workers` changes how fast the window is ingested, never what is indexed:
+ * both branches watch the same contracts (SAC and NFT), fetch through the same
+ * source switcher, and hand events to the same `processEventBatch` (#203).
+ */
+export async function ingestWindow(
+  loop: LoopState,
+  fromLedger: number,
+  toLedger: number,
+  workers: number = INGEST_WORKERS,
+): Promise<number> {
+  const net = loop.network;
+  if (workers > 1 && loop.allContractIds.length > 1) {
+    // Parallel path: shard contracts across N workers for higher throughput (#83)
+    const { totalInserted, highestLedger } = await pollParallel(
+      loop.allContractIds,
+      fromLedger,
+      toLedger,
+      BATCH_SIZE,
+      workers,
+      net,
+      {
+        fetchEvents: (from, to, contractIds, limit) =>
+          loop.sourceSwitcher.fetchEvents(from, to, contractIds, limit),
+        processBatch: (events) =>
+          processEventBatch(events, { network: net, knownLpPools: loop.knownLpPools }),
+      },
+    );
+    loop.totalIndexed += totalInserted;
+    recordLedgerProgress(net, fromLedger, highestLedger);
+    return highestLedger;
+  }
+  return pollOnce(loop, fromLedger, toLedger);
 }
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
@@ -477,7 +531,11 @@ export async function startIndexer(network?: Network): Promise<void> {
   }
 
   // ── Polling loop ────────────────────────────────────────────────────────────
-  while (true) {
+  // Runs while this loop is still the registered one. `_resetIndexerLoops`
+  // drops registrations between test cases, and a loop that outlives them
+  // would keep polling — and start a fresh RPC request — after the code that
+  // started it is gone. Production registers once and never clears.
+  while (loops.get(net) === loop) {
     try {
       const tip = await withRetry(() => loop.sourceSwitcher.getLatestLedger());
       const target = tip - TIP_LAG;
@@ -488,23 +546,7 @@ export async function startIndexer(network?: Network): Promise<void> {
         continue;
       }
 
-      if (INGEST_WORKERS > 1 && loop.sacContractIds.length > 1) {
-        // Parallel path: shard contracts across N workers for higher throughput (#83)
-        const { totalInserted, highestLedger } = await pollParallel(
-          loop.sacContractIds,
-          currentLedger,
-          target,
-          BATCH_SIZE,
-          INGEST_WORKERS,
-          net,
-        );
-        loop.totalIndexed += totalInserted;
-        transfersStoredTotal.inc({ network: net, type: "fungible" }, totalInserted);
-        recordLedgerProgress(net, currentLedger, highestLedger);
-        currentLedger = highestLedger;
-      } else {
-        currentLedger = await pollOnce(loop, currentLedger, target);
-      }
+      currentLedger = await ingestWindow(loop, currentLedger, target);
 
       // Periodic data retention cleanup
       loop.pollCycleCount++;
@@ -517,11 +559,62 @@ export async function startIndexer(network?: Network): Promise<void> {
 
       await maybeTombstoneExpiredContracts(loop, currentLedger);
     } catch (err) {
+      if (loops.get(net) !== loop) return;
       console.error(`[indexer/${net}] Unhandled error in poll loop:`, err);
       // Back off before retrying to avoid hammering the RPC on persistent errors
       await sleep(POLL_INTERVAL_MS * 2);
     }
   }
+}
+
+/**
+ * Split the requested networks into the ones that can start and the ones that
+ * cannot, recording why for the latter.
+ *
+ * Separate from starting them because this answer is what a caller acts on:
+ * `/status` reports the networks that were skipped, and a test can ask which
+ * loops *would* run without leaving a real one polling after the case that
+ * asked has finished. `startAllIndexers` starts what this returns.
+ *
+ * Validated per network, and a failure skips that network rather than throwing.
+ *
+ * `validateNetworkConfig(networks)` threw for the whole set if any one entry
+ * was misconfigured, which broke the isolation promised in
+ * `startAllIndexers` in the worst way: an unset SOROBAN_RPC_URL_MAINNET killed
+ * the process during main(), taking testnet indexing AND the HTTP API with it.
+ * The API does not index. The naira rails are plain HTTP to Linq and never
+ * touch Soroban RPC, so a missing mainnet endpoint was stopping /ngn from
+ * answering for a reason that has nothing to do with it.
+ *
+ * Serving reads on the networks that *are* configured, while saying loudly
+ * which one is not, beats refusing to serve anything.
+ */
+export function planNetworks(networks: Network[] = enabledNetworks()): Network[] {
+  const runnable: Network[] = [];
+  for (const net of networks) {
+    try {
+      validateNetworkConfig([net]);
+      runnable.push(net);
+    } catch (err) {
+      const message = (err as Error).message;
+      setIndexerUnstarted(net, message);
+      console.error(
+        `[indexer/${net}] NOT STARTED — ${message}\n` +
+          `[indexer/${net}] Reads for this network will serve whatever is already ` +
+          `indexed and fall behind until it is configured. Other networks and the ` +
+          `HTTP API are unaffected.`,
+      );
+    }
+  }
+
+  if (runnable.length === 0) {
+    console.error(
+      "[indexer] No network is configured for indexing. The API is still serving; " +
+        "nothing is being indexed.",
+    );
+  }
+
+  return runnable;
 }
 
 /**
@@ -533,23 +626,38 @@ export async function startIndexer(network?: Network): Promise<void> {
  * returns immediately with the loops running in the background.
  */
 export function startAllIndexers(networks: Network[] = enabledNetworks()): Network[] {
-  // Validate every network up front so a bad mainnet endpoint is reported at
-  // startup rather than after testnet has already begun writing.
-  validateNetworkConfig(networks);
+  const runnable = planNetworks(networks);
+  if (runnable.length === 0) return [];
 
-  console.log(`[indexer] Starting loops for: ${networks.join(", ")}`);
+  console.log(`[indexer] Starting loops for: ${runnable.join(", ")}`);
 
   const run = (net: Network) => {
     startIndexer(net).catch((err) => {
+      if (!requestedNetworks.has(net)) return;
       console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
-      setTimeout(() => run(net), 10_000);
+      const timer = setTimeout(() => {
+        restartTimers.delete(timer);
+        run(net);
+      }, 10_000);
+      restartTimers.add(timer);
+      // Unref'd, because a restart wait is not a reason to keep a process
+      // alive — the API listening is. Held to the event loop, this chain is
+      // immortal: the first crashed loop reschedules itself forever, and
+      // anything that imported the module can never finish, let alone exit.
+      timer.unref();
     });
   };
 
-  for (const net of networks) run(net);
-  return networks;
+  for (const net of runnable) requestedNetworks.add(net);
+  for (const net of runnable) run(net);
+  return runnable;
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => {
+    // Same reason as the restart timer above: the gap between two polls must
+    // not be what keeps the process running.
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }

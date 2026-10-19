@@ -7,6 +7,7 @@
  */
 
 import { xdr } from "@stellar/stellar-sdk";
+import { DEFAULT_XLM_SAC_MAINNET, DEFAULT_XLM_SAC_TESTNET } from "../indexer";
 import {
   executableIsSac,
   instanceValIsSac,
@@ -16,9 +17,6 @@ import {
   _clearSacCache,
   type InstanceFetcher,
 } from "../indexer/sac-detect";
-
-// The native XLM SACs are hard-coded as known SACs in the module.
-const TESTNET_XLM_SAC = "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
 
 function sacInstanceVal(): xdr.ScVal {
   return xdr.ScVal.scvContractInstance(
@@ -67,9 +65,14 @@ describe("instanceValIsSac", () => {
 });
 
 describe("detectSac", () => {
-  it("returns true for a known native XLM SAC without fetching", async () => {
+  it("returns true for known native XLM SACs without fetching", async () => {
     const fetcher = jest.fn<Promise<xdr.ScVal | null>, [string]>();
-    await expect(detectSac(TESTNET_XLM_SAC, fetcher)).resolves.toBe(true);
+    await expect(
+      Promise.all([
+        detectSac(DEFAULT_XLM_SAC_MAINNET, fetcher),
+        detectSac(DEFAULT_XLM_SAC_TESTNET, fetcher),
+      ]),
+    ).resolves.toEqual([true, true]);
     expect(fetcher).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # ── Postgres ──────────────────────────────────────────────
   db:
@@ -20,6 +18,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── Redis (optional, for response cache) ─────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: wraith_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - cache
+
   # ── Wraith Indexer + API ───────────────────────────────────
   wraith:
     build: .
@@ -28,14 +41,38 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+        required: false
     environment:
       DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
-      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      DIRECT_DATABASE_URL: postgresql://wraith:wraith@db:5432/wraith
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+      SOROBAN_RPC_URL: ${SOROBAN_RPC_URL:-}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-}
+      NETWORKS: ${NETWORKS:-}
       START_LEDGER: ${START_LEDGER:-}
       POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-6000}
+      SAC_CONTRACT_IDS: ${SAC_CONTRACT_IDS:-}
+      SAC_CONTRACT_IDS_TESTNET: ${SAC_CONTRACT_IDS_TESTNET:-}
+      SAC_CONTRACT_IDS_MAINNET: ${SAC_CONTRACT_IDS_MAINNET:-}
       CONTRACT_IDS: ${CONTRACT_IDS:-}
+      NFT_CONTRACT_IDS: ${NFT_CONTRACT_IDS:-}
+      NFT_CONTRACT_IDS_TESTNET: ${NFT_CONTRACT_IDS_TESTNET:-}
+      NFT_CONTRACT_IDS_MAINNET: ${NFT_CONTRACT_IDS_MAINNET:-}
       EVENTS_BATCH_SIZE: ${EVENTS_BATCH_SIZE:-10000}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
       PORT: ${PORT:-3000}
+      CACHE_ENABLED: ${CACHE_ENABLED:-false}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      CACHE_KEY_PREFIX: ${CACHE_KEY_PREFIX:-wraith:cache:}
+      CACHE_TTL_POPULAR_MS: ${CACHE_TTL_POPULAR_MS:-60000}
+      CACHE_TTL_SEARCH_MS: ${CACHE_TTL_SEARCH_MS:-15000}
+      TOMBSTONE_CHECK_EVERY_CYCLES: ${TOMBSTONE_CHECK_EVERY_CYCLES:-100}
+      LP_POOL_CONTRACT_IDS: ${LP_POOL_CONTRACT_IDS:-}
+      LP_POOL_CONTRACT_IDS_TESTNET: ${LP_POOL_CONTRACT_IDS_TESTNET:-}
+      LP_POOL_CONTRACT_IDS_MAINNET: ${LP_POOL_CONTRACT_IDS_MAINNET:-}
+      SKIP_INDEXER: ${SKIP_INDEXER:-false}
     ports:
       - "${PORT:-3000}:3000"
 

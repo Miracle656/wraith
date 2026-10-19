@@ -3,6 +3,11 @@
   "compilerOptions": {
     "module": "commonjs",
     "moduleResolution": "node",
-    "noEmit": false
+    "noEmit": false,
+    // Transpile only. Type errors in src/ and the tests are caught by
+    // `npm run typecheck` (tsconfig.test.json), which CI runs before `npm test`;
+    // ts-jest checking the same graph again roughly doubled a cold run of any
+    // suite that imports the whole app (openapiCoverage: 23s → 13s).
+    "isolatedModules": true
   }
 }

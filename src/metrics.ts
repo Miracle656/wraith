@@ -12,6 +12,7 @@
  * between tests without clobbering theirs.
  */
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
+import type { Network } from "./network";
 
 export const registry = new Registry();
 
@@ -19,6 +20,36 @@ export const registry = new Registry();
 // loop lag, …). Cheap, and they answer "is the process itself unhealthy?"
 // before any of the counters below can.
 collectDefaultMetrics({ register: registry });
+
+/**
+ * HTTP request count by method, route pattern, and status code.
+ *
+ * The route label uses the Express route pattern (e.g. /transfers/incoming/:address),
+ * never the raw path — addresses and other dynamic values must not become label values.
+ * /metrics is excluded from its own counters.
+ */
+export const httpRequestsTotal = new Counter({
+  name: "http_requests_total",
+  help: "Total HTTP requests by method, route pattern, and status code",
+  labelNames: ["method", "route", "status"] as const,
+  registers: [registry],
+});
+
+/**
+ * HTTP request latency by method and route pattern.
+ *
+ * Buckets run from 5ms to 10s: below 5ms nothing here is worth alerting on,
+ * and past 10s the request has already failed for whatever is waiting on it.
+ * The route label uses the Express route pattern, never the raw path.
+ * /metrics is excluded from its own histogram.
+ */
+export const httpRequestDurationSeconds = new Histogram({
+  name: "http_request_duration_seconds",
+  help: "HTTP request latency in seconds, by method and route pattern",
+  labelNames: ["method", "route"] as const,
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [registry],
+});
 
 /**
  * Ledgers the indexer has advanced through, per network.
@@ -59,6 +90,39 @@ export const rpcErrorsTotal = new Counter({
   name: "rpc_errors_total",
   help: "Failed RPC attempts (each retry counts separately)",
   labelNames: ["outcome"] as const,
+  registers: [registry],
+});
+
+/**
+ * Ledgers the indexer gave up on, per network.
+ *
+ * A skip is the one failure the indexer cannot recover from: the ledger's events
+ * are never written and the cursor has already advanced past it, so the gap is
+ * permanent. It only happens for a genuine XDR decode failure, which means any
+ * non-zero value deserves a look, and a `rate()` over it says whether the gap is
+ * still growing.
+ *
+ * Labelled by network only. The ledger number would be the interesting value and
+ * is deliberately absent: one series per skipped ledger is unbounded cardinality,
+ * and the counter answers the same question without it.
+ */
+export const ledgersSkippedTotal = new Counter({
+  name: "ledgers_skipped_total",
+  help: "Ledgers skipped by the indexer after an XDR decode failure, per network",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
+/**
+ * Events dropped by the decoder, by reason.
+ *
+ * `malformed` means a token event that failed to decode; a rising rate points
+ * at a contract emitting non-standard events or a decoder bug.
+ */
+export const eventsSkippedTotal = new Counter({
+  name: "events_skipped_total",
+  help: "Events skipped by the decoder",
+  labelNames: ["reason"] as const,
   registers: [registry],
 });
 
@@ -108,6 +172,17 @@ export async function observeDbQuery<T>(operation: string, fn: () => Promise<T>)
 /** Record one failed RPC attempt. `outcome` distinguishes a retry from a give-up. */
 export function recordRpcError(outcome: "retry" | "exhausted"): void {
   rpcErrorsTotal.inc({ outcome });
+}
+
+/**
+ * Record one ledger abandoned after a genuine XDR decode failure.
+ *
+ * Called only where a ledger is actually given up on, never for the bisection
+ * that looks for it — a bisection is a search, and counting it would inflate the
+ * count by the depth of the search.
+ */
+export function recordSkippedLedger(network: Network): void {
+  ledgersSkippedTotal.inc({ network });
 }
 
 /** Serialize the registry in Prometheus text exposition format. */

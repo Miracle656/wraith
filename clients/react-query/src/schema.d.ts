@@ -88,6 +88,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Max acceptable ledger lag */
                     maxLag?: number | null;
                 };
@@ -105,10 +107,24 @@ export interface paths {
                     content: {
                         "application/json": {
                             ok: boolean;
+                            /** @enum {string} */
+                            network?: "testnet" | "mainnet";
                             checks: {
                                 db: boolean;
                                 rpc: boolean;
                                 indexerCaughtUp: boolean;
+                            };
+                            networks?: {
+                                [key: string]: {
+                                    checks: {
+                                        db: boolean;
+                                        rpc: boolean;
+                                        indexerCaughtUp: boolean;
+                                    };
+                                    lastIndexedLedger: number | null;
+                                    latestLedger: number | null;
+                                    lagLedgers: number | null;
+                                };
                             };
                         };
                     };
@@ -154,12 +170,145 @@ export interface paths {
                     content: {
                         "application/json": {
                             ok: boolean;
+                            /** @enum {string} */
+                            network?: "testnet" | "mainnet";
                             checks: {
                                 db: boolean;
                                 rpc: boolean;
                                 indexerCaughtUp: boolean;
                             };
+                            networks?: {
+                                [key: string]: {
+                                    checks: {
+                                        db: boolean;
+                                        rpc: boolean;
+                                        indexerCaughtUp: boolean;
+                                    };
+                                    lastIndexedLedger: number | null;
+                                    latestLedger: number | null;
+                                    lagLedgers: number | null;
+                                };
+                            };
                         };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ngn/customers/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Is this customer reference verified?
+         * @description Read-only check against the naira provider. Creating nothing is the point: the only previous way to ask was to provision a customer and read `verified` off the reply, which needed a full set of personal details to answer a yes/no question about a reference the caller already held. Rate-limited, because a reference is derived from a wallet address and an unthrottled answer would be an oracle.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Our identifier for the person, stable for the life of their install. Derived from the wallet address, never a provider id. */
+                    customerRef: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            customerRef: string;
+                            /** @description Whether the provider verifies this reference right now. Read-only: asking does not create a customer and does not spend a verification attempt, which is the reason this route exists. */
+                            verified: boolean;
+                            status?: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Prometheus metrics
+         * @description Indexer and process metrics in Prometheus text exposition format. Served from in-process counters only — no database or RPC call — so it keeps answering while the subsystems it reports on are down.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Prometheus text exposition format */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
                     };
                 };
             };
@@ -182,7 +331,10 @@ export interface paths {
         /** Indexer status */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -198,13 +350,28 @@ export interface paths {
                         "application/json": {
                             /** @enum {boolean} */
                             ok: true;
+                            /** @enum {string} */
+                            network?: "testnet" | "mainnet";
                             lastIndexedLedger: number | null;
-                            latestLedger: number;
-                            lagLedgers: number;
+                            latestLedger: number | null;
+                            lagLedgers: number | null;
                             /** Format: date-time */
-                            startedAt: string;
-                            uptimeSeconds: number;
-                            totalIndexed: number;
+                            startedAt?: string;
+                            uptimeSeconds?: number;
+                            totalIndexed?: number;
+                            networks?: {
+                                [key: string]: {
+                                    lastIndexedLedger: number | null;
+                                    latestLedger: number | null;
+                                    lagLedgers: number | null;
+                                    running: boolean;
+                                    reason?: string;
+                                } & {
+                                    [key: string]: unknown;
+                                };
+                            };
+                        } & {
+                            [key: string]: unknown;
                         };
                     };
                 };
@@ -262,6 +429,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     token?: string;
@@ -283,6 +452,8 @@ export interface paths {
                     $filter?: string | null;
                     /** @description Comma-separated field list */
                     $select?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path: {
@@ -299,7 +470,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            total: number;
+                            /** @description Exact match count. Only present when the request set includeTotal=true */
+                            total?: number;
+                            /** @description True when another page exists */
+                            hasMore: boolean;
                             limit: number;
                             offset: number;
                             nextCursor?: string | null;
@@ -380,6 +554,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     token?: string;
@@ -401,6 +577,8 @@ export interface paths {
                     $filter?: string | null;
                     /** @description Comma-separated field list */
                     $select?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path: {
@@ -417,7 +595,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            total: number;
+                            /** @description Exact match count. Only present when the request set includeTotal=true */
+                            total?: number;
+                            /** @description True when another page exists */
+                            hasMore: boolean;
                             limit: number;
                             offset: number;
                             nextCursor?: string | null;
@@ -498,6 +679,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     token?: string;
@@ -519,6 +702,8 @@ export interface paths {
                     $filter?: string | null;
                     /** @description Comma-separated field list */
                     $select?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path: {
@@ -535,7 +720,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            total: number;
+                            /** @description Exact match count. Only present when the request set includeTotal=true */
+                            total?: number;
+                            /** @description True when another page exists */
+                            hasMore: boolean;
                             limit: number;
                             offset: number;
                             nextCursor?: string | null;
@@ -616,6 +804,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     token?: string;
@@ -627,6 +817,8 @@ export interface paths {
                     toDate?: string | null;
                     /** @description Comma-separated list of event types */
                     eventType?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path: {
@@ -792,6 +984,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     /** @description Inclusive lower bound on ledgerClosedAt */
@@ -896,6 +1090,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     /** @description Inclusive lower bound on ledgerClosedAt */
@@ -989,6 +1185,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/accounts/{address}/balance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Derived token balances
+         * @description Per-token balance for an address, derived by summing indexed transfers — not a read from chain. Excludes any history before the indexer's start ledger, so an address that held a token before then reads low.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    address: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @example GABCDEFGHIJKLMNOPQRSTUVWXYZ */
+                            address: string;
+                            /** @enum {string} */
+                            network: "testnet" | "mainnet";
+                            balances: {
+                                /** @example CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B */
+                                contractId: string;
+                                balance: string;
+                                displayBalance: string;
+                            }[];
+                            /** @enum {boolean} */
+                            derivedFromLedger: true;
+                            note: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/accounts/{address}/transfers": {
         parameters: {
             query?: never;
@@ -1000,6 +1284,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Token contract ID to filter by */
                     contractId?: string | null;
                     token?: string;
@@ -1021,6 +1307,8 @@ export interface paths {
                     $filter?: string | null;
                     /** @description Comma-separated field list */
                     $select?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path: {
@@ -1037,7 +1325,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            total: number;
+                            /** @description Exact match count. Only present when the request set includeTotal=true */
+                            total?: number;
+                            /** @description True when another page exists */
+                            hasMore: boolean;
                             limit: number;
                             offset: number;
                             nextCursor?: string | null;
@@ -1462,6 +1753,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description Host function name to filter by */
                     functionName?: string | null;
                     /** @description Page size */
@@ -1559,6 +1852,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     /** @description NFT contract ID to filter by */
                     contract?: string | null;
                     /** @description NFT token identifier */
@@ -1577,6 +1872,8 @@ export interface paths {
                     $filter?: string | null;
                     /** @description Comma-separated field list */
                     $select?: string[] | null;
+                    /** @description Also return an exact `total`. Runs a COUNT over every matching row, so it is markedly slower on large result sets; omit it and use `hasMore` / `nextCursor` to paginate */
+                    includeTotal?: boolean | null;
                 };
                 header?: never;
                 path?: never;
@@ -1591,7 +1888,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            total: number;
+                            /** @description Exact match count. Only present when the request set includeTotal=true */
+                            total?: number;
+                            /** @description True when another page exists */
+                            hasMore: boolean;
                             limit: number;
                             offset: number;
                             nextCursor?: string | null;
@@ -1751,6 +2051,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     window?: "1h" | "24h" | "7d";
                     by?: "transfers" | "volume";
                     /** @description Page size */
@@ -1842,6 +2144,8 @@ export interface paths {
         get: {
             parameters: {
                 query: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
                     q: string;
                 };
                 header?: never;
@@ -1893,6 +2197,1068 @@ export interface paths {
                 };
                 /** @description Internal Server Error */
                 500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cached token metadata
+         * @description All tokens the indexer has encountered and cached, on the selected network. Served from the in-memory token cache — a token appears here once the indexer has seen a transfer of it and resolved its symbol, name and decimals.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                            /** @enum {string} */
+                            network: "testnet" | "mainnet";
+                            tokens: {
+                                /** @enum {string} */
+                                network: "testnet" | "mainnet";
+                                /** @example CB64D3G7SM2RTH6ISYIG4P2IYYD6J2OFR6B */
+                                contractId: string;
+                                symbol: string;
+                                name: string;
+                                decimals: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Veil platform fee
+         * @description What the wallet should charge on a send, and where to pay it, per asset. The fee is collected on-chain in the same transaction as the send; this only tells the client the amount, so it can change without shipping an app. Unauthenticated and served with `Cache-Control: no-store`, because a stale fee is one the user was shown but did not agree to. `enabled: false` means no fee is configured today.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
+                    amount?: string | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description False when no fee is configured, so a client can tell a deliberate waiver from a backend too old to know about fees. */
+                            enabled: boolean;
+                            /** @description Keyed by asset code. Always charged in the asset being sent. */
+                            fees: {
+                                [key: string]: {
+                                    /**
+                                     * @description What to charge, in whole units of the fee asset, as a decimal string.
+                                     * @example 0.25
+                                     */
+                                    amount: string;
+                                    /** @example USDC */
+                                    assetCode: string;
+                                    /** @description Null for native XLM. */
+                                    assetIssuer: string | null;
+                                    /** @description The classic account the fee is paid to. */
+                                    destination: string;
+                                    /** @description Percent of the sent amount, when the fee scales. Absent when it is flat. */
+                                    percent?: string;
+                                    /** @description Floor; present only alongside percent. */
+                                    min?: string;
+                                    /** @description Cap; present only alongside percent. */
+                                    max?: string;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transfers.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export all transfers as CSV
+         * @description Streams every transfer matching the filters as CSV. No pagination: the response is the entire matching set, so narrow it with the ledger or date bounds on large deployments.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
+                    address?: string;
+                    /** @description Token contract ID to filter by */
+                    contractId?: string | null;
+                    token?: string;
+                    fromLedger?: number | null;
+                    toLedger?: number | null;
+                    /** @description Inclusive lower bound on ledgerClosedAt */
+                    fromDate?: string | null;
+                    /** @description Inclusive upper bound on ledgerClosedAt */
+                    toDate?: string | null;
+                    /** @description Comma-separated list of event types */
+                    eventType?: string[] | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description File download of the full matching transfer set (no pagination). */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                        "application/octet-stream": string;
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transfers.parquet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export all transfers as Parquet
+         * @description Streams every transfer matching the filters as an Apache Parquet file. Same filters and streaming behaviour as /transfers.csv.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Network to read from. Defaults to the deployment's configured network. May also be sent as the X-Network header; the query parameter wins. */
+                    network?: "testnet" | "mainnet" | null;
+                    address?: string;
+                    /** @description Token contract ID to filter by */
+                    contractId?: string | null;
+                    token?: string;
+                    fromLedger?: number | null;
+                    toLedger?: number | null;
+                    /** @description Inclusive lower bound on ledgerClosedAt */
+                    fromDate?: string | null;
+                    /** @description Inclusive upper bound on ledgerClosedAt */
+                    toDate?: string | null;
+                    /** @description Comma-separated list of event types */
+                    eventType?: string[] | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description File download of the full matching transfer set (no pagination). */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/csv": string;
+                        "application/octet-stream": string;
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/linq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Payout webhook (provider callback)
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Acknowledged */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Unrecognised event */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Invalid signature */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Is cash-out enabled on this deployment
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client). Answers the availability question without pricing anything: it makes no provider call, so it costs none of the shared rate allowance.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            available: true;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Indicative naira-per-coin rate
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for. */
+                    coin?: "xlm" | "usdc";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The asset `rate` is quoted per unit of. Always present, including for a request that named none — which is priced as `usdc`.
+                             * @enum {string}
+                             */
+                            coin: "xlm" | "usdc";
+                            /** @description Naira per one unit of the requested coin, not naira per dollar. */
+                            rate: number;
+                            /** @enum {boolean} */
+                            indicative: true;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Payout provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/verify-bank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify a bank account before creating an order
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        bankCode: string;
+                        accountNumber: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            accountName: string;
+                            bankName: string;
+                            accountNumber: string;
+                            bankCode: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Payout provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/trustline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check a refund address holds a USDC trustline
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        get: {
+            parameters: {
+                query: {
+                    address: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            address: string;
+                            valid: boolean;
+                            trustsUSDC: boolean;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Payout provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a cash-out order
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        amountNGN?: number;
+                        amountStableCoin?: number;
+                        bankAccount: string;
+                        bankCode: string;
+                        bankName: string;
+                        accountName: string;
+                        refundAddress?: string;
+                        walletAddress: string;
+                        idempotencyKey: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description Replayed existing order (same idempotencyKey) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /** @description Deposit address the stablecoin is sent to. */
+                            walletAddress: string;
+                            chain: string;
+                            coin: string;
+                            amountStableCoin: number;
+                            amountNGN: number;
+                            rate: number;
+                            /**
+                             * @description Client-facing status mapped from the provider's raw one.
+                             * @enum {string}
+                             */
+                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
+                            /** @description Raw provider status, when the order is not a replay. */
+                            providerStatus?: string;
+                            replayed?: boolean;
+                        };
+                    };
+                };
+                /** @description Order created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /** @description Deposit address the stablecoin is sent to. */
+                            walletAddress: string;
+                            chain: string;
+                            coin: string;
+                            amountStableCoin: number;
+                            amountNGN: number;
+                            rate: number;
+                            /**
+                             * @description Client-facing status mapped from the provider's raw one.
+                             * @enum {string}
+                             */
+                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
+                            /** @description Raw provider status, when the order is not a replay. */
+                            providerStatus?: string;
+                            replayed?: boolean;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Payout provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/orders/{orderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the status of a cash-out order
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    orderId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            /**
+                             * @description Client-facing status mapped from the provider's raw one.
+                             * @enum {string}
+                             */
+                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
+                            providerStatus: string;
+                            amountStableCoin: number;
+                            amountNGN: number;
+                            depositAddress: string;
+                            rate: number;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** @enum {string} */
+                            source: "live" | "cache";
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Payout provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };

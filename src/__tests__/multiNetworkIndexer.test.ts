@@ -15,8 +15,13 @@ import {
   resolveNftContractIds,
   resolveSacContractIds,
   runningNetworks,
+  planNetworks,
+  startAllIndexers,
+  isIndexerRunning,
+  getIndexerUnstartedReason,
   _resetIndexerLoops,
 } from "../indexer";
+import { Asset, Networks } from "@stellar/stellar-sdk";
 import { getRpc, validateNetworkConfig, _resetRpcClients } from "../rpc";
 import { currentNetwork, enabledNetworks, parseNetwork } from "../network";
 
@@ -41,6 +46,12 @@ beforeEach(() => {
   _resetRpcClients();
   _resetIndexerLoops();
 });
+
+// A case that calls `startAllIndexers` starts a real loop, and the next
+// `beforeEach` is too late for the last case in the file: nothing runs after
+// it, so that loop would still be polling while Jest tears the environment
+// down.
+afterEach(() => _resetIndexerLoops());
 
 describe("enabledNetworks", () => {
   it("defaults to the single configured network, so existing deployments are unchanged", () => {
@@ -82,6 +93,11 @@ describe("enabledNetworks", () => {
 });
 
 describe("per-network watch lists", () => {
+  it("matches the Stellar SDK's native SAC derivation", () => {
+    expect(DEFAULT_XLM_SAC_MAINNET).toBe(Asset.native().contractId(Networks.PUBLIC));
+    expect(DEFAULT_XLM_SAC_TESTNET).toBe(Asset.native().contractId(Networks.TESTNET));
+  });
+
   it("defaults each network to its own native XLM SAC", () => {
     // The bug this prevents: reading STELLAR_NETWORK inside the resolver, so
     // both loops watch the same chain's SAC and one indexes nothing.
@@ -208,4 +224,38 @@ describe("loop state isolation", () => {
     process.env.STELLAR_NETWORK = "testnet";
     expect(currentNetwork()).toBe("testnet");
   });
+
+  it("handles unconfigured RPC path gracefully and tracks unstarted status (#238)", () => {
+    // testnet has public default; mainnet has no SOROBAN_RPC_URL_MAINNET
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      // Pass both networks where mainnet is missing its RPC endpoint.
+      // `planNetworks`, not `startAllIndexers`: the case asks which loops the
+      // configuration yields, and calling the starter would leave a real
+      // testnet loop polling RPC long after this case has returned.
+      const runnable = planNetworks(["testnet", "mainnet"]);
+
+      expect(runnable).toEqual(["testnet"]);
+      expect(getIndexerUnstartedReason("mainnet")).toMatch(/SOROBAN_RPC_URL_MAINNET is required/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("starts nothing and throws nothing when no network is configured (#238)", () => {
+    // The original failure: one missing endpoint killed the process during
+    // main(), taking the API down with it.
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      expect(() => startAllIndexers(["mainnet"])).not.toThrow();
+      expect(startAllIndexers(["mainnet"])).toEqual([]);
+      expect(isIndexerRunning("mainnet")).toBe(false);
+      expect(runningNetworks()).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });
+

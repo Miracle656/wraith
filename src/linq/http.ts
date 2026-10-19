@@ -1,0 +1,361 @@
+/**
+ * The one HTTP client for Linq.
+ *
+ * Every request to the provider goes through {@link linqCall}. There used to be
+ * three — in `client.ts`, `onramp.ts` and `bills.ts` — written months apart
+ * against the same base URL with the same key, and they drifted in every detail
+ * that matters: which fields an error was read from, whether a plain-text body
+ * survived, whether a `code` was parsed at all. For a full day the KYC screen
+ * could only say "rejected the request", because the copy serving it threw
+ * away both halves of the provider's answer while its sibling parsed them.
+ *
+ * So this file owns everything that is the same for every call — the auth
+ * header, the timeout and the deadline, error parsing, `code` extraction, the
+ * rate-limit retry, and the failure logging — and the per-call differences are
+ * arguments. A NIN check that needs thirty seconds passes `timeoutMs`; it does
+ * not get a client of its own.
+ *
+ * ## What this never does
+ *
+ * **Log a request body.** These bodies carry a NIN, a customer's name, email
+ * and phone, a meter number, a bank account. An error path that prints what it
+ * failed on is how personal data reaches a log aggregator. Response bodies are
+ * logged on failure because the provider asked for exactly that — but long
+ * digit runs in them are redacted first, in case an error echoes an identifier
+ * back.
+ */
+
+const DEFAULT_BASE_URL = "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
+
+/** Read per call, so a test or a redeploy that changes it is honoured. */
+function baseUrl(): string {
+  return (process.env.LINQ_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
+
+/** One attempt's ceiling, unless the call says otherwise. */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+/**
+ * Everything one logical operation may spend, retries included.
+ *
+ * Without a shared ceiling the budgets multiplied — three 15s attempts plus
+ * waits inside a call, run twice by `retryOnProviderFailure`, was about 103
+ * seconds on an order creation. The clients give up after 20–40s, so users
+ * were told something had failed while this server was still working on it. A
+ * server that answers a person has to finish before they are told it failed,
+ * so this stays below every client timeout.
+ */
+export const TOTAL_BUDGET_MS = 35_000;
+
+/** The longest we will sleep on a provider 429 before trying again. */
+const MAX_RETRY_DELAY_MS = 3_000;
+
+/** A plain-text error body longer than this is a document, not a message. */
+const MAX_PLAIN_MESSAGE = 200;
+
+/** How much of a failed response body to log. */
+const MAX_LOGGED_BODY = 500;
+
+export class LinqError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    /**
+     * Linq's machine-readable reason, when it sent one.
+     *
+     * `nin_already_used`, `customer_not_verified`, `customer_not_found` and so
+     * on. Carried because the alternative is what the clients did: match on
+     * the prose in `message`, which silently starts mis-routing real users the
+     * first time Linq rewords an error. Optional, because older responses and
+     * non-JSON error bodies have none.
+     */
+    readonly code?: string,
+    /**
+     * Seconds to wait, from a `Retry-After` header on a 429.
+     *
+     * Read because a rate limit without a number is indistinguishable from an
+     * outage: a tester hit a 429 creating an order and the screen could only
+     * say "try again in a few seconds", which was a guess. The provider knows
+     * the answer and sends it.
+     */
+    readonly retryAfterSeconds?: number,
+    /**
+     * The `customerRef` Linq says this person already has.
+     *
+     * Sent on `email_already_in_use` (and on the NIN equivalent): the identity
+     * is already bound to a reference, and Linq returns which one rather than
+     * only refusing. Carried because the alternative is parsing it out of the
+     * prose — the message is literally
+     * `This email is already registered under customerRef "veil_…"`.
+     */
+    readonly existingCustomerRef?: string,
+  ) {
+    super(message);
+    this.name = "LinqError";
+  }
+}
+
+/** A provider 429 carries how long we should wait before the retry. */
+type RateLimited = LinqError & { retryAfterMs?: number };
+
+export interface LinqCallOptions {
+  method?: string;
+  /** JSON-encoded when present. Never logged. */
+  body?: unknown;
+  /** Send `X-API-Key`. False only for the public rate endpoints. */
+  auth?: boolean;
+  /** Query parameters, appended and encoded. */
+  query?: Record<string, string>;
+  /**
+   * Absolute time (ms since epoch) the whole operation must finish by,
+   * retries included. Pass one to share a single budget across several calls.
+   * Defaults to {@link TOTAL_BUDGET_MS} from now.
+   */
+  deadline?: number;
+  /**
+   * One attempt's ceiling. A NIN check reaches NIMC and routinely takes longer
+   * than a lookup, so it raises this; it is still capped by the deadline.
+   */
+  timeoutMs?: number;
+  /**
+   * How many times a provider 429 is retried before it reaches the caller.
+   *
+   * A 429 is refused before any work is done, so repeating the identical
+   * request cannot create anything twice — but some calls must still never be
+   * replayed: an identity submission is rate-limited on Linq's side and
+   * touches their identity provider. Zero unless the call opts in.
+   */
+  rateLimitRetries?: number;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The first of `values` that is a non-empty string, trimmed, or undefined. */
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function apiKey(): string {
+  const key = process.env.LINQ_API_KEY?.trim();
+  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500);
+  return key;
+}
+
+/**
+ * `Retry-After`, in seconds, for telling a person how long to wait.
+ *
+ * The header is either a count of seconds or an HTTP date; both are legal and
+ * both appear in the wild. A value that is neither, or is zero or in the past,
+ * is no answer at all and is treated as absent — telling someone to retry
+ * immediately after a rate limit is how the limit gets deeper.
+ */
+function retryAfterSeconds(response: Response): number | undefined {
+  // `headers` is optional on purpose: a real Response always has it, but the
+  // stubs in this repo's tests are plain objects, and a header lookup is not
+  // worth failing a request over.
+  const raw = response.headers?.get?.("retry-after");
+  if (!raw) return undefined;
+
+  const asSeconds = Number(raw.trim());
+  if (Number.isFinite(asSeconds)) return asSeconds > 0 ? Math.ceil(asSeconds) : undefined;
+
+  const asDate = Date.parse(raw);
+  if (!Number.isFinite(asDate)) return undefined;
+  const seconds = Math.ceil((asDate - Date.now()) / 1000);
+  return seconds > 0 ? seconds : undefined;
+}
+
+/**
+ * `Retry-After`, in milliseconds, for our own retry — capped.
+ *
+ * Unlike {@link retryAfterSeconds}, a zero counts: it is the provider telling
+ * *us* the window has already reset, and sleeping a second anyway buys
+ * nothing. Undefined means "not said", and the caller backs off on its own.
+ */
+function retryAfterWaitMs(response: Response): number | undefined {
+  const raw = response.headers?.get?.("retry-after");
+  if (raw == null || raw.trim() === "") return undefined;
+  const asSeconds = Number(raw.trim());
+  if (Number.isFinite(asSeconds)) return Math.min(Math.max(0, asSeconds) * 1_000, MAX_RETRY_DELAY_MS);
+  const asDate = Date.parse(raw);
+  if (!Number.isFinite(asDate)) return undefined;
+  return Math.min(Math.max(0, asDate - Date.now()), MAX_RETRY_DELAY_MS);
+}
+
+/**
+ * A response body made safe to log: truncated, with any run of seven or more
+ * digits replaced. A NIN is eleven digits, a Nigerian phone number eleven, a
+ * bank account ten, a meter number usually more — and a provider error that
+ * helpfully echoes the value it rejected would otherwise put it in our logs.
+ */
+export function loggableBody(text: string): string {
+  const trimmed = text.slice(0, MAX_LOGGED_BODY);
+  return trimmed.replace(/\d{7,}/g, "[redacted]") || "(empty)";
+}
+
+/** Join the base URL and a path that may carry its own query string. */
+function buildUrl(path: string, query?: Record<string, string>): URL {
+  // Concatenated rather than `new URL(path, base)`, which would drop any path
+  // prefix in LINQ_BASE_URL when `path` starts with a slash.
+  const url = new URL(`${baseUrl()}${path.startsWith("/") ? path : `/${path}`}`);
+  for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
+  return url;
+}
+
+/** One request, no retries. */
+async function attempt<T>(
+  path: string,
+  options: LinqCallOptions,
+  timeoutMs: number,
+): Promise<T> {
+  const { method = "GET", body, auth = true, query } = options;
+  const url = buildUrl(path, query);
+
+  // Built before the request, so a missing key is the configuration error it
+  // is (500), not a network failure.
+  const headers: Record<string, string> = {
+    ...(auth ? { "X-API-Key": apiKey() } : {}),
+    ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+  };
+
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      signal: controller.signal,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (err) {
+    // Logged because without it a timeout leaves no trace at all, and "no log
+    // line" is indistinguishable from "the logging is not working". The
+    // elapsed time says whether we gave up or the connection did.
+    const waited = Date.now() - startedAt;
+    if (err instanceof Error && err.name === "AbortError") {
+      console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
+      throw new LinqError("Linq did not respond in time", 504);
+    }
+    console.warn(
+      `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw new LinqError("Could not reach Linq", 502);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const text = await response.text();
+
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    if (response.ok) throw new LinqError("Linq returned a response we could not read", 502);
+    // Not JSON. A short plain-text body usually *is* the reason — "Rate limit
+    // exceeded, please wait", "NIN already used" — and discarding it left the
+    // KYC screen with nothing to say. An HTML page is a document, not a
+    // message: echoing it would put a gateway's markup on a user's screen.
+    const plain = text.trim();
+    console.warn(`[linq] ${response.status} from ${path}, non-JSON body: ${loggableBody(plain)}`);
+    const message =
+      plain && plain.length <= MAX_PLAIN_MESSAGE && !/^\s*</.test(plain)
+        ? plain
+        : "Linq rejected the request";
+    throw Object.assign(
+      new LinqError(message, response.status, undefined, retryAfterSeconds(response)),
+      { retryAfterMs: retryAfterWaitMs(response) },
+    );
+  }
+
+  if (!response.ok) {
+    // The provider asked for the status and raw body of a failure, and we had
+    // neither when three testers hit an unreadable error. The REQUEST is never
+    // logged — see the module header.
+    console.warn(`[linq] ${response.status} from ${path} — body: ${loggableBody(text)}`);
+    const body = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+    // Every key a reason has been seen under. A reason that arrives under a key
+    // nobody reads is a reason the user never gets: the screen falls back to
+    // guessing, and tells someone to check a name when their NIN is the problem.
+    const code = firstString(body["code"], body["errorCode"], body["error_code"]);
+    // The code rides in the message when there is no prose, because the prose
+    // is what reaches the user, and a bare fallback leaves them a guess.
+    const message =
+      firstString(body["message"], body["error"], body["msg"], body["detail"], body["reason"]) ??
+      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
+    // Linq names the reference an already-registered identity belongs to.
+    const existingCustomerRef = firstString(body["customerRef"], body["customer_ref"]);
+    throw Object.assign(
+      new LinqError(message, response.status, code, retryAfterSeconds(response), existingCustomerRef),
+      { retryAfterMs: retryAfterWaitMs(response) },
+    );
+  }
+
+  return parsed as T;
+}
+
+/**
+ * Every request to Linq.
+ *
+ * Returns the parsed body, or throws {@link LinqError} carrying Linq's own
+ * message, code and status — their 400s name the actual problem (a bad bank
+ * code, an unverified customer) far better than anything we would invent.
+ *
+ * A 429 is retried only when `rateLimitRetries` says so, waiting what the
+ * provider asked (or a short backoff), and never past the deadline. Every other
+ * failure is the caller's to handle; see {@link retryOnProviderFailure} for the
+ * one 5xx retry the order-creating calls take.
+ */
+export async function linqCall<T>(path: string, options: LinqCallOptions = {}): Promise<T> {
+  const deadline = options.deadline ?? Date.now() + TOTAL_BUDGET_MS;
+  const perAttempt = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const retries = options.rateLimitRetries ?? 0;
+
+  for (let tried = 0; ; tried++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new LinqError("Linq did not respond in time", 504);
+
+    try {
+      // Never wait past the deadline, even on the first attempt: a call made
+      // late in a shared budget gets what is left of it, not a fresh 15s.
+      return await attempt<T>(path, options, Math.min(perAttempt, remaining));
+    } catch (err) {
+      if (!(err instanceof LinqError) || err.status !== 429 || tried >= retries) throw err;
+      const wait =
+        (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (tried + 1), MAX_RETRY_DELAY_MS);
+      // A wait that would end after the deadline buys nothing; surface the 429.
+      if (Date.now() + wait >= deadline) throw err;
+      await sleep(wait);
+    }
+  }
+}
+
+/**
+ * One retry when the provider fails on its side: a 5xx, or no response.
+ *
+ * Order creation can fail transiently at the provider — "Wallet generation
+ * failed" is it not managing to mint the deposit address. A 4xx is about the
+ * request and is never retried. The retry sends the identical body,
+ * idempotencyKey included, so the provider can recognise it as the same order.
+ *
+ * `deadline` bounds the pair, so the retry cannot double the caller's budget.
+ */
+export async function retryOnProviderFailure<T>(
+  request: () => Promise<T>,
+  delayMs = 1500,
+  deadline?: number,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (err) {
+    if (!(err instanceof LinqError) || err.status < 500) throw err;
+    if (deadline !== undefined && Date.now() + delayMs >= deadline) throw err;
+    await sleep(delayMs);
+    return request();
+  }
+}

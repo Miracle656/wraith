@@ -152,7 +152,8 @@ describe("reads are network-scoped", () => {
 
   it("counts and rows agree on the network, so total matches the page", async () => {
     process.env.STELLAR_NETWORK = "mainnet";
-    await db.queryTransfers({ address: ADDR, direction: "incoming" });
+    // The count is opt-in (#206); ask for it so both queries are recorded.
+    await db.queryTransfers({ address: ADDR, direction: "incoming", includeTotal: true });
     expect(lastWhere("tokenTransfer", "count").network).toBe("mainnet");
     expect(lastWhere("tokenTransfer", "findMany").network).toBe("mainnet");
   });

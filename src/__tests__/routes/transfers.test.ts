@@ -8,7 +8,10 @@ jest.mock("../../db", () => ({
   queryByTxHash: jest.fn(),
   querySummary: jest.fn(),
   getLastIndexedLedger: jest.fn(),
-  prisma: { $queryRaw: jest.fn() },
+  prisma: {
+    $queryRaw: jest.fn(),
+    tokenMetadata: { findMany: jest.fn() },
+  },
 }));
 
 jest.mock("../../rpc", () => ({
@@ -25,8 +28,9 @@ jest.mock("../../indexer", () => ({
     .mockReturnValue({ startedAt: "2024-01-01T00:00:00.000Z", uptimeSeconds: 0, totalIndexed: 0 }),
 }));
 
-import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger } from "../../db";
+import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, getLastIndexedLedger, prisma } from "../../db";
 import { getLatestLedger } from "../../rpc";
+import { _resetTokenCache, initTokenCache } from "../../tokenCache";
 
 // ── Typed mock helpers ────────────────────────────────────────────────────────
 const mockQueryTransfers = queryTransfers as jest.MockedFunction<typeof queryTransfers>;
@@ -109,6 +113,7 @@ describe("Transfer route handlers", () => {
   const app = createApp();
 
   beforeEach(() => {
+    _resetTokenCache();
     mockGetLastIndexedLedger.mockResolvedValue(1020);
     mockGetLatestLedger.mockResolvedValue(1022);
   });
@@ -117,7 +122,7 @@ describe("Transfer route handlers", () => {
   describe("GET /transfers/incoming/:address", () => {
     it("returns all incoming transfers for a known address", async () => {
       const incoming = SEED_TRANSFERS.filter((t) => t.toAddress === ALICE);
-      mockQueryTransfers.mockResolvedValue({ total: incoming.length, transfers: incoming, nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: incoming.length, transfers: incoming, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/incoming/${ALICE}`);
 
@@ -128,9 +133,25 @@ describe("Transfer route handlers", () => {
       expect(res.body.offset).toBe(0);
     });
 
+    it("does not ask for a total by default, and forwards includeTotal=true when set", async () => {
+      mockQueryTransfers.mockResolvedValue({ transfers: [], hasMore: false, nextCursor: null });
+
+      const plain = await request(app).get(`/transfers/incoming/${ALICE}`);
+      expect(plain.status).toBe(200);
+      expect(plain.body).not.toHaveProperty("total");
+      expect(plain.body.hasMore).toBe(false);
+      expect(mockQueryTransfers.mock.calls.at(-1)![0].includeTotal).toBeUndefined();
+
+      mockQueryTransfers.mockResolvedValue({ total: 7, transfers: [], hasMore: false, nextCursor: null });
+      const counted = await request(app).get(`/transfers/incoming/${ALICE}`).query({ includeTotal: "true" });
+      expect(counted.status).toBe(200);
+      expect(counted.body.total).toBe(7);
+      expect(mockQueryTransfers.mock.calls.at(-1)![0].includeTotal).toBe(true);
+    });
+
     it("attaches displayAmount to every transfer", async () => {
       const transfer = makeTransfer({ amount: "10000000" });
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [transfer], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [transfer], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/incoming/${ALICE}`);
 
@@ -138,8 +159,33 @@ describe("Transfer route handlers", () => {
       expect(res.body.transfers[0].displayAmount).toBe("1.0000000");
     });
 
+    it("preserves a 6-decimal displayAmount from the query layer when $select omits contractId", async () => {
+      _resetTokenCache();
+      (prisma.tokenMetadata.findMany as jest.Mock).mockResolvedValue([
+        { network: "testnet", contractId: CONTRACT_A, symbol: "TOK", name: "Token", decimals: 6 },
+      ]);
+      await initTokenCache("testnet");
+
+      mockQueryTransfers.mockImplementation(async (params) => {
+        expect(params.tokenDecimals?.(CONTRACT_A, "testnet")).toBe(6);
+        return {
+          total: 1,
+          hasMore: false,
+          transfers: [{ amount: "1000000", displayAmount: "1.000000" }],
+          nextCursor: null,
+        } as Awaited<ReturnType<typeof queryTransfers>>;
+      });
+
+      const res = await request(app)
+        .get(`/transfers/incoming/${ALICE}`)
+        .query({ $select: "amount,displayAmount" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.transfers[0]).toEqual({ amount: "1000000", displayAmount: "1.000000" });
+    });
+
     it("returns empty array for an unknown address", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app).get("/transfers/incoming/GUNKNOWNADDRESS");
 
@@ -152,7 +198,7 @@ describe("Transfer route handlers", () => {
       const filtered = SEED_TRANSFERS.filter(
         (t) => t.toAddress === ALICE && t.contractId === CONTRACT_A
       );
-      mockQueryTransfers.mockResolvedValue({ total: filtered.length, transfers: filtered, nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: filtered.length, transfers: filtered, hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -168,6 +214,7 @@ describe("Transfer route handlers", () => {
       mockQueryTransfers.mockResolvedValue({
         total: 1,
         transfers: [makeTransfer({ amount: "10000000" })],
+        hasMore: true,
         nextCursor: "cursor-1",
       });
 
@@ -192,7 +239,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("passes fromDate and toDate to queryTransfers", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 2, transfers: SEED_TRANSFERS.slice(14, 16), nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 2, transfers: SEED_TRANSFERS.slice(14, 16), hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -232,7 +279,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("accepts valid eventType values", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ eventType: "mint" })], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ eventType: "mint" })], hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -245,7 +292,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("accepts comma-separated eventType values", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 2, transfers: [], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 2, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -259,7 +306,7 @@ describe("Transfer route handlers", () => {
 
     it("honours limit and offset for pagination", async () => {
       const page = SEED_TRANSFERS.slice(0, 5);
-      mockQueryTransfers.mockResolvedValue({ total: 20, transfers: page, nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 20, transfers: page, hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -274,7 +321,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("falls back to limit=50, offset=0 when not provided", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app).get(`/transfers/incoming/${ALICE}`);
 
@@ -284,7 +331,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("forwards fromLedger and toLedger filters", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 3, transfers: SEED_TRANSFERS.slice(0, 3), nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 3, transfers: SEED_TRANSFERS.slice(0, 3), hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/incoming/${ALICE}`)
@@ -300,7 +347,7 @@ describe("Transfer route handlers", () => {
   describe("GET /transfers/outgoing/:address", () => {
     it("returns outgoing transfers with direction=outgoing", async () => {
       const outgoing = SEED_TRANSFERS.filter((t) => t.fromAddress === ALICE);
-      mockQueryTransfers.mockResolvedValue({ total: outgoing.length, transfers: outgoing, nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: outgoing.length, transfers: outgoing, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/outgoing/${ALICE}`);
 
@@ -312,7 +359,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("returns empty array for address with no outgoing transfers", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/outgoing/GNOBODY`);
 
@@ -322,7 +369,7 @@ describe("Transfer route handlers", () => {
 
     it("attaches displayAmount for large i128 amounts", async () => {
       const t = makeTransfer({ amount: "1000000000000000" }); // 100000000.0000000
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [t], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [t], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/outgoing/${ALICE}`);
 
@@ -345,7 +392,7 @@ describe("Transfer route handlers", () => {
         (t) => t.toAddress === ALICE || t.fromAddress === ALICE
       ).map((t) => ({ ...t, direction: t.toAddress === ALICE ? "incoming" : "outgoing" }));
 
-      mockQueryAllTransfers.mockResolvedValue({ total: combined.length, transfers: combined, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: combined.length, transfers: combined, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}`);
 
@@ -357,7 +404,7 @@ describe("Transfer route handlers", () => {
     it("direction field is present on each record", async () => {
       const t1 = { ...makeTransfer({ id: 1, toAddress: ALICE, fromAddress: BOB }), direction: "incoming" };
       const t2 = { ...makeTransfer({ id: 2, toAddress: BOB, fromAddress: ALICE }), direction: "outgoing" };
-      mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers: [t1, t2], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers: [t1, t2], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}`);
 
@@ -366,7 +413,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("returns empty array for unknown address", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app).get("/transfers/address/GUNKNOWN");
 
@@ -375,7 +422,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("honours pagination params", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 20, transfers: [], nextCursor: "cursor-2" });
+      mockQueryAllTransfers.mockResolvedValue({ total: 20, transfers: [], hasMore: true, nextCursor: "cursor-2" });
 
       await request(app)
         .get(`/transfers/address/${ALICE}`)
@@ -387,7 +434,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("filters by contractId", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 3, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 3, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/address/${ALICE}`)
@@ -417,6 +464,7 @@ describe("Transfer route handlers", () => {
       mockQueryAllTransfers.mockResolvedValue({
         total: tokenFiltered.length,
         transfers: tokenFiltered,
+        hasMore: false,
         nextCursor: null,
       });
 
@@ -455,7 +503,7 @@ describe("Transfer route handlers", () => {
         .filter((t) => t.toAddress === ALICE || t.fromAddress === ALICE)
         .map((t) => ({ ...t, direction: t.toAddress === ALICE ? "incoming" : "outgoing" }));
 
-      mockQueryAllTransfers.mockResolvedValue({ total: combined.length, transfers: combined, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: combined.length, transfers: combined, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}`);
 
@@ -547,19 +595,19 @@ describe("Transfer route handlers", () => {
   // ── toDisplayAmount edge cases ─────────────────────────────────────────────
   describe("toDisplayAmount formatting", () => {
     it("formats 0 correctly", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "0" })], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "0" })], hasMore: false, nextCursor: null });
       const res = await request(app).get(`/transfers/incoming/${ALICE}`);
       expect(res.body.transfers[0].displayAmount).toBe("0.0000000");
     });
 
     it("formats small amounts with leading zeros in fractional part", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "1" })], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "1" })], hasMore: false, nextCursor: null });
       const res = await request(app).get(`/transfers/incoming/${ALICE}`);
       expect(res.body.transfers[0].displayAmount).toBe("0.0000001");
     });
 
     it("formats exactly 1 token (10000000 stroops)", async () => {
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "10000000" })], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [makeTransfer({ amount: "10000000" })], hasMore: false, nextCursor: null });
       const res = await request(app).get(`/transfers/incoming/${ALICE}`);
       expect(res.body.transfers[0].displayAmount).toBe("1.0000000");
     });
@@ -607,7 +655,7 @@ describe("Transfer route handlers", () => {
           eventType: "transfer",
         }), direction: "incoming" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -639,7 +687,7 @@ describe("Transfer route handlers", () => {
           eventType: "mint",
         }), direction: "incoming" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 2, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -665,7 +713,7 @@ describe("Transfer route handlers", () => {
           eventType: "transfer",
         }), direction: "outgoing" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -686,7 +734,7 @@ describe("Transfer route handlers", () => {
           eventType: "mint",
         }), direction: "incoming" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -707,7 +755,7 @@ describe("Transfer route handlers", () => {
           eventType: "burn",
         }), direction: "outgoing" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -717,7 +765,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("sets Content-Disposition header with filename", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -728,7 +776,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("respects contractId filter", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/address/${ALICE}/export.csv`)
@@ -740,7 +788,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("respects token filter for CSV export", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/address/${ALICE}/export.csv`)
@@ -761,7 +809,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("respects fromDate and toDate filters", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/address/${ALICE}/export.csv`)
@@ -779,7 +827,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("respects eventType filter", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app)
         .get(`/transfers/address/${ALICE}/export.csv`)
@@ -791,7 +839,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("enforces a 10,000 row cap for export", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 50000, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 50000, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -801,7 +849,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("always uses offset=0 for CSV export", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 100, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 100, transfers: [], hasMore: false, nextCursor: null });
 
       await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -829,7 +877,7 @@ describe("Transfer route handlers", () => {
     });
 
     it("returns empty CSV (header only) for address with no transfers", async () => {
-      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 0, transfers: [], hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -850,7 +898,7 @@ describe("Transfer route handlers", () => {
           eventType: "transfer",
         }), direction: "incoming" as const },
       ];
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers, hasMore: false, nextCursor: null });
 
       const res = await request(app).get(`/transfers/address/${ALICE}/export.csv`);
 
@@ -863,7 +911,7 @@ describe("Transfer route handlers", () => {
   describe("JSON:API content negotiation", () => {
     it("returns JSON:API format for transfers/address/:address", async () => {
       const t = { ...makeTransfer({ id: 1, toAddress: ALICE, fromAddress: BOB, eventType: "transfer", ledger: 1001, amount: "10000000" }), direction: "incoming" as const };
-      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers: [t], nextCursor: null });
+      mockQueryAllTransfers.mockResolvedValue({ total: 1, transfers: [t], hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/address/${ALICE}`)
@@ -879,7 +927,7 @@ describe("Transfer route handlers", () => {
 
     it("returns JSON:API format for transfers/incoming/:address", async () => {
       const t = { ...makeTransfer({ id: 1, toAddress: ALICE, fromAddress: BOB }), direction: "incoming" as const };
-      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [t], nextCursor: null });
+      mockQueryTransfers.mockResolvedValue({ total: 1, transfers: [t], hasMore: false, nextCursor: null });
 
       const res = await request(app)
         .get(`/transfers/incoming/${ALICE}`)

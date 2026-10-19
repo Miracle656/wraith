@@ -5,7 +5,7 @@ import {
   CONTRACT_A,
   CONTRACT_B,
   MULTI_EVENT_TX_HASH,
-} from "./fixtures";
+} from "../../src/fixtures";
 
 const API_BASE_URL = process.env.INTEGRATION_API_URL ?? "http://localhost:3300";
 
@@ -18,9 +18,11 @@ async function getJson(path: string): Promise<Record<string, any>> {
 }
 
 describe("Wraith integration API", () => {
+  // `total` is opt-in since #218 — it costs a second full pass over the matching
+  // rows — so a case that asserts a count has to ask for one.
   it("returns filtered incoming transfers from Postgres", async () => {
     const body = await getJson(
-      `/transfers/incoming/${ALICE}?contractId=${CONTRACT_A}&eventType=transfer,mint`
+      `/transfers/incoming/${ALICE}?contractId=${CONTRACT_A}&eventType=transfer,mint&includeTotal=true`
     );
 
     expect(body.total).toBe(2);
@@ -33,10 +35,19 @@ describe("Wraith integration API", () => {
       toAddress: ALICE,
       displayAmount: "2.5000000",
     });
+
+    // And the answer a caller gets without asking for a count: the page and the
+    // fact that it is a complete page, with no COUNT run anywhere.
+    const uncounted = await getJson(
+      `/transfers/incoming/${ALICE}?contractId=${CONTRACT_A}&eventType=transfer,mint`
+    );
+    expect(uncounted.total).toBeUndefined();
+    expect(uncounted.hasMore).toBe(false);
+    expect(uncounted.transfers).toHaveLength(2);
   });
 
   it("returns combined account history with directions and pagination", async () => {
-    const body = await getJson(`/transfers/address/${ALICE}?limit=3&offset=1`);
+    const body = await getJson(`/transfers/address/${ALICE}?limit=3&offset=1&includeTotal=true`);
 
     expect(body.total).toBe(5);
     expect(body.limit).toBe(3);
@@ -91,7 +102,7 @@ describe("Wraith integration API", () => {
   });
 
   it("excludes unrelated account activity from account-specific results", async () => {
-    const body = await getJson(`/transfers/outgoing/${BOB}`);
+    const body = await getJson(`/transfers/outgoing/${BOB}?includeTotal=true`);
 
     expect(body.total).toBe(2);
     expect(body.transfers.map((transfer: { toAddress: string }) => transfer.toAddress)).toEqual([

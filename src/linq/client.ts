@@ -11,62 +11,13 @@
  * code, unsupported coin) far better than anything we would invent.
  */
 
-const BASE_URL =
-  process.env.LINQ_BASE_URL?.trim() ||
-  "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
+import { LinqError, linqCall, retryOnProviderFailure, TOTAL_BUDGET_MS, type LinqCallOptions } from "./http";
 
-const TIMEOUT_MS = 15_000;
-
-export class LinqError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "LinqError";
-  }
-}
-
-function apiKey(): string {
-  const key = process.env.LINQ_API_KEY?.trim();
-  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500);
-  return key;
-}
-
-/** A provider 429 is retried this many times before it reaches the user. */
-const RATE_LIMIT_RETRIES = 2;
-const MAX_RETRY_DELAY_MS = 3_000;
+// Re-exported so every existing import of these from `./client` keeps working.
+export { LinqError, retryOnProviderFailure } from "./http";
 
 /**
- * Everything one logical provider operation may spend, retries included.
- *
- * Without this the budgets multiplied: three 15s attempts plus two 3s waits
- * is 51s inside `call`, and `retryOnProviderFailure` could run that whole
- * sequence twice — about 103 seconds on an order creation. The mobile client
- * gives up after 20s, so users were told "cash out is unavailable" while this
- * server was still working, and the order it went on to create never appeared
- * in the app. A server that answers a person has to finish before they are
- * told it failed, so this ceiling stays below every client timeout.
- */
-const TOTAL_BUDGET_MS = 35_000;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-type CallInit = {
-  method?: string;
-  body?: unknown;
-  auth?: boolean;
-  /**
-   * Absolute time (ms since epoch) this operation must be finished by.
-   * Defaults to {@link TOTAL_BUDGET_MS} from the first attempt. Pass one
-   * explicitly to share a single budget across several calls.
-   */
-  deadline?: number;
-};
-type RateLimited = LinqError & { retryAfterMs?: number };
-
-/**
- * Every provider request, with rate limits absorbed.
+ * A provider 429 is retried this many times before it reaches the user.
  *
  * All Veil users share one provider key, and the provider limits it. A user
  * creating a cash-out got "rate limit exceeded, please wait" and succeeded on
@@ -75,81 +26,11 @@ type RateLimited = LinqError & { retryAfterMs?: number };
  * work was done, so repeating it (order creation included, with the same
  * idempotencyKey) cannot create anything twice.
  */
-async function call<T>(path: string, init: CallInit = {}): Promise<T> {
-  const deadline = init.deadline ?? Date.now() + TOTAL_BUDGET_MS;
+const RATE_LIMIT_RETRIES = 2;
 
-  for (let attempt = 0; ; attempt++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new LinqError("The payout service did not respond in time", 504);
-    }
-
-    try {
-      // Never wait past the deadline, even on the first attempt: a call made
-      // late in a shared budget gets what is left of it, not a fresh 15s.
-      return await callOnce<T>(path, init, Math.min(TIMEOUT_MS, remaining));
-    } catch (err) {
-      if (!(err instanceof LinqError) || err.status !== 429 || attempt >= RATE_LIMIT_RETRIES) {
-        throw err;
-      }
-      const wait = (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (attempt + 1), MAX_RETRY_DELAY_MS);
-      // A wait that would end after the deadline buys nothing; surface the 429.
-      if (Date.now() + wait >= deadline) throw err;
-      await sleep(wait);
-    }
-  }
-}
-
-async function callOnce<T>(
-  path: string,
-  init: CallInit,
-  timeoutMs: number = TIMEOUT_MS,
-): Promise<T> {
-  const { method = "GET", body, auth = true } = init;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${BASE_URL}${path}`, {
-      method,
-      signal: controller.signal,
-      headers: {
-        ...(auth ? { "X-API-Key": apiKey() } : {}),
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    const text = await res.text();
-    // An error body is not always JSON. A plain-text "Rate limit exceeded"
-    // used to throw inside JSON.parse, turning a retryable 429 into a 502
-    // whose message was the parser's complaint about the text.
-    let parsed: unknown = {};
-    try {
-      parsed = text ? (JSON.parse(text) as unknown) : {};
-    } catch {
-      if (res.ok) throw new LinqError("Linq returned a malformed response", 502);
-      parsed = { message: text.trim() };
-    }
-    if (!res.ok) {
-      const message =
-        (parsed as { message?: string })?.message || `Linq returned ${res.status}`;
-      const header = res.headers?.get?.("retry-after");
-      const seconds = header == null ? Number.NaN : Number(header);
-      throw Object.assign(new LinqError(message, res.status), {
-        retryAfterMs: Number.isFinite(seconds)
-          ? Math.min(Math.max(0, seconds) * 1_000, MAX_RETRY_DELAY_MS)
-          : undefined,
-      });
-    }
-    return parsed as T;
-  } catch (err) {
-    if (err instanceof LinqError) throw err;
-    if ((err as Error)?.name === "AbortError") {
-      throw new LinqError("Linq did not respond in time", 504);
-    }
-    throw new LinqError((err as Error)?.message ?? "Linq request failed", 502);
-  } finally {
-    clearTimeout(timer);
-  }
+/** Every offramp request: the shared client, with this rail's 429 retry. */
+function call<T>(path: string, options: LinqCallOptions = {}): Promise<T> {
+  return linqCall<T>(path, { rateLimitRetries: RATE_LIMIT_RETRIES, ...options });
 }
 
 // ─── Rate ────────────────────────────────────────────────────────────────────
@@ -297,34 +178,6 @@ export async function createOfframpOrder(
     },
   });
   return retryOnProviderFailure(request, 1_500, deadline);
-}
-
-/**
- * One retry when the provider fails on its side: a 5xx, or no response.
- *
- * Order creation can fail transiently at the provider — "Wallet generation
- * failed" is it not managing to mint the deposit address — and the user was
- * shown that and left to try again by hand. A 4xx is about the request and
- * is never retried. The retry sends the identical body, idempotencyKey
- * included, so the provider can recognise it as the same order.
- *
- * `deadline` bounds the pair. Without it the retry doubled the caller's whole
- * budget, which is how a 35s ceiling silently became 70.
- */
-export async function retryOnProviderFailure<T>(
-  request: () => Promise<T>,
-  delayMs = 1500,
-  deadline?: number,
-): Promise<T> {
-  try {
-    return await request();
-  } catch (err) {
-    if (!(err instanceof LinqError) || err.status < 500) throw err;
-    // No point sleeping into a deadline we cannot then do work before.
-    if (deadline !== undefined && Date.now() + delayMs >= deadline) throw err;
-    await sleep(delayMs);
-    return request();
-  }
 }
 
 export interface OfframpStatus {

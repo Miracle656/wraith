@@ -1,0 +1,7 @@
+# The OpenAPI spec is generated with LF line endings and compared byte-for-byte
+# against the generator in src/__tests__/openapiCoverage.test.ts. Without this,
+# a Windows checkout (core.autocrlf=true) turned every line into CRLF and the
+# comparison failed until someone happened to regenerate the file — so the same
+# commit passed or failed depending on whose machine it ran on.
+openapi.json      text eol=lf
+docs/openapi.json text eol=lf
