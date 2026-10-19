@@ -1,6 +1,6 @@
 import { rpc as RPC, xdr, scValToNative, Contract, TransactionBuilder, Account, Networks } from "@stellar/stellar-sdk";
 import { resolveNetwork, currentNetwork, type Network } from "./network";
-import { recordRpcError } from "./metrics";
+import { recordRpcError, recordSkippedLedger } from "./metrics";
 
 // ─── Network config ───────────────────────────────────────────────────────────
 const TESTNET_RPC_URL = "https://soroban-testnet.stellar.org";
@@ -93,6 +93,13 @@ export interface RawEvent {
   value: xdr.ScVal;
 }
 
+export interface FetchEventsResult {
+  events: RawEvent[];
+  latestLedger: number;
+  cursor?: string;
+  maxEventLedger: number;
+}
+
 // ─── getEvents wrapper ────────────────────────────────────────────────────────
 /**
  * Fetch contract events from Stellar RPC.
@@ -106,8 +113,9 @@ export async function fetchEvents(
   startLedger: number,
   contractIds: string[],
   limit: number = 10_000,
-  network?: Network
-): Promise<{ events: RawEvent[]; latestLedger: number }> {
+  network?: Network,
+  cursor?: string
+): Promise<FetchEventsResult> {
   const rpc = getRpc(network);
 
   // Build the request using the correct Server.GetEventsRequest type.
@@ -124,6 +132,9 @@ export async function fetchEvents(
       },
     ],
   };
+  if (cursor) {
+    (request as any).cursor = cursor;
+  }
 
   const resp = await rpc.getEvents(request);
 
@@ -141,7 +152,13 @@ export async function fetchEvents(
     value: e.value,
   }));
 
-  return { events, latestLedger: resp.latestLedger };
+  const maxEventLedger = events.reduce((max, e) => (e.ledger > max ? e.ledger : max), 0);
+  return {
+    events,
+    latestLedger: resp.latestLedger,
+    cursor: (resp as any).cursor,
+    maxEventLedger,
+  };
 }
 
 // ─── Network tip helper ───────────────────────────────────────────────────────
@@ -180,6 +197,49 @@ export async function withRetry<T>(
 
 // ─── XDR-safe event fetch ─────────────────────────────────────────────────────
 /**
+ * Markers of a genuine XDR/decode failure.
+ *
+ * Every entry is a message the XDR codec itself produces, or a phrase that only
+ * makes sense as a decode complaint. The old check also matched the bare word
+ * "unknown", which is what a *provider* says when it has no better answer —
+ * `unknown error`, `getaddrinfo ENOTFOUND … unknown host`, a 5xx body. Those
+ * are transient, and skipping a ledger on one loses that ledger's events for
+ * good while the cursor moves on.
+ */
+const XDR_ERROR_PATTERNS: readonly RegExp[] = [
+  // "Failed to decode XDR: …", "invalid XDR contract typecast …", and the
+  // base64/hex envelopes the SDK wraps decoded payloads in.
+  /\bxdr\b/i,
+  // js-xdr reading a discriminant the compiled-in type definitions do not know:
+  // "unknown SCValType member for value 9". The exact case that motivates the
+  // skip path — a ledger using an enum arm added after this SDK was built.
+  /unknown\s+\S+\s+member\s+for\s+value/i,
+  /is not a value of any member of/i,
+  // The rest of the decoder's own complaints, none of which a transport or a
+  // provider can produce.
+  /bad union switch/i,
+  /not a member of\s+\S+/i,
+  /attempt to read outside the boundary of the buffer/i,
+  /exceeded max decoding depth/i,
+  /source invalid:/i,
+  /invalid padding/i,
+  /invalid i32 value/i,
+  /invalid u32 value/i,
+];
+
+/**
+ * Whether an error from the event fetch is a genuine XDR/decode failure — the
+ * only kind `fetchEventsSafe` is allowed to answer by skipping a ledger.
+ *
+ * Everything else (timeouts, DNS, 5xx, auth) propagates, so the caller's own
+ * retry and alerting see it instead of a hole in the index.
+ */
+export function isXdrError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return XDR_ERROR_PATTERNS.some((pattern) => pattern.test(msg));
+}
+
+/**
  * Like fetchEvents but handles XDR decode errors gracefully.
  *
  * Some ledgers contain events that use newer XDR types than the SDK knows
@@ -190,6 +250,9 @@ export async function withRetry<T>(
  * Returns all events that could be decoded, plus the highest ledger reached.
  */
 type FetchFn = typeof fetchEvents
+
+/** Max number of pages to drain per fetchEventsSafe call before giving up. */
+const MAX_PAGES_PER_FETCH = 50;
 
 export async function fetchEventsSafe(
   startLedger: number,
@@ -202,24 +265,48 @@ export async function fetchEventsSafe(
   // If the range is a single ledger and it fails, skip it.
   if (startLedger >= endLedger) {
     try {
-      const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
-      return { events, highestLedger: Math.max(startLedger, latestLedger) };
+      const { events, maxEventLedger } = await _fetchFn(startLedger, contractIds, limit, network);
+      const covered = maxEventLedger > 0 ? Math.max(startLedger, maxEventLedger) : startLedger;
+      return { events, highestLedger: Math.min(covered, endLedger) };
     } catch (err) {
-      const msg = (err as Error).message ?? "";
-      if (msg.includes("XDR") || msg.includes("unknown")) {
-        console.warn(`[rpc] Skipping ledger ${startLedger} — XDR decode error: ${msg}`);
-        return { events: [], highestLedger: startLedger };
-      }
-      throw err;
+      if (!isXdrError(err)) throw err;
+      console.warn(`[rpc] Skipping ledger ${startLedger} — XDR decode error: ${(err as Error).message}`);
+      // A skip is a hole in the index that nothing ever fills in, so it counts:
+      // the console line scrolls away, this does not.
+      recordSkippedLedger(resolveNetwork(network));
+      return { events: [], highestLedger: startLedger };
     }
   }
 
   try {
-    const { events, latestLedger } = await _fetchFn(startLedger, contractIds, limit, network);
-    return { events, highestLedger: latestLedger };
+    const allEvents: RawEvent[] = [];
+    let cursor: string | undefined;
+    let maxEventLedger = 0;
+    let pages = 0;
+    let lastCursor: string | undefined;
+
+    while (true) {
+      const page = await _fetchFn(startLedger, contractIds, limit, network, cursor);
+      allEvents.push(...page.events);
+      if (page.maxEventLedger > maxEventLedger) maxEventLedger = page.maxEventLedger;
+      pages++;
+
+      // A full page means there may be more; page with the cursor until the
+      // range is drained, the page budget is hit, or the cursor stops advancing.
+      const isFullPage = page.events.length >= limit;
+      const nextCursor = page.cursor;
+      if (!isFullPage || !nextCursor || nextCursor === lastCursor) break;
+      if (pages >= MAX_PAGES_PER_FETCH) break;
+      lastCursor = nextCursor;
+      cursor = nextCursor;
+    }
+
+    // highestLedger is the last ledger we actually covered, clamped to endLedger.
+    // Never the raw tip: the propagation buffer must not be jumped past.
+    const covered = maxEventLedger > 0 ? Math.max(startLedger, maxEventLedger) : startLedger;
+    return { events: allEvents, highestLedger: Math.min(covered, endLedger) };
   } catch (err) {
-    const msg = (err as Error).message ?? "";
-    if (!msg.includes("XDR") && !msg.includes("unknown")) throw err;
+    if (!isXdrError(err)) throw err;
 
     // Bisect: try lower half, then upper half
     console.warn(`[rpc] XDR error in ledgers ${startLedger}–${endLedger}, bisecting…`);

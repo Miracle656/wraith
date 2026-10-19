@@ -1,4 +1,5 @@
-import { fetchEventsSafe } from '../rpc'
+import { fetchEvents, fetchEventsSafe, isXdrError } from '../rpc'
+import { registry, _resetMetrics } from '../metrics'
 
 // Minimal mock event — only the fields fetchEvents maps from the RPC response.
 // We pass pre-shaped RawEvent objects via our injected fetchFn, bypassing the
@@ -22,6 +23,12 @@ function xdrError(): Error {
 
 function networkError(): Error {
   return new Error('Network timeout')
+}
+
+// The SDK's XDR codec reports "unknown <EnumName> member for value <n>" when a
+// ledger uses a type the compiled-in enum does not know yet.
+function unknownXdrTypeError(): Error {
+  return new Error('unknown SCValType member for value 9')
 }
 
 // Convenience: build a mock fetchFn from a sequence of responses
@@ -109,6 +116,59 @@ describe('fetchEventsSafe — bisection algorithm', () => {
     await expect(fetchEventsSafe(100, 100, [], 10_000, fetch as any)).rejects.toThrow('Network timeout')
   })
 
+  // "unknown" alone is not a decode failure. Matching it made every transient
+  // error indistinguishable from an undecodable ledger, and the indexer answered
+  // by skipping the ledger and moving the cursor past it — permanent, silent
+  // data loss on what is usually a retryable blip.
+  it('does not treat a bare "unknown error" as an XDR error', async () => {
+    const fetch = jest.fn().mockRejectedValue(new Error('unknown error'))
+
+    await expect(fetchEventsSafe(100, 100, [], 10_000, fetch as any)).rejects.toThrow('unknown error')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not bisect a range that failed with "unknown error"', async () => {
+    const fetch = jest.fn().mockRejectedValue(new Error('unknown error'))
+
+    await expect(fetchEventsSafe(100, 105, [], 10_000, fetch as any)).rejects.toThrow('unknown error')
+    // One call: bisecting would have retried the halves of the range.
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat an unknown-host DNS failure as an XDR error', async () => {
+    const fetch = jest.fn().mockRejectedValue(
+      new Error('getaddrinfo ENOTFOUND rpc.example.com unknown host')
+    )
+
+    await expect(fetchEventsSafe(100, 100, [], 10_000, fetch as any)).rejects.toThrow('ENOTFOUND')
+  })
+
+  it('does not treat a provider 5xx body containing "unknown" as an XDR error', async () => {
+    const fetch = jest.fn().mockRejectedValue(
+      new Error('Request failed with status code 503: upstream returned an unknown error')
+    )
+
+    await expect(fetchEventsSafe(100, 105, [], 10_000, fetch as any)).rejects.toThrow('503')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still bisects and skips a ledger the SDK cannot decode at all', async () => {
+    // The SDK reports a newer XDR type as an unknown enum member rather than
+    // mentioning XDR by name; that is the case the skip path exists for.
+    const fetch = mockFetch(
+      () => Promise.reject(unknownXdrTypeError()),  // full 100–104
+      () => Promise.reject(unknownXdrTypeError()),  // lower 100–102
+      () => Promise.resolve({ events: [makeEvent(100, 'e1'), makeEvent(101, 'e2')], latestLedger: 101 }),
+      () => Promise.reject(unknownXdrTypeError()),  // single 102–102 (skipped)
+      () => Promise.resolve({ events: [makeEvent(103, 'e3'), makeEvent(104, 'e4')], latestLedger: 104 })
+    )
+
+    const result = await fetchEventsSafe(100, 104, [], 10_000, fetch as any)
+
+    expect(result.events.map(e => e.ledger)).toEqual([100, 101, 103, 104])
+    expect(result.highestLedger).toBe(104)
+  })
+
   it('forwards contractIds to every fetchFn call', async () => {
     const fetch = jest.fn().mockResolvedValue({ events: [], latestLedger: 100 })
     const contracts = ['CABC123', 'CDEF456']
@@ -118,5 +178,195 @@ describe('fetchEventsSafe — bisection algorithm', () => {
     // fetchEventsSafe now forwards the network as a 4th argument (#161);
     // undefined here means "the configured network", the single-network default.
     expect(fetch).toHaveBeenCalledWith(100, contracts, 5_000, undefined)
+  })
+})
+
+// ── Skipped-ledger metric ─────────────────────────────────────────────────────
+// A skipped ledger is permanent data loss, and until now the only trace of one
+// was a console.warn line that scrolls off the terminal.
+describe('fetchEventsSafe — ledgers_skipped_total', () => {
+  beforeEach(() => {
+    _resetMetrics()
+  })
+
+  // prom-client omits a labelled series entirely until it is first observed, so
+  // "no skips" is the absence of the series, not a zero.
+  function exposition(): Promise<string> {
+    return registry.metrics()
+  }
+
+  it('counts each ledger actually skipped', async () => {
+    // 100–101: full → XDR, then both single ledgers → XDR → both skipped.
+    const fetch = jest.fn().mockRejectedValue(xdrError())
+
+    const result = await fetchEventsSafe(100, 101, [], 10_000, fetch as any, 'testnet')
+
+    expect(result.events).toHaveLength(0)
+    expect(result.highestLedger).toBe(101)
+    expect(await exposition()).toContain('ledgers_skipped_total{network="testnet"} 2')
+  })
+
+  it('does not count a bisection that never gives up a ledger', async () => {
+    // full → XDR, both halves decode cleanly: the range was searched, not skipped.
+    const fetch = mockFetch(
+      () => Promise.reject(xdrError()),
+      () => Promise.resolve({ events: [makeEvent(100, 'e1')], latestLedger: 102 }),
+      () => Promise.resolve({ events: [makeEvent(104, 'e2')], latestLedger: 105 })
+    )
+
+    const result = await fetchEventsSafe(100, 105, [], 10_000, fetch as any, 'testnet')
+
+    expect(result.events).toHaveLength(2)
+    expect(await exposition()).not.toContain('ledgers_skipped_total{')
+  })
+
+  it('counts a single skipped ledger inside a range once, not once per bisection', async () => {
+    // 100–104 with only ledger 102 bad: three bisections, one skip.
+    const fetch = mockFetch(
+      () => Promise.reject(xdrError()),   // full 100–104
+      () => Promise.reject(xdrError()),   // lower 100–102
+      () => Promise.resolve({ events: [makeEvent(100, 'e1'), makeEvent(101, 'e2')], latestLedger: 101 }),
+      () => Promise.reject(xdrError()),   // single 102–102 (skipped)
+      () => Promise.resolve({ events: [makeEvent(103, 'e3'), makeEvent(104, 'e4')], latestLedger: 104 })
+    )
+
+    await fetchEventsSafe(100, 104, [], 10_000, fetch as any, 'testnet')
+
+    expect(await exposition()).toContain('ledgers_skipped_total{network="testnet"} 1')
+  })
+
+  it('counts nothing when a non-XDR error propagates', async () => {
+    const fetch = jest.fn().mockRejectedValue(new Error('unknown error'))
+
+    await expect(fetchEventsSafe(100, 100, [], 10_000, fetch as any, 'testnet')).rejects.toThrow('unknown error')
+
+    expect(await exposition()).not.toContain('ledgers_skipped_total{')
+  })
+
+  it('labels skips by network and never by ledger', async () => {
+    const fetch = jest.fn().mockRejectedValue(xdrError())
+
+    await fetchEventsSafe(7_000_000, 7_000_000, [], 10_000, fetch as any, 'mainnet')
+
+    const text = await exposition()
+    expect(text).toContain('ledgers_skipped_total{network="mainnet"} 1')
+    expect(text).not.toContain('7000000')
+  })
+})
+
+// ── The predicate itself ──────────────────────────────────────────────────────
+describe('isXdrError', () => {
+  it.each([
+    'Failed to decode XDR: unknown type',
+    'unknown SCValType member for value 9',
+    'Bad union switch: 12',
+    'invalid XDR contract typecast - source buffer not entirely consumed',
+    'attempt to read outside the boundary of the buffer',
+    'exceeded max decoding depth',
+    '5 is not a value of any member of SCValType',
+  ])('recognises the decoder’s own failure: %s', (message) => {
+    expect(isXdrError(new Error(message))).toBe(true)
+  })
+
+  it.each([
+    'unknown error',
+    'getaddrinfo ENOTFOUND rpc.example.com unknown host',
+    'Network timeout',
+    'Request failed with status code 503: upstream returned an unknown error',
+    'ledger 102 unknown',
+    'ENOTFOUND',
+  ])('rejects a non-decode error: %s', (message) => {
+    expect(isXdrError(new Error(message))).toBe(false)
+  })
+
+  it('handles a thrown non-Error without throwing itself', () => {
+    expect(isXdrError('Failed to decode XDR')).toBe(true)
+    expect(isXdrError('unknown error')).toBe(false)
+    expect(isXdrError(undefined)).toBe(false)
+    expect(isXdrError(null)).toBe(false)
+  })
+})
+
+// ── Paging: advance the cursor to the ledger actually covered ─────────────────
+// `fetchEvents` used to return `resp.latestLedger` (the network tip) as the
+// highest covered ledger and drop `resp.cursor`, so a truncated page was lost
+// and the cursor jumped past `tip - TIP_LAG`. These tests pin the paging
+// contract: a full page must be drained with the cursor, and `highestLedger`
+// must never exceed the `endLedger` the caller asked for.
+describe('fetchEvents — paging cursor', () => {
+  it('returns the paging cursor and the max event ledger alongside latestLedger', async () => {
+    const fetch = jest.fn().mockResolvedValue({
+      events: [makeEvent(100, 'e1'), makeEvent(102, 'e2')],
+      latestLedger: 200,
+      cursor: 'cursor-102',
+    })
+
+    const result = await fetchEvents(100, [], 10_000, undefined, fetch as any)
+
+    expect(result.events).toHaveLength(2)
+    expect(result.latestLedger).toBe(200)
+    expect(result.cursor).toBe('cursor-102')
+    expect(result.maxEventLedger).toBe(102)
+  })
+
+  it('pages with the cursor until the range is drained', async () => {
+    // First page is exactly `limit` events (full), second page is short.
+    const firstPage = Array.from({ length: 3 }, (_, i) => makeEvent(100 + i, 'a' + i))
+    const secondPage = [makeEvent(103, 'b0')]
+    const fetch = mockFetch(
+      () => Promise.resolve({ events: firstPage, latestLedger: 200, cursor: 'cursor-102' }),
+      () => Promise.resolve({ events: secondPage, latestLedger: 200, cursor: 'cursor-103' })
+    )
+
+    const result = await fetchEventsSafe(100, 105, [], 3, fetch as any)
+
+    expect(result.events.map(e => e.id)).toEqual(['a0', 'a1', 'a2', 'b0'])
+    expect(fetch).toHaveBeenCalledTimes(2)
+    // Second call must carry the cursor from the first page.
+    expect(fetch.mock.calls[1][3]).toBe('cursor-102')
+  })
+
+  it('does not lose the second page when the first page is exactly `limit` events', async () => {
+    // Regression: on `main` the second page was never fetched because the
+    // caller trusted `latestLedger` as the covered ledger.
+    const firstPage = Array.from({ length: 2 }, (_, i) => makeEvent(100 + i, 'a' + i))
+    const secondPage = [makeEvent(102, 'b0')]
+    const fetch = mockFetch(
+      () => Promise.resolve({ events: firstPage, latestLedger: 200, cursor: 'cursor-101' }),
+      () => Promise.resolve({ events: secondPage, latestLedger: 200, cursor: 'cursor-102' })
+    )
+
+    const result = await fetchEventsSafe(100, 105, [], 2, fetch as any)
+
+    expect(result.events.map(e => e.id)).toEqual(['a0', 'a1', 'b0'])
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('never reports a highestLedger above the endLedger passed in', async () => {
+    // The RPC tip is far ahead of the requested range; the cursor must not
+    // jump past `endLedger` (the propagation buffer).
+    const fetch = jest.fn().mockResolvedValue({
+      events: [makeEvent(100, 'e1')],
+      latestLedger: 9_999,
+      cursor: 'cursor-100',
+    })
+
+    const result = await fetchEventsSafe(100, 105, [], 10_000, fetch as any)
+
+    expect(result.highestLedger).toBe(105)
+    expect(result.highestLedger).toBeLessThanOrEqual(105)
+  })
+
+  it('reports highestLedger as the last fully covered ledger, not the tip', async () => {
+    // A short page covers up to its last event ledger; the tip is irrelevant.
+    const fetch = jest.fn().mockResolvedValue({
+      events: [makeEvent(100, 'e1'), makeEvent(101, 'e2')],
+      latestLedger: 9_999,
+      cursor: 'cursor-101',
+    })
+
+    const result = await fetchEventsSafe(100, 105, [], 10_000, fetch as any)
+
+    expect(result.highestLedger).toBe(101)
   })
 })
