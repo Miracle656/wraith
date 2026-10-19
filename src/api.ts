@@ -32,6 +32,7 @@ import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
 import { toDisplayAmount } from "./amount";
+import { HttpError, newCorrelationId } from "./utils/errors";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -1106,21 +1107,25 @@ export function createApp(): express.Application {
   });
 
   // ─── Global error handler ────────────────────────────────────────────────
- app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  // Deliberate, already-classified errors keep their own status + message
-  if (err instanceof HttpError) {
-    return res.status(err.status).json({ error: err.message });
-  }
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // A deliberately-thrown HttpError carries a message written for the caller,
+    // so it keeps its own status and text.
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
 
-  // Anything else is an unhandled internal error — never leak it
-  const correlationId = newCorrelationId();
-  console.error(`[${correlationId}] Unhandled error:`, err); // swap for real logger if one exists
+    // Anything else is unhandled, and its message is not ours to show. This
+    // handler used to answer `err.message` verbatim, which is how a Postgres
+    // connection string reached callers through a raw driver error. The caller
+    // gets a correlation id; the detail stays in the log.
+    const correlationId = newCorrelationId();
+    console.error(`[api] Unhandled error (${correlationId}):`, err);
 
-  return res.status(500).json({
-    error: 'Internal server error',
-    correlationId,
+    return res.status(500).json({
+      error: "Internal server error",
+      correlationId,
+    });
   });
-});
 
   return app;
 }
