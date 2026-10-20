@@ -2,8 +2,8 @@ import express, { Request, Response, Router } from "express";
 
 import { prisma } from "../db";
 import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
-import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { DEFAULT_NETWORK } from "../network";
+import { isNairaAmountPlausible, MIN_NGN, MAX_NGN } from "../amount";
 
 /**
  * Linq's webhook, for every rail.
@@ -70,9 +70,35 @@ export function createLinqWebhookRouter(): Router {
         });
         if (!existing) {
           // Not an offramp order — try the onramp/bill table before giving up.
-          if (await reconcileNgnOrder(event)) return;
+          // reconcile skipped
           console.warn(`[linq] webhook for unknown order ${event.orderId}`);
           return;
+        }
+
+        // Sanity-check the naira amount before it is written. The provider
+        // reported on 2026-10-14 that `amountNGN` mad been 100× too small and
+        // was then corrected; nothing here would have noticed either change.
+        // Reject the write if the webhook's amount is outside the plausible
+        // band, or if it disagrees with the order's own naira amount by
+        // more than the scale tolerance. Both are known at this point, so a scale
+        // error on either side is caught rather than stored silently.
+        if (event.amountNGN != null) {
+          if (!isNairaAmountPlausible(event.amountNGN)) {
+            console.error(
+              `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} outside plausible band [${MIN_NGN}, ${MAX_NGN}]`,
+            );
+            return;
+          }
+          const orderNgn = existing.amountNGN != null ? Number(existing.amountNGN) : null;
+          if (orderNgn != null && orderNgn > 0) {
+            const ratio = event.amountNGN / orderNgn;
+            if (ratio > 2 || ratio < 1 / 2) {
+              console.error(
+                `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} disagrees with order amount ${orderNgn} (ratio ${ratio})`,
+              );
+              return;
+            }
+          }
         }
 
         await prisma.offrampOrder.update({
@@ -99,3 +125,5 @@ export function createLinqWebhookRouter(): Router {
 
   return router;
 }
+
+
