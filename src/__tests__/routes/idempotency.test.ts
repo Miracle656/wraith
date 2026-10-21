@@ -307,6 +307,7 @@ describe("recordNgnOrder", () => {
     walletAddress: WALLET,
     coin: "usdc",
     amountStableCoin: 10,
+      amountNGN: 1500000,
     amountNgn: 1500000,
     rate: 1500,
     status: "pending",
@@ -376,6 +377,7 @@ describe("POST /webhooks/linq", () => {
       walletAddress: WALLET,
       coin: "usdc",
       amountStableCoin: 10,
+      amountNGN: 1500000,
       amountNgn: 1500000,
       rate: 1500,
       status: "pending",
@@ -386,6 +388,7 @@ describe("POST /webhooks/linq", () => {
       orderId: "00000000-0000-4000-8000-000000000002",
       status: "completed",
       amountStableCoin: 10,
+      amountNGN: 1500000,
     };
 
     await deliver(app, event);
