@@ -59,11 +59,17 @@ export function createLinqWebhookRouter(): Router {
       res.status(200).json({ ok: true });
 
       try {
-        // Idempotent by construction: the update targets a row keyed on the
-        // order id and writes the settled figures. A redelivery writes the
-        // same values a second time, which is a no-op rather than a
-        // double-count. Nothing here creates a row - an event for an order we
-        // never placed is not ours to act on.
+        // Idempotent per event: the update targets a row keyed on the order
+        // id and writes the settled figures. A redelivery of the SAME event
+        // writes the same values a second time, which is a no-op rather than
+        // a double-count (pinned in __tests__/routes/idempotency.test.ts).
+        // Nothing here creates a row - an event for an order we never placed
+        // is not ours to act on.
+        //
+        // Not order-safe, though: the last delivery wins. A late redelivery
+        // of `order.processing` arriving after `order.completed` sets the
+        // status back to processing. Nothing is counted twice, but the row
+        // reads wrong until the next status poll corrects it.
         const network = DEFAULT_NETWORK;
         const existing = await prisma.offrampOrder.findFirst({
           where: { orderId: event.orderId },

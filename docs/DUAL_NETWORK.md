@@ -27,7 +27,7 @@ behave exactly as before; #161 and #163 pass it explicitly.
 | `NETWORKS` | `testnet` | `testnet,mainnet` to index both in one process |
 | `STELLAR_NETWORK` | `testnet` | `mainnet` |
 | `SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | external provider endpoint (**secret — host env only**) |
-| `SAC_CONTRACT_IDS` | testnet SAC `CDMLFMKM…` | mainnet XLM SAC `CDLZFC3SY…` |
+| `SAC_CONTRACT_IDS` | testnet SAC `CDLZFC3SY…` | mainnet XLM SAC `CAS3J7GY…` |
 | `DATABASE_URL` | testnet DB | **separate** mainnet DB |
 | `HORIZON_URL` | optional testnet | optional `https://horizon.stellar.org` |
 

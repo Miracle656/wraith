@@ -202,6 +202,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ngn/customers/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Is this customer reference verified?
+         * @description Read-only check against the naira provider. Creating nothing is the point: the only previous way to ask was to provision a customer and read `verified` off the reply, which needed a full set of personal details to answer a yes/no question about a reference the caller already held. Rate-limited, because a reference is derived from a wallet address and an unthrottled answer would be an oracle.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Our identifier for the person, stable for the life of their install. Derived from the wallet address, never a provider id. */
+                    customerRef: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            customerRef: string;
+                            /** @description Whether the provider verifies this reference right now. Read-only: asking does not create a customer and does not spend a verification attempt, which is the reason this route exists. */
+                            verified: boolean;
+                            status?: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -273,12 +353,25 @@ export interface paths {
                             /** @enum {string} */
                             network?: "testnet" | "mainnet";
                             lastIndexedLedger: number | null;
-                            latestLedger: number;
-                            lagLedgers: number;
+                            latestLedger: number | null;
+                            lagLedgers: number | null;
                             /** Format: date-time */
-                            startedAt: string;
-                            uptimeSeconds: number;
-                            totalIndexed: number;
+                            startedAt?: string;
+                            uptimeSeconds?: number;
+                            totalIndexed?: number;
+                            networks?: {
+                                [key: string]: {
+                                    lastIndexedLedger: number | null;
+                                    latestLedger: number | null;
+                                    lagLedgers: number | null;
+                                    running: boolean;
+                                    reason?: string;
+                                } & {
+                                    [key: string]: unknown;
+                                };
+                            };
+                        } & {
+                            [key: string]: unknown;
                         };
                     };
                 };
@@ -2212,6 +2305,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Veil platform fee
+         * @description What the wallet should charge on a send, and where to pay it, per asset. The fee is collected on-chain in the same transaction as the send; this only tells the client the amount, so it can change without shipping an app. Unauthenticated and served with `Cache-Control: no-store`, because a stale fee is one the user was shown but did not agree to. `enabled: false` means no fee is configured today.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
+                    amount?: string | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description False when no fee is configured, so a client can tell a deliberate waiver from a backend too old to know about fees. */
+                            enabled: boolean;
+                            /** @description Keyed by asset code. Always charged in the asset being sent. */
+                            fees: {
+                                [key: string]: {
+                                    /**
+                                     * @description What to charge, in whole units of the fee asset, as a decimal string.
+                                     * @example 0.25
+                                     */
+                                    amount: string;
+                                    /** @example USDC */
+                                    assetCode: string;
+                                    /** @description Null for native XLM. */
+                                    assetIssuer: string | null;
+                                    /** @description The classic account the fee is paid to. */
+                                    destination: string;
+                                    /** @description Percent of the sent amount, when the fee scales. Absent when it is flat. */
+                                    percent?: string;
+                                    /** @description Floor; present only alongside percent. */
+                                    min?: string;
+                                    /** @description Cap; present only alongside percent. */
+                                    max?: string;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/transfers.csv": {
         parameters: {
             query?: never;
@@ -2452,7 +2612,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/offramp/rate": {
+    "/offramp/availability": {
         parameters: {
             query?: never;
             header?: never;
@@ -2460,8 +2620,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Indicative NGN/USDC rate
-         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         * Is cash-out enabled on this deployment
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client). Answers the availability question without pricing anything: it makes no provider call, so it costs none of the shared rate allowance.
          */
         get: {
             parameters: {
@@ -2479,9 +2639,102 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {boolean} */
+                            available: true;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offramp/rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Indicative naira-per-coin rate
+         * @description Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for. */
+                    coin?: "xlm" | "usdc";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /**
+                             * @description The asset `rate` is quoted per unit of. Always present, including for a request that named none — which is priced as `usdc`.
+                             * @enum {string}
+                             */
+                            coin: "xlm" | "usdc";
+                            /** @description Naira per one unit of the requested coin, not naira per dollar. */
                             rate: number;
-                            currency: string;
-                            coin: string;
                             /** @enum {boolean} */
                             indicative: true;
                         };

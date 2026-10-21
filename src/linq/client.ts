@@ -22,9 +22,11 @@ export { LinqError, retryOnProviderFailure } from "./http";
  * All Veil users share one provider key, and the provider limits it. A user
  * creating a cash-out got "rate limit exceeded, please wait" and succeeded on
  * a second tap: the limit had cleared within a second or two, so the app should
- * have waited, not the user. A 429 means the request was refused before any
- * work was done, so repeating it (order creation included, with the same
- * idempotencyKey) cannot create anything twice.
+ * have waited, not the user. A 429 is taken to mean the request was refused
+ * before any work was done, so repeating it (order creation included, with the
+ * same idempotencyKey) cannot create anything twice. That is the conventional
+ * meaning rather than one Linq has stated; the fake provider encodes it, so a
+ * correction there fails the test that relies on it.
  */
 const RATE_LIMIT_RETRIES = 2;
 

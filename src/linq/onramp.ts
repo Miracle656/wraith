@@ -38,7 +38,9 @@
  * refuses that outright rather than leaving it to a caller to remember.
  */
 
-import { LinqError, linqCall, retryOnProviderFailure, TOTAL_BUDGET_MS } from "./http";
+import { LinqError, linqCall, linqTransport, retryOnProviderFailure, TOTAL_BUDGET_MS } from "./http";
+
+export { unexplainedFailure } from "./http";
 
 /**
  * Every onramp and customer request goes through the shared client in
@@ -90,7 +92,11 @@ export interface ProvisionCustomerParams {
 export interface LinqCustomer {
   customerRef: string;
   verified: boolean;
-  /** False when the customer already existed — provisioning is idempotent. */
+  /**
+   * False when the customer already existed at the moment Linq answered —
+   * provisioning is idempotent. Not "this request created nothing": see
+   * {@link provisionCustomer} on dropped responses.
+   */
   created: boolean;
   /**
    * True when `customerRef` is **not** the one that was asked for.
@@ -109,7 +115,8 @@ export interface LinqCustomer {
  * Safe to call again with the same `customerRef`: Linq returns the existing
  * customer unchanged with `created: false` rather than erroring or duplicating,
  * which means a client that retries after a dropped response cannot create two
- * customers for one person.
+ * customers for one person. That rests on Linq's behaviour, which the fake
+ * provider encodes and `__tests__/linq/idempotency.test.ts` holds us to.
  *
  * **The reference that comes back is not always the one that went in.** An
  * email already registered under another reference is refused with
@@ -126,6 +133,14 @@ export interface LinqCustomer {
  * they sent. A reference that drifts between calls is a permanent lockout for
  * that person — `reusedExistingRef` is set so a caller can tell this happened
  * rather than having to compare strings.
+ *
+ * Two further things it does NOT promise:
+ *  - The details you sent are stored. The key is the reference alone, and an
+ *    existing customer comes back *unchanged* — provisioning again with a
+ *    corrected email or phone silently keeps the old one.
+ *  - `created` says whether *this call* created them. After a dropped response
+ *    the internal retry finds the customer the first attempt made, and answers
+ *    `created: false` for a person who did not exist a second earlier.
  */
 export async function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
@@ -190,6 +205,51 @@ export interface CustomerKycResult {
 }
 
 /**
+ * The whole NIN check's budget, retries, waits and status checks included.
+ *
+ * Under the clients' own 40s ceiling with room to spare, so a person is never
+ * told the check failed while this server is still running it — and the same
+ * figure every other provider operation here is held to.
+ */
+export const KYC_BUDGET_MS = TOTAL_BUDGET_MS;
+
+/**
+ * One attempt's ceiling. A NIN check reaches NIMC and is routinely slower than
+ * a lookup: at fifteen seconds we were abandoning answers that were on their
+ * way. Each attempt still gets only what is left of {@link KYC_BUDGET_MS}.
+ */
+export const KYC_ATTEMPT_TIMEOUT_MS = 30_000;
+
+/** Attempts in all, so at most two retries. */
+const KYC_MAX_ATTEMPTS = 3;
+
+/** Wait before the n-th retry (1-based): 1s, then 2s. */
+const kycBackoffMs = (retry: number) => 1_000 * retry;
+
+/**
+ * May a failed NIN submission be sent again?
+ *
+ * **Yes** for a provider 5xx — it answered, and the answer was that it failed
+ * (on 2026-10-14 the endpoint returned a 5xx in ~2.2s, consistently) — and for
+ * a connection that never got an answer.
+ *
+ * **Never** for a 4xx. `nin_already_used` and `invalid_nin_format` are answers,
+ * not failures, and a 429 is the provider telling us to stop; each retry would
+ * spend an attempt against a rate-limited provider and change nothing.
+ *
+ * **Not** for our own timeout. The provider may still be working on the NIN we
+ * sent, so sending it again is exactly the duplicate attempt this must never
+ * make. The person is told it timed out, which is true.
+ */
+export function isRetryableKycFailure(err: unknown): boolean {
+  if (!(err instanceof LinqError)) return false;
+  const transport = linqTransport(err);
+  if (transport === "timeout") return false;
+  if (transport === "unreachable") return true;
+  return err.status >= 500;
+}
+
+/**
  * Verify a customer's identity by NIN.
  *
  * One call: Linq checks the NIN with Smile ID and marks the customer verified
@@ -200,22 +260,60 @@ export interface CustomerKycResult {
  * an incidental one, and the absence of a `nin` field on the result type is
  * what enforces it.
  *
- * Not retried. A verification attempt is rate-limited on Linq's side and may
- * have side effects with their identity provider, so a timeout here is
- * reported rather than replayed — the caller can ask the customer to try
- * again, which is honest, instead of us submitting the same identity twice.
+ * ## Retries
+ *
+ * A NIN verifies once, ever, against one customer reference, and a person who
+ * meets a provider blip cannot tell it from a refusal. So a provider failure
+ * is retried — see {@link isRetryableKycFailure} for exactly which — with a
+ * short backoff, inside {@link KYC_BUDGET_MS} for the whole operation.
+ *
+ * **The NIN is never resent to a route that has already answered.** A failure
+ * can hide a success: the provider may have verified the customer and then
+ * failed to tell us. Before any resend we ask `GET /b2b/customers/status`,
+ * which takes the reference alone. Verified already → that is the answer, and
+ * the NIN does not travel again. If even that question cannot be answered, we
+ * do not resend blind; the original failure is reported.
  */
-export function submitCustomerKyc(customerRef: string, nin: string): Promise<CustomerKycResult> {
-  return call<CustomerKycResult>("/b2b/customers/kyc", {
-    method: "POST",
-    body: { customerRef, nin },
-    // A NIN check reaches NIMC and is routinely slower than a lookup. At the
-    // default fifteen seconds we were abandoning answers that were on their
-    // way, and the provider's own reading of our empty error bodies is that
-    // the request is timing out before their response arrives. Still inside
-    // the clients' own 40s ceiling, so they never give up first.
-    timeoutMs: 30_000,
-  });
+export async function submitCustomerKyc(
+  customerRef: string,
+  nin: string,
+): Promise<CustomerKycResult> {
+  const deadline = Date.now() + KYC_BUDGET_MS;
+  const submit = () =>
+    call<CustomerKycResult>("/b2b/customers/kyc", {
+      method: "POST",
+      body: { customerRef, nin },
+      deadline,
+      timeoutMs: KYC_ATTEMPT_TIMEOUT_MS,
+    });
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await submit();
+    } catch (err) {
+      if (!isRetryableKycFailure(err) || attempt >= KYC_MAX_ATTEMPTS) throw err;
+
+      // Did the attempt that "failed" land anyway? Asked before any wait, so a
+      // verification that went through is reported as soon as we can see it.
+      let status: CustomerStatus;
+      try {
+        status = await call<CustomerStatus>("/b2b/customers/status", {
+          query: { customerRef },
+          deadline,
+        });
+      } catch {
+        throw err;
+      }
+      if (status.verified) {
+        return { customerRef, verified: true, status: status.status ?? "verified" };
+      }
+
+      // A wait that ends at or past the deadline leaves nothing to send in.
+      const wait = kycBackoffMs(attempt);
+      if (Date.now() + wait >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 // ─── Rate ────────────────────────────────────────────────────────────────────
@@ -283,6 +381,14 @@ export interface OnrampOrderResponse {
  * carries a warning that funds sent on the wrong chain are unrecoverable. The
  * mapping is therefore explicit and total, so a new coin cannot silently fall
  * through to a default.
+ *
+ * **Not idempotent.** No key is sent and Linq documents none, yet this is
+ * retried on a 5xx or a dropped connection — so a retry after Linq created the
+ * order and lost the answer places a second one, and the customer is shown the
+ * second. That is tolerable only because creating an order moves no money: the
+ * orphan has no deposit and lapses at `expiresAt`. A client that resubmits
+ * gets a second order the same way. Pinned in `__tests__/linq/idempotency.test.ts`;
+ * see docs/idempotency.md before adding a key or removing the retry.
  */
 // `async` deliberately, matching `createOfframpOrder`: the guards below must
 // surface as a rejection rather than a synchronous throw, so a caller that

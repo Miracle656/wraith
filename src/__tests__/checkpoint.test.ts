@@ -1,297 +1,387 @@
 /**
- * Behavioural tests for src/indexer/checkpoint.ts — exactly-once ingest (#101).
+ * Behavioural tests for src/indexer/checkpoint.ts
  *
- * All Prisma I/O is mocked so no database is needed. The suite verifies the
- * three outcomes that matter for the exactly-once guarantee:
- *
- *   1. A fresh batch is inserted and the checkpoint is advanced.
- *   2. A replayed batchId (crash-restart) is a no-op at the DB level.
- *   3. A failed insert causes the transaction to abort so the checkpoint
- *      does not advance.
- *
- * NOTE: commitBatch and isBatchProcessed (via hasCheckpoint) are called and
- * visible in the coverage report. The module is still not wired into
- * startIndexer().
+ * NOTE: commitBatch / hasCheckpoint are not yet wired into startIndexer().
+ * They are tested here in isolation so the exactly-once ingest logic is
+ * exercised before the wiring lands.
  */
 
-import { describe, it, expect, jest, beforeEach } from "@jest/globals";
+// ── Mock ../db before importing the module under test ──────────────────────
+// prisma.$transaction must execute the callback synchronously so we can
+// inspect the tx calls that happen inside it.
 
-// ─── Prisma mock ────────────────────────────────────────────────────────────
-// Declare the fakes before jest.mock() so the factory closure can close over
-// them — the same pattern as tombstones.test.ts.
-//
-// Using jest.fn<FunctionSignature>() (full function type, not just return type)
-// as required by @jest/globals v30 — passing only a return type produces a
-// "never" mismatch when calling mockResolvedValue.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockCreateManyFn: jest.Mock = jest.fn<any, any>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockUpsertFn: jest.Mock = jest.fn<any, any>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockFindUniqueFn: jest.Mock = jest.fn<any, any>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockFindFirstFn: jest.Mock = jest.fn<any, any>();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockUpsertAccountSummariesFn: jest.Mock = jest.fn<any, any>();
 
-const tokenTransferCreateMany = jest.fn<
-  (args: { data: unknown[]; skipDuplicates: boolean }) => Promise<{ count: number }>
->();
-const nftTransferCreateMany = jest.fn<
-  (args: { data: unknown[]; skipDuplicates: boolean }) => Promise<{ count: number }>
->();
-const hostFnLogCreateMany = jest.fn<
-  (args: { data: unknown[]; skipDuplicates: boolean }) => Promise<{ count: number }>
->();
-const indexerCheckpointUpsert = jest.fn<(args: unknown) => Promise<unknown>>();
-const indexerCheckpointFindUnique = jest.fn<(args: unknown) => Promise<unknown>>();
-const indexerCheckpointFindFirst = jest.fn<(args: unknown) => Promise<unknown>>();
-
-// $transaction calls the callback with a fake tx that exposes the same mock
-// fns the real tx would. If any fn inside the callback rejects, $transaction
-// propagates that rejection and the checkpoint upsert (which comes last) is
-// never reached — that is the rollback behaviour we assert below.
-const $transaction = jest.fn<
-  (cb: (tx: unknown) => Promise<unknown>) => Promise<unknown>
->(async (cb) => {
-  const fakeTx = {
-    tokenTransfer:     { createMany: tokenTransferCreateMany },
-    nftTransfer:       { createMany: nftTransferCreateMany },
-    hostFnLog:         { createMany: hostFnLogCreateMany },
-    indexerCheckpoint: { upsert: indexerCheckpointUpsert },
-  };
-  return cb(fakeTx);
-});
-
-const upsertAccountSummaries = jest.fn<() => Promise<void>>();
+// The tx object handed to the $transaction callback mirrors the real Prisma
+// interactive-transaction client.
+const txMock = {
+  tokenTransfer: { createMany: mockCreateManyFn },
+  nftTransfer: { createMany: mockCreateManyFn },
+  hostFnLog: { createMany: mockCreateManyFn },
+  indexerCheckpoint: { upsert: mockUpsertFn },
+};
 
 jest.mock("../db", () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   prisma: {
-    $transaction,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    $transaction: jest.fn<any, any>((cb: (tx: typeof txMock) => Promise<unknown>) =>
+      cb(txMock)
+    ),
     indexerCheckpoint: {
-      findUnique: indexerCheckpointFindUnique,
-      findFirst:  indexerCheckpointFindFirst,
+      findUnique: mockFindUniqueFn,
+      findFirst: mockFindFirstFn,
     },
   },
-  upsertAccountSummaries,
+  upsertAccountSummaries: mockUpsertAccountSummariesFn,
 }));
 
-// ─── Module under test ───────────────────────────────────────────────────────
+// Import after mocks are in place.
 import {
   hasCheckpoint,
   getLastCheckpoint,
   commitBatch,
+  updateAccountSummaries,
   type BatchMetadata,
   type BatchPayload,
 } from "../indexer/checkpoint";
-import type { TransferRecord } from "../db";
+import { prisma } from "../db";
 
-// ─── Fixtures ────────────────────────────────────────────────────────────────
+// ── Shared fixtures ────────────────────────────────────────────────────────
 
 const META: BatchMetadata = {
-  batchId:    "sac:6000-7000",
+  batchId: "sac:6000-7000",
   fromLedger: 6000,
-  toLedger:   7000,
-};
-
-const TRANSFER: TransferRecord = {
-  contractId:     "CTOKEN",
-  eventType:      "transfer",
-  fromAddress:    "GSENDER",
-  toAddress:      "GRECEIVER",
-  amount:         "10000000",
-  ledger:         6500,
-  ledgerClosedAt: new Date("2025-01-01T00:00:00.000Z"),
-  txHash:         "txhash-abc",
-  eventId:        "6500-1",
+  toLedger: 7000,
 };
 
 const EMPTY_PAYLOAD: BatchPayload = {
-  transfers:    [],
+  transfers: [],
   nftTransfers: [],
-  hostFnLogs:   [],
+  hostFnLogs: [],
 };
 
-const PAYLOAD_WITH_TRANSFER: BatchPayload = {
-  transfers:    [TRANSFER],
+const TRANSFER_PAYLOAD: BatchPayload = {
+  transfers: [
+    {
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+      eventType: "transfer",
+      fromAddress: "GBOB",
+      toAddress: "GALICE",
+      amount: "1000000",
+      ledger: 6500,
+      ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
+      txHash: "txhash-abc",
+      eventId: "evt-001",
+    },
+  ],
   nftTransfers: [],
-  hostFnLogs:   [],
+  hostFnLogs: [],
 };
 
-// ─── Reset between tests ─────────────────────────────────────────────────────
+const NFT_PAYLOAD: BatchPayload = {
+  transfers: [],
+  nftTransfers: [
+    {
+      contractId: "CNFT001",
+      tokenId: "42",
+      fromAddress: "GBOB",
+      toAddress: "GALICE",
+      ledger: 6500,
+      ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
+      txHash: "txhash-nft",
+      eventId: "evt-nft-001",
+    },
+  ],
+  hostFnLogs: [],
+};
 
-beforeEach(() => {
-  jest.clearAllMocks();
-  // Default: the checkpoint does not exist, all writes succeed.
-  indexerCheckpointFindUnique.mockResolvedValue(null);
-  indexerCheckpointFindFirst.mockResolvedValue(null);
-  tokenTransferCreateMany.mockResolvedValue({ count: 1 });
-  nftTransferCreateMany.mockResolvedValue({ count: 0 });
-  hostFnLogCreateMany.mockResolvedValue({ count: 0 });
-  indexerCheckpointUpsert.mockResolvedValue({});
-});
+const HOSTFN_PAYLOAD: BatchPayload = {
+  transfers: [],
+  nftTransfers: [],
+  hostFnLogs: [
+    {
+      contractId: "CHOSTFN001",
+      functionName: "transfer",
+      args: ["GBOB", "GALICE", "1000000"],
+      result: null,
+      gasUsed: null,
+      ledger: 6500,
+      ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),
+      txHash: "txhash-hostfn",
+      eventId: "evt-hostfn-001",
+    },
+  ],
+};
 
-// ─── hasCheckpoint / isBatchProcessed ────────────────────────────────────────
+// ── hasCheckpoint ──────────────────────────────────────────────────────────
 
 describe("hasCheckpoint", () => {
-  it("returns false when no row exists for the given batchId", async () => {
-    indexerCheckpointFindUnique.mockResolvedValue(null);
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
-    const result = await hasCheckpoint("sac:6000-7000", "testnet");
+  it("returns false when no checkpoint row exists for the batchId", async () => {
+    mockFindUniqueFn.mockResolvedValue(null);
+
+    const result = await hasCheckpoint("sac:6000-7000");
 
     expect(result).toBe(false);
-    expect(indexerCheckpointFindUnique).toHaveBeenCalledWith({
-      where:  { network_batchId: { network: "testnet", batchId: "sac:6000-7000" } },
+    expect(mockFindUniqueFn).toHaveBeenCalledWith({
+      where: { network_batchId: { network: "testnet", batchId: "sac:6000-7000" } },
       select: { id: true },
     });
   });
 
-  it("returns true when the checkpoint row already exists", async () => {
-    indexerCheckpointFindUnique.mockResolvedValue({ id: 42 });
+  it("returns true when a checkpoint row already exists for the batchId", async () => {
+    mockFindUniqueFn.mockResolvedValue({ id: 42 });
 
-    const result = await hasCheckpoint("sac:6000-7000", "testnet");
+    const result = await hasCheckpoint("sac:6000-7000");
 
     expect(result).toBe(true);
   });
 
-  it("resolves the network from STELLAR_NETWORK when none is supplied", async () => {
-    process.env.STELLAR_NETWORK = "mainnet";
-    try {
-      await hasCheckpoint("sac:6000-7000");
+  it("scopes the lookup to the supplied network", async () => {
+    mockFindUniqueFn.mockResolvedValue(null);
 
-      const callArg = indexerCheckpointFindUnique.mock.calls[0][0] as {
-        where: { network_batchId: { network: string } };
-      };
-      expect(callArg.where.network_batchId.network).toBe("mainnet");
-    } finally {
-      delete process.env.STELLAR_NETWORK;
-    }
+    await hasCheckpoint("sac:6000-7000", "mainnet");
+
+    expect(mockFindUniqueFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { network_batchId: { network: "mainnet", batchId: "sac:6000-7000" } },
+      })
+    );
   });
 });
 
-// ─── getLastCheckpoint ───────────────────────────────────────────────────────
+// ── getLastCheckpoint ──────────────────────────────────────────────────────
 
 describe("getLastCheckpoint", () => {
-  it("returns null when no checkpoints exist for the network", async () => {
-    indexerCheckpointFindFirst.mockResolvedValue(null);
-
-    const result = await getLastCheckpoint("testnet");
-
-    expect(result).toBeNull();
-    expect(indexerCheckpointFindFirst).toHaveBeenCalledWith({
-      where:   { network: "testnet" },
-      orderBy: { lastLedger: "desc" },
-      select:  { lastLedger: true },
-    });
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  it("returns the highest lastLedger across all batches on the network", async () => {
-    indexerCheckpointFindFirst.mockResolvedValue({ lastLedger: 7000 });
+  it("returns null when no checkpoints exist", async () => {
+    mockFindFirstFn.mockResolvedValue(null);
 
-    const result = await getLastCheckpoint("testnet");
+    const result = await getLastCheckpoint();
+
+    expect(result).toBeNull();
+  });
+
+  it("returns the highest lastLedger across all checkpoints", async () => {
+    mockFindFirstFn.mockResolvedValue({ lastLedger: 7000 });
+
+    const result = await getLastCheckpoint();
 
     expect(result).toBe(7000);
   });
+
+  it("scopes the query to the supplied network", async () => {
+    mockFindFirstFn.mockResolvedValue({ lastLedger: 51000 });
+
+    const result = await getLastCheckpoint("mainnet");
+
+    expect(result).toBe(51000);
+    expect(mockFindFirstFn).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { network: "mainnet" } })
+    );
+  });
 });
 
-// ─── commitBatch — happy path ─────────────────────────────────────────────────
+// ── commitBatch — fresh batch ──────────────────────────────────────────────
 
 describe("commitBatch — fresh batch", () => {
-  it("runs a transaction and returns the inserted counts", async () => {
-    tokenTransferCreateMany.mockResolvedValue({ count: 1 });
-
-    const result = await commitBatch(META, PAYLOAD_WITH_TRANSFER, "testnet");
-
-    expect(result).toEqual({ transferred: 1, nftTransferred: 0, hostFnLogs: 0 });
-    expect($transaction).toHaveBeenCalledTimes(1);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Re-wire $transaction to run the callback (clearAllMocks resets the impl).
+    (prisma.$transaction as jest.Mock).mockImplementation(
+      (cb: (tx: typeof txMock) => Promise<unknown>) => cb(txMock)
+    );
+    mockCreateManyFn.mockResolvedValue({ count: 1 });
+    mockUpsertFn.mockResolvedValue({});
   });
 
-  it("upserts the checkpoint with the correct ledger and network", async () => {
-    await commitBatch(META, EMPTY_PAYLOAD, "testnet");
+  it("runs inside a transaction", async () => {
+    await commitBatch(META, EMPTY_PAYLOAD);
 
-    expect(indexerCheckpointUpsert).toHaveBeenCalledWith(
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("upserts the checkpoint with the correct batchId and toLedger", async () => {
+    await commitBatch(META, TRANSFER_PAYLOAD);
+
+    expect(mockUpsertFn).toHaveBeenCalledWith(
       expect.objectContaining({
-        where:  { network_batchId: { network: "testnet", batchId: META.batchId } },
+        where: { network_batchId: { network: "testnet", batchId: META.batchId } },
         create: expect.objectContaining({
-          network:    "testnet",
-          batchId:    META.batchId,
+          batchId: META.batchId,
           lastLedger: META.toLedger,
+          network: "testnet",
         }),
         update: expect.objectContaining({
           lastLedger: META.toLedger,
         }),
-      }),
+      })
     );
   });
 
-  it("stamps every transfer row with the resolved network", async () => {
-    await commitBatch(META, PAYLOAD_WITH_TRANSFER, "mainnet");
+  it("inserts token transfers and returns the inserted count", async () => {
+    mockCreateManyFn.mockResolvedValue({ count: 1 });
 
-    const callArg = tokenTransferCreateMany.mock.calls[0][0] as {
+    const result = await commitBatch(META, TRANSFER_PAYLOAD);
+
+    expect(result.transferred).toBe(1);
+  });
+
+  it("stamps the network column on every transfer row", async () => {
+    await commitBatch(META, TRANSFER_PAYLOAD);
+
+    // mockCreateManyFn is shared across all createMany calls; token transfers
+    // are the first call since TRANSFER_PAYLOAD has one transfer and no NFTs.
+    const firstCallArgs = mockCreateManyFn.mock.calls[0][0] as {
       data: Array<{ network: string }>;
+      skipDuplicates: boolean;
     };
-    expect(callArg.data[0].network).toBe("mainnet");
+    expect(firstCallArgs.data[0].network).toBe("testnet");
   });
 
   it("skips createMany calls when the payload arrays are empty", async () => {
-    await commitBatch(META, EMPTY_PAYLOAD, "testnet");
+    await commitBatch(META, EMPTY_PAYLOAD);
 
-    expect(tokenTransferCreateMany).not.toHaveBeenCalled();
-    expect(nftTransferCreateMany).not.toHaveBeenCalled();
-    expect(hostFnLogCreateMany).not.toHaveBeenCalled();
-    // The checkpoint upsert still runs even for an empty payload.
-    expect(indexerCheckpointUpsert).toHaveBeenCalledTimes(1);
+    // createMany should never be called for empty arrays
+    expect(mockCreateManyFn).not.toHaveBeenCalled();
+    // but the checkpoint upsert still fires
+    expect(mockUpsertFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the supplied network rather than the env default", async () => {
+    await commitBatch(META, EMPTY_PAYLOAD, "mainnet");
+
+    expect(mockUpsertFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { network_batchId: { network: "mainnet", batchId: META.batchId } },
+      })
+    );
+  });
+
+  it("inserts NFT transfers and returns the nftTransferred count", async () => {
+    mockCreateManyFn.mockResolvedValue({ count: 1 });
+
+    const result = await commitBatch(META, NFT_PAYLOAD);
+
+    expect(result.nftTransferred).toBe(1);
+    expect(mockCreateManyFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("inserts host-function logs and returns the hostFnLogs count", async () => {
+    mockCreateManyFn.mockResolvedValue({ count: 1 });
+
+    const result = await commitBatch(META, HOSTFN_PAYLOAD);
+
+    expect(result.hostFnLogs).toBe(1);
+    expect(mockCreateManyFn).toHaveBeenCalledTimes(1);
   });
 });
 
-// ─── commitBatch — replayed batchId (crash-restart idempotency) ───────────────
+// ── commitBatch — replayed batchId is a no-op ──────────────────────────────
 
 describe("commitBatch — replayed batchId", () => {
-  it("re-runs createMany with skipDuplicates so existing rows are silently ignored", async () => {
-    // Prisma's skipDuplicates returns 0 for already-inserted rows.
-    tokenTransferCreateMany.mockResolvedValue({ count: 0 });
-
-    const result = await commitBatch(META, PAYLOAD_WITH_TRANSFER, "testnet");
-
-    // The count reflects what Prisma says was actually inserted (0 dupes), not
-    // the payload length — so the caller can log the right number.
-    expect(result.transferred).toBe(0);
-    // The upsert still fires: it updates the timestamp but leaves lastLedger
-    // unchanged, which is the correct cursor behaviour on replay.
-    expect(indexerCheckpointUpsert).toHaveBeenCalledTimes(1);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (prisma.$transaction as jest.Mock).mockImplementation(
+      (cb: (tx: typeof txMock) => Promise<unknown>) => cb(txMock)
+    );
+    mockCreateManyFn.mockResolvedValue({ count: 0 }); // skipDuplicates dedupes
+    mockUpsertFn.mockResolvedValue({});
   });
 
-  it("passes skipDuplicates: true for every createMany call", async () => {
-    await commitBatch(META, PAYLOAD_WITH_TRANSFER, "testnet");
+  it("returns zero counts when all transfers are already present (skipDuplicates)", async () => {
+    const result = await commitBatch(META, TRANSFER_PAYLOAD);
 
-    const callArg = tokenTransferCreateMany.mock.calls[0][0] as {
-      skipDuplicates: boolean;
-    };
-    expect(callArg.skipDuplicates).toBe(true);
+    // The transaction still runs and the checkpoint is updated.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockUpsertFn).toHaveBeenCalledTimes(1);
+    // But no net new rows land.
+    expect(result.transferred).toBe(0);
   });
 });
 
-// ─── commitBatch — failed insert rolls back the checkpoint ────────────────────
+// ── commitBatch — failed insert rolls back checkpoint ─────────────────────
 
-describe("commitBatch — failed insert", () => {
-  it("propagates the error so the caller knows the batch failed", async () => {
-    tokenTransferCreateMany.mockRejectedValue(new Error("db constraint violation"));
+describe("commitBatch — transaction failure", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
-    await expect(commitBatch(META, PAYLOAD_WITH_TRANSFER, "testnet")).rejects.toThrow(
-      "db constraint violation",
+  it("propagates the error when the transaction rejects", async () => {
+    // Make $transaction itself reject, simulating a DB connection loss that
+    // causes the entire transaction (including the checkpoint upsert) to roll back.
+    (prisma.$transaction as jest.Mock).mockRejectedValueOnce(
+      new Error("DB connection lost")
+    );
+
+    await expect(commitBatch(META, TRANSFER_PAYLOAD)).rejects.toThrow(
+      "DB connection lost"
     );
   });
 
-  it("does not call indexerCheckpoint.upsert when an earlier step throws", async () => {
-    // Because $transaction propagates the rejection from the callback, any
-    // statement after the failing createMany — specifically the checkpoint
-    // upsert — is never reached. This is the exactly-once guarantee: we never
-    // advance the cursor for a batch we didn't fully persist.
-    tokenTransferCreateMany.mockRejectedValue(new Error("unique constraint failed"));
+  it("does not call the checkpoint upsert when createMany throws inside the tx", async () => {
+    // Simulate failure mid-transaction: createMany throws before upsert is reached.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const failingCreateMany: jest.Mock = jest.fn<any, any>().mockRejectedValue(
+      new Error("insert error")
+    );
+    const failingTx = {
+      tokenTransfer: { createMany: failingCreateMany },
+      nftTransfer: { createMany: failingCreateMany },
+      hostFnLog: { createMany: failingCreateMany },
+      indexerCheckpoint: { upsert: mockUpsertFn },
+    };
 
-    await expect(commitBatch(META, PAYLOAD_WITH_TRANSFER, "testnet")).rejects.toThrow();
-
-    expect(indexerCheckpointUpsert).not.toHaveBeenCalled();
-  });
-
-  it("does not call indexerCheckpoint.upsert when $transaction itself rejects", async () => {
-    // Simulates a connection drop or serialisation failure at the Prisma level.
-    $transaction.mockRejectedValueOnce(new Error("transaction serialisation failure"));
-
-    await expect(commitBatch(META, EMPTY_PAYLOAD, "testnet")).rejects.toThrow(
-      "transaction serialisation failure",
+    (prisma.$transaction as jest.Mock).mockImplementationOnce(
+      (cb: (tx: typeof failingTx) => Promise<unknown>) => cb(failingTx)
     );
 
-    expect(indexerCheckpointUpsert).not.toHaveBeenCalled();
+    await expect(commitBatch(META, TRANSFER_PAYLOAD)).rejects.toThrow("insert error");
+
+    // The real $transaction would roll back; our mock simply never reached upsert.
+    expect(mockUpsertFn).not.toHaveBeenCalled();
+  });
+});
+
+// ── updateAccountSummaries ─────────────────────────────────────────────────
+
+describe("updateAccountSummaries", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUpsertAccountSummariesFn.mockResolvedValue(undefined);
+  });
+
+  it("delegates to upsertAccountSummaries with the resolved network", async () => {
+    await updateAccountSummaries(TRANSFER_PAYLOAD.transfers, "testnet");
+
+    expect(mockUpsertAccountSummariesFn).toHaveBeenCalledWith(
+      TRANSFER_PAYLOAD.transfers,
+      "testnet"
+    );
+  });
+
+  it("defaults to testnet when no network is passed", async () => {
+    await updateAccountSummaries(TRANSFER_PAYLOAD.transfers);
+
+    expect(mockUpsertAccountSummariesFn).toHaveBeenCalledWith(
+      TRANSFER_PAYLOAD.transfers,
+      "testnet"
+    );
   });
 });

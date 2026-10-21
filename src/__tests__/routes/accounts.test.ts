@@ -9,6 +9,17 @@ jest.mock("../../db", () => ({
   prisma: { $queryRaw: jest.fn() },
 }));
 
+// The stale-read middleware probes RPC on every GET (#164), and this file was
+// the one route suite that left `../../rpc` real: the first request paid for a
+// live call to the public testnet Soroban endpoint, and when that took longer
+// than the 5s test timeout the case failed for a reason that has nothing to do
+// with balances. Later requests were fast because the health answer is cached
+// for 3s, so it read as a one-off.
+jest.mock("../../rpc", () => ({
+  ...jest.requireActual("../../rpc"),
+  getLatestLedger: jest.fn().mockResolvedValue(1234),
+}));
+
 const mockQueryBalances = queryBalances as jest.MockedFunction<typeof queryBalances>;
 
 describe("Accounts route handlers", () => {

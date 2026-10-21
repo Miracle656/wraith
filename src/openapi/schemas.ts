@@ -647,10 +647,38 @@ export const linqWebhookAckResponseSchema = z.object({
 
 // ─── /offramp/* — cash-out surface (internal) ───────────────────────────────
 
+/**
+ * `available` is always true on a 200; the answer a client gates on is the
+ * status. The body exists so a redirect or a proxy's error page cannot be read
+ * as cash-out being up by a caller that only looked at the status code.
+ */
+export const offrampAvailabilityResponseSchema = z.object({
+  available: z.literal(true),
+});
+
+export const offrampRateQuerySchema = z
+  .object({
+    /**
+     * Which asset to price. Omitted is served as `usdc` and logged — see the
+     * rollout note in `api/offramp.ts`; omitting it will 400 once the installed
+     * clients send a coin.
+     */
+    coin: z.enum(["xlm", "usdc"]).optional().openapi({
+      description:
+        "Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for.",
+      example: "usdc",
+    }),
+  })
+  .passthrough();
+
 export const offrampRateResponseSchema = z.object({
-  rate: z.number(),
-  currency: z.string(),
-  coin: z.string(),
+  coin: z.enum(["xlm", "usdc"]).openapi({
+    description:
+      "The asset `rate` is quoted per unit of. Always present, including for a request that named none — which is priced as `usdc`.",
+  }),
+  rate: z.number().openapi({
+    description: "Naira per one unit of the requested coin, not naira per dollar.",
+  }),
   /** Always true: the binding rate is the one locked into an order at creation. */
   indicative: z.literal(true),
 });

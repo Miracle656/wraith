@@ -1,0 +1,14 @@
+-- Bind an idempotency key to the request it was used for.
+--
+-- The key alone only says "this is the same attempt". Without this column a
+-- replay that reused a key but changed the destination bank account was
+-- answered 200 carrying the FIRST order's deposit address and amount, so the
+-- caller was told a payout it had just asked for was accepted while the money
+-- followed the original order.
+--
+-- Nullable on purpose, and not back-filled: the fingerprint is an HMAC taken
+-- over fields this table does not store (bankAccount, bankCode, accountName,
+-- refundAddress), so there is nothing to compute it from for rows written
+-- before now. The route treats NULL as "predates this" and falls back to
+-- comparing the amount alone, which is what those rows were already held to.
+ALTER TABLE "wraith"."OfframpOrder" ADD COLUMN "requestHash" TEXT;

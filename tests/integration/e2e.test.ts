@@ -60,7 +60,10 @@ describeE2E("E2E: ingest → query (#74)", () => {
       .query({ contractId: fixture.contractId });
 
     expect(res.status).toBe(200);
-    expect(res.body.total).toBeGreaterThanOrEqual(1);
+    // The page, not a count: `total` is opt-in since #218 because it costs a
+    // full pass over the matching rows, and the row assertions below say more
+    // than `total >= 1` did anyway.
+    expect(res.body.transfers.length).toBeGreaterThanOrEqual(1);
 
     const row = (res.body.transfers as Array<Record<string, unknown>>).find(
       t => t["eventId"] === fixture.eventId,

@@ -58,8 +58,13 @@ export interface RecordNgnOrderParams {
  * user needs. Failing their request because our bookkeeping failed would turn a
  * placed order into an error message, and they would reasonably place it again.
  *
- * Idempotent on `(network, orderId)`, so a retried delivery or a double-submit
- * updates the row rather than creating a second one.
+ * Idempotent on `(network, orderId)`: recording the same order again updates
+ * its row rather than creating a second one.
+ *
+ * That is idempotency of the *record*, not of the order. A client that submits
+ * the same onramp or bill twice gets two orders from Linq, with two ids, and
+ * so two rows — correctly, because there are two orders. See
+ * docs/idempotency.md.
  */
 export async function recordNgnOrder(params: RecordNgnOrderParams): Promise<void> {
   const {

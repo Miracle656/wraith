@@ -206,6 +206,11 @@ describeDual("Dual-network correctness harness (#172)", () => {
     // Fast-fail RPC so stray metadata/SAC lookups never hang on live network.
     process.env.SOROBAN_RPC_URL_TESTNET = "http://127.0.0.1:1";
     process.env.SOROBAN_RPC_URL_MAINNET = "http://127.0.0.1:1";
+    // The scenario is a process indexing both chains, so say so. `/status`
+    // lists the loops it is running and otherwise falls back to `NETWORKS`;
+    // leaving that unset made the fallback answer `testnet` alone, because an
+    // unset `STELLAR_NETWORK` defaults to it.
+    process.env.NETWORKS = "testnet,mainnet";
     _resetRpcClients();
     _resetIndexerLoops();
     _resetTokenCache();

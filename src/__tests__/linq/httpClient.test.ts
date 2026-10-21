@@ -41,6 +41,7 @@ import * as client from "../../linq/client";
 import * as onramp from "../../linq/onramp";
 import * as bills from "../../linq/bills";
 import { createNgnRouter, __clearNgnRateCache } from "../../api/ngn";
+import { __clearCoinPriceCache } from "../../linq/coinPrice";
 import { createOfframpRouter } from "../../api/offramp";
 import { networkMiddleware } from "../../middleware/network";
 
@@ -58,6 +59,19 @@ const reply = (status: number, body: string, headers: Record<string, string> = {
 });
 const json = (status: number, body: unknown) => reply(status, JSON.stringify(body));
 
+/**
+ * Horizon's order book, which `usdPerCoin('xlm')` reads to price XLM.
+ *
+ * It calls `res.json()` rather than `res.text()`, so this carries its own
+ * `json()`. The onramp used to be exercised with `usdc` — a dollar by
+ * construction, needing no book — but it now refuses USDC because Linq
+ * cannot source it, so the XLM path is the only one left to test with.
+ */
+const orderBook = () => ({
+  ...reply(200, "{}"),
+  json: async () => ({ bids: [{ price: "0.2" }], asks: [{ price: "0.2" }] }),
+});
+
 /** Every fetch answers with `stub`. */
 function provider(stub: Stub | ((url: string) => Stub)): jest.Mock {
   const mock = jest.fn(async (url: unknown) => (typeof stub === "function" ? stub(String(url)) : stub));
@@ -72,6 +86,9 @@ beforeEach(() => {
   jest.restoreAllMocks();
   jest.spyOn(console, "warn").mockImplementation(() => {});
   __clearNgnRateCache();
+  // The onramp now prices XLM from an order book and caches the result at
+  // module scope. Without this, a price cached here leaks into later suites.
+  __clearCoinPriceCache();
 });
 
 // ─── One implementation ─────────────────────────────────────────────────────
@@ -193,17 +210,24 @@ describe("every API route forwards the provider's code", () => {
    */
   const refuseAllBut = (allowRate: boolean) =>
     provider((url) =>
-      allowRate && url.includes("/onramprate")
-        ? reply(200, "1500")
-        : json(409, { message: "Refused", code: "provider_said_no" }),
+      // The onramp prices XLM from a Horizon order book, which is not the
+      // provider and must not be refused here — otherwise the 409 under test
+      // is masked by a price lookup failing in front of it. (The onramp used
+      // to be exercised with `usdc`, which needs no book at all; it now
+      // refuses USDC because Linq cannot source it.)
+      url.includes("/order_book")
+        ? orderBook()
+        : allowRate && url.includes("/onramprate")
+          ? reply(200, "1500")
+          : json(409, { message: "Refused", code: "provider_said_no" }),
     );
 
   const ROUTES: Array<[string, (app: express.Express) => request.Test, boolean]> = [
     ["POST /ngn/customers", (a) => request(a).post("/ngn/customers").send({ customerRef: "r", firstName: "A", lastName: "B", email: "a@example.com", phone: "0800" }), false],
     ["GET /ngn/customers/status", (a) => request(a).get("/ngn/customers/status?customerRef=r"), false],
     ["POST /ngn/customers/kyc", (a) => request(a).post("/ngn/customers/kyc").send({ customerRef: "r", nin: TEST_NIN }), false],
-    ["GET /ngn/onramp/rate", (a) => request(a).get("/ngn/onramp/rate?coin=usdc"), false],
-    ["POST /ngn/onramp/orders", (a) => request(a).post("/ngn/onramp/orders").send({ customerRef: "r", amountStableCoin: 10, walletAddress: G, rate: 1500, coin: "usdc" }), true],
+    ["GET /ngn/onramp/rate", (a) => request(a).get("/ngn/onramp/rate?coin=xlm"), false],
+    ["POST /ngn/onramp/orders", (a) => request(a).post("/ngn/onramp/orders").send({ customerRef: "r", amountStableCoin: 10, walletAddress: G, rate: 300, coin: "xlm" }), true],
     ["GET /ngn/onramp/orders/:id", (a) => request(a).get("/ngn/onramp/orders/ord_1?customerRef=r"), false],
     ["POST /ngn/bills", (a) => request(a).post("/ngn/bills").send({ customerRef: "r", billCategory: "airtime", provider: "MTN", customerId: "0800", amountNgn: 1000, amountStableCoin: 0.66, rate: 1500, coin: "usdc", refundAddress: G }), true],
     ["GET /ngn/bills/:id", (a) => request(a).get("/ngn/bills/ord_1?customerRef=r"), false],
@@ -242,13 +266,16 @@ describe("non-JSON error bodies, the same on every rail", () => {
     provider(reply(502, "<html><body><h1>502 Bad Gateway</h1></body></html>"));
     const err = (await run().catch((e: unknown) => e)) as LinqError;
     expect(err.status).toBe(502);
-    expect(err.message).toBe("Linq rejected the request");
+    // A gateway failure is not the request being rejected (W087).
+    expect(err.message).toBe("Linq returned an error without giving a reason (HTTP 502)");
     expect(err.message).not.toContain("<");
   });
 
   it.each(RAILS)("%s refuses a plain-text body too long to be a message", async (_rail, run) => {
     provider(reply(500, "x".repeat(201)));
-    await expect(run()).rejects.toMatchObject({ message: "Linq rejected the request" });
+    await expect(run()).rejects.toMatchObject({
+      message: "Linq returned an error without giving a reason (HTTP 500)",
+    });
   });
 });
 
