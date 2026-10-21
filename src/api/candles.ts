@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../db";
+import { candlesParamsSchema, candlesQuerySchema } from "../openapi/schemas";
+import { parseOr400 } from "../openapi/validation";
 
 export interface Candle {
   timeBucket: string;
@@ -47,7 +49,9 @@ async function queryCandlesFromAggregate(
     ORDER BY time_bucket DESC
     LIMIT $2 OFFSET $3
     `,
-    [contractId, limit, offset],
+    contractId,
+    limit,
+    offset,
   );
 
   return rows.map((row) => ({
@@ -70,77 +74,24 @@ export function createCandlesRouter(): Router {
 
   router.get("/:bucket/:contractId", async (req, res) => {
     try {
-      const { bucket, contractId } = req.params;
-      const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
-      const offset = parseInt(req.query.offset as string) || 0;
-
-      if (!["1m", "1h", "1d"].includes(bucket)) {
-        return res
-          .status(400)
-          .json({ error: "Invalid bucket: must be 1m, 1h, or 1d" });
-      }
-
-      if (!contractId.match(/^C[A-Z2-7]{55}$/)) {
-        return res.status(400).json({ error: "Invalid contract ID format" });
-      }
+      const params = parseOr400(candlesParamsSchema, req.params, res);
+      if (!params) return;
+      const query = parseOr400(candlesQuerySchema, req.query, res);
+      if (!query) return;
+      const { bucket, contractId } = params;
+      const { limit, offset } = query;
 
       const candles = await queryCandlesFromAggregate(
-        bucket as "1m" | "1h" | "1d",
+        bucket,
         contractId,
         limit,
         offset,
       );
 
       res.json({ bucket, contractId, candles });
-    } catch (err) {
-      console.error("[candles] Query failed:", err);
+    } catch {
+      console.error("[candles] Query failed");
       res.status(500).json({ error: "Failed to query candles" });
-    }
-  });
-
-  router.post("/refresh", async (req, res) => {
-    try {
-      const [result1m, result1h, result1d] = await Promise.all([
-        prisma.$queryRaw<
-          Array<{ rows_inserted: number; rows_updated: number }>
-        >`
-          SELECT rows_inserted, rows_updated FROM ohlc.refresh_candles_1m()
-        `,
-        prisma.$queryRaw<
-          Array<{ rows_inserted: number; rows_updated: number }>
-        >`
-          SELECT rows_inserted, rows_updated FROM ohlc.refresh_candles_1h()
-        `,
-        prisma.$queryRaw<
-          Array<{ rows_inserted: number; rows_updated: number }>
-        >`
-          SELECT rows_inserted, rows_updated FROM ohlc.refresh_candles_1d()
-        `,
-      ]);
-
-      res.json({
-        oneMinute: result1m[0]
-          ? {
-              inserted: result1m[0].rows_inserted,
-              updated: result1m[0].rows_updated,
-            }
-          : { inserted: 0, updated: 0 },
-        oneHour: result1h[0]
-          ? {
-              inserted: result1h[0].rows_inserted,
-              updated: result1h[0].rows_updated,
-            }
-          : { inserted: 0, updated: 0 },
-        oneDay: result1d[0]
-          ? {
-              inserted: result1d[0].rows_inserted,
-              updated: result1d[0].rows_updated,
-            }
-          : { inserted: 0, updated: 0 },
-      });
-    } catch (err) {
-      console.error("[candles] Refresh failed:", err);
-      res.status(500).json({ error: "Failed to refresh candles" });
     }
   });
 

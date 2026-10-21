@@ -101,7 +101,9 @@ POST /ngn/customers
 
 Safe to call again: Linq returns the existing customer with `created: false`, so a
 client retrying after a dropped response cannot create two customers for one
-person.
+person. It is keyed on `customerRef` alone, though, so a repeat with different
+details keeps the first ones. What is and is not safe to repeat across all the
+rails is in [idempotency.md](./idempotency.md).
 
 ### 2. Verify by NIN — once per person, ever
 
@@ -158,9 +160,39 @@ cheapest way to hold it correctly is not to hold it. **Any future change that ad
 a NIN to a stored shape changes what this service legally is.**
 
 An 11-digit shape check runs here so an obvious typo is answered without spending
-a verification attempt, which Linq rate-limits. `submitCustomerKyc` is
-deliberately **not** retried — a retried identity submission is a second
-verification attempt against that limit.
+a verification attempt, which Linq rate-limits.
+
+**Retries.** A NIN verifies once, ever, so a provider blip must not read as a
+refusal. `submitCustomerKyc` retries a provider **5xx** or a connection that got
+no answer, with 1s then 2s backoff, at most three attempts, all inside one 35s
+budget, which is under the clients' 40s ceiling. It never retries a **4xx**
+(`nin_already_used`, `invalid_nin_format`, a 429): those are answers, and each
+retry spends a rate-limited attempt. It never retries **its own timeout**
+either, because the provider may still be working on the NIN it already sent.
+
+Before any resend it asks `GET /b2b/customers/status`, which takes the reference
+alone. If the customer is already verified (the attempt landed and only the
+answer was lost), that is returned and the NIN is not sent again. If the status
+cannot be read either, the original failure is returned rather than resending
+blind.
+
+**Failures.** The provider documented these on 2026-10-14. `code` is forwarded
+verbatim; branch on it, never on `error`.
+
+| `code` | Provider status | wraith answers |
+| --- | --- | --- |
+| `invalid_nin_format` | 400 | 400 — also sent by wraith's own 11-digit check |
+| `nin_already_used` | 409 | 409 |
+| `nin_verification_failed` | 422 | 422 |
+| `kyc_provider_error` | 502 | 502 |
+| `kyc_internal_error` | 500 | 502 (a provider 5xx is ours to own) |
+
+An **undocumented** code is passed through as sent, never mapped onto one of
+these. A body with **no usable code** omits `code` entirely, and `error` says
+only that the request failed and its status — never a cause nobody sent. Every
+case, with the provider's body and wraith's answer side by side, is in
+[`fixtures/linq/kyc-errors.json`](../fixtures/linq/kyc-errors.json); the clients
+test against that same file.
 
 ### 3. Lock a rate
 
@@ -335,9 +367,10 @@ id belongs to": the offramp table first, then `NgnOrder`. An id in neither is
 logged and ignored; nothing here creates a row, because an event for an order we
 never placed is not ours to act on.
 
-Reconciliation is idempotent by construction — it writes settled figures to a row
-keyed on the order id, so a redelivery writes the same values rather than
-double-counting. The 200 is sent *before* reconciling, because Linq times out at
+Reconciliation is idempotent per event — it writes settled figures to a row keyed
+on the order id, so a redelivery writes the same values rather than
+double-counting. It is not order-safe: a late redelivery of an earlier event wins
+until the next status poll ([idempotency.md](./idempotency.md)). The 200 is sent *before* reconciling, because Linq times out at
 10 seconds and marks the delivery failed, and a database write on a throttled
 instance can outlast that.
 
@@ -354,6 +387,8 @@ instance can outlast that.
 | `SOROBAN_RPC_URL_MAINNET` | for indexing | **Not needed by these rails** — they are plain HTTP to Linq. But listing `mainnet` in `NETWORKS` turns on the mainnet *indexer*, which does need it. Without it the indexer skips mainnet and says so; the API, and everything here, keeps serving. |
 | `OFFRAMP_LOOKUP_MAX_FAILURES` | no (`10`) | Offramp failed lookups per window. |
 | `OFFRAMP_LOOKUP_WINDOW_MS` | no (`900000`) | Offramp lookup window. |
+| `OFFRAMP_MAX_AMOUNT_NGN` | no (`10000000`) | Largest `amountNGN` an offramp order may carry. |
+| `OFFRAMP_MAX_AMOUNT_STABLECOIN` | no (`10000`) | Largest `amountStableCoin` an offramp order may carry. |
 
 ## Schema convergence
 
@@ -378,6 +413,9 @@ on their own.
 ```
 src/__tests__/linq/bills.test.ts     the coin trap, refundAddress, auth header
 src/__tests__/routes/ngn.test.ts     mainnet gate, C-address refusal, NIN absence
+src/__tests__/linq/idempotency.test.ts     what a retry repeats, per provider call
+src/__tests__/routes/idempotency.test.ts   the same request twice, per route
+src/__tests__/fakes/linqProvider.ts        the fake provider those two run against
 ```
 
 The route tests need `NETWORKS=testnet,mainnet` in the environment, because

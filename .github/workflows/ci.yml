@@ -10,6 +10,7 @@ jobs:
   build:
     name: Typecheck & build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,7 +22,14 @@ jobs:
       - run: npm run typecheck
       - run: npx tsc --noEmit
       - run: npm run build
-      - run: npm test --if-present
+      # The suite finishes in about half a minute. Anything still running a
+      # quarter of an hour later is stuck on an open handle, not on tests — and
+      # a stuck step with no deadline holds a runner for six hours while its
+      # log stays unreadable, which is how a hang gets mistaken for CI being
+      # slow. The timeout kills jest outright so the output collected up to
+      # that point is flushed and downloadable.
+      - name: Unit tests
+        run: timeout -k 30s 900s npm test --if-present
 
   integration:
     name: Integration tests

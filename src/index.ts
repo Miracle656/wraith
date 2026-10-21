@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "http";
 import { execSync } from "child_process";
+import { randomUUID } from "crypto";
 import { createApp } from "./api";
 import { startAllIndexers } from "./indexer";
 import { prisma } from "./db";
@@ -11,10 +12,22 @@ import { startPartitionRetentionJob } from "./jobs/retention";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
+import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
+import { validateEnv } from "./validateEnv";
+import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
+  // First thing in `main`, not at module load: a missing DATABASE_URL should
+  // stop the process with the name of what is missing, rather than surface
+  // later as a connection error that says nothing about configuration. It runs
+  // here rather than top-level because the startup-wiring tests import this
+  // module, and a module-load throw would fail them on an env they do not need.
+  validateEnv();
+
+  const bootId = randomUUID();
   // Converge the schema on every startup, so a deploy needs no separate
   // pre-deploy step.
   //
@@ -36,7 +49,7 @@ async function main() {
   //
   // Additive changes — a new table, a new nullable column — still apply on
   // their own. Anything destructive now fails loudly here instead.
-  console.log("[wraith] Converging database schema…");
+  logger.info("schema.converge.start", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
   const first = pushSchema();
   if (!first.ok) {
     // `--accept-data-loss` consents to two very different things at once, and
@@ -53,33 +66,24 @@ async function main() {
     // unique constraint, consent and retry. If even one is anything else,
     // refuse exactly as before.
     if (onlyAddsUniqueConstraints(first.output)) {
-      console.warn(
-        "[wraith] Schema diff is unique constraints only — no column is dropped.\n" +
-          "[wraith] Applying. A duplicate would fail the index, not delete a row.",
-      );
+      logger.warn("schema.converge.unique_constraints_only", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
       const retry = pushSchema("--accept-data-loss");
       if (!retry.ok) {
-        console.error(
-          "[wraith] The constraint could not be applied — most likely duplicate\n" +
-            "[wraith] rows already exist for it. Nothing was dropped. Resolve the\n" +
-            "[wraith] duplicates and redeploy.",
-        );
+        logger.error("schema.converge.constraint_failed", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
         process.exit(1);
       }
     } else {
-      console.error(
-        "[wraith] Schema convergence refused: the pending change is destructive.\n" +
-          "[wraith] Nothing was dropped. Read the diff above — a rename or a type\n" +
-          "[wraith] change needs a deliberate migration, not --accept-data-loss.",
-      );
+      logger.error("schema.converge.refused_destructive", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
       process.exit(1);
     }
   }
-  console.log("[wraith] Database ready.");
+  logger.info("schema.converge.ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
+  let stopOhlcRefreshWorker: (() => void) | undefined;
   const shutdown = async (signal: string) => {
-    console.log(`\n[wraith] Received ${signal} — shutting down gracefully…`);
+    logger.info("shutdown.received", { route: "startup", status: 0, durationMs: 0, requestId: bootId, signal });
+    stopOhlcRefreshWorker?.();
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -97,9 +101,9 @@ async function main() {
   attachGraphQLSubscriptions(server);
 
   server.listen(PORT, () => {
-    console.log(`[wraith] API listening on http://localhost:${PORT}`);
-    console.log(`[wraith] WebSocket subscriptions available at ws://localhost:${PORT}/subscribe/:address`);
-    console.log(`[wraith] GraphQL subscriptions available at ws://localhost:${PORT}${SUBSCRIPTIONS_PATH}`);
+    logger.info("server.listen", { route: "startup", status: 0, durationMs: 0, requestId: bootId, port: PORT });
+    logger.info("server.ws_ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId, path: "/subscribe/:address" });
+    logger.info("server.graphql_ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId, path: SUBSCRIPTIONS_PATH });
   });
 
   // ── Start webhook worker ───────────────────────────────────────────────────
@@ -113,6 +117,12 @@ async function main() {
   // displayAmount values would silently fall back to 7 decimals for every token.
   await Promise.all(enabledNetworks().map((network) => initTokenCache(network)));
 
+  // Opt in only after the OHLC tables and refresh functions are available.
+  const ohlcIntervalMs = getOhlcRefreshIntervalMs();
+  if (ohlcIntervalMs !== undefined) {
+    stopOhlcRefreshWorker = startOhlcRefreshWorker(ohlcIntervalMs);
+  }
+
   // ── Start indexer in the background ───────────────────────────────────────
   // startIndexer() runs an infinite loop; we intentionally don't await it
   // so the API stays responsive while indexing happens concurrently.
@@ -122,7 +132,7 @@ async function main() {
   // which exercises the HTTP surface only. Without this guard the indexer throws
   // on the missing RPC endpoint and takes the whole process (and API) down.
   if (process.env.SKIP_INDEXER === "true") {
-    console.log("[wraith] SKIP_INDEXER=true — indexer not started (API-only mode)");
+    logger.info("indexer.skipped", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
   } else {
     // One loop per enabled network (NETWORKS env; defaults to STELLAR_NETWORK).
     // Each loop restarts itself on crash rather than taking the process down —
@@ -131,4 +141,8 @@ async function main() {
   }
 }
 
+// Called unconditionally, not behind `require.main === module`:
+// src/__tests__/ohlcStartup.test.ts boots the real entrypoint with
+// `jest.isolateModules(() => require("../index"))` to assert the startup
+// wiring, and under that require this module is not `require.main`.
 main();

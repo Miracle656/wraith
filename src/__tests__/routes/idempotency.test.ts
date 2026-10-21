@@ -376,19 +376,18 @@ describe("POST /webhooks/linq", () => {
       customerRef: "ref_test_0001",
       walletAddress: WALLET,
       coin: "usdc",
-      amountStableCoin: 10,
-      amountNGN: 1500000,
-      amountNgn: 1500000,
-      rate: 1500,
-      status: "pending",
-    });
+    amountStableCoin: 10,
+    amountNgn: 1500000,
+    rate: 1500,
+    status: "pending",
+});
     const app = makeApp();
     const event = {
       event: "order.completed",
       orderId: "00000000-0000-4000-8000-000000000002",
       status: "completed",
       amountStableCoin: 10,
-      amountNGN: 1500000,
+      amountNgn: 1500000,
     };
 
     await deliver(app, event);
@@ -401,4 +400,3 @@ describe("POST /webhooks/linq", () => {
     expect(tables.ngnOrder[0].settledStableCoin).toBe("10");
   });
 });
-

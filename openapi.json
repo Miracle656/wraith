@@ -5236,10 +5236,10 @@
         }
       }
     },
-    "/offramp/rate": {
+    "/offramp/availability": {
       "get": {
-        "summary": "Indicative NGN/USDC rate",
-        "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
+        "summary": "Is cash-out enabled on this deployment",
+        "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client). Answers the availability question without pricing anything: it makes no provider call, so it costs none of the shared rate allowance.",
         "x-internal": true,
         "responses": {
           "200": {
@@ -5249,14 +5249,136 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "rate": {
-                      "type": "number"
-                    },
-                    "currency": {
+                    "available": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "available"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
                       "type": "string"
-                    },
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Offramp not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offramp/rate": {
+      "get": {
+        "summary": "Indicative naira-per-coin rate",
+        "description": "Internal endpoint. Not part of the public data API: (provider callback / wallet-only cash-out surface served on behalf of the Veil wallet client).",
+        "x-internal": true,
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "xlm",
+                "usdc"
+              ],
+              "description": "Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for.",
+              "example": "usdc"
+            },
+            "required": false,
+            "description": "Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for.",
+            "name": "coin",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
                     "coin": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "xlm",
+                        "usdc"
+                      ],
+                      "description": "The asset `rate` is quoted per unit of. Always present, including for a request that named none — which is priced as `usdc`."
+                    },
+                    "rate": {
+                      "type": "number",
+                      "description": "Naira per one unit of the requested coin, not naira per dollar."
                     },
                     "indicative": {
                       "type": "boolean",
@@ -5266,9 +5388,8 @@
                     }
                   },
                   "required": [
-                    "rate",
-                    "currency",
                     "coin",
+                    "rate",
                     "indicative"
                   ]
                 }

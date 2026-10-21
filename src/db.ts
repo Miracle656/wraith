@@ -26,6 +26,12 @@ export const prisma =
   globalForPrisma.prisma ??
   withReadReplicas(
     new PrismaClient({
+      // `query` only in development: it prints every statement, which is
+      // noise in production and can carry parameter values into the log.
+      // `error` stays in both. Prisma's error log goes to stdout, never to a
+      // caller — the response-side leak was closed separately — and this is
+      // the only place a failed write on a money-moving route becomes visible
+      // at all, since the route handlers answer 500 without logging.
       log:
         process.env.NODE_ENV === "development"
           ? ["query", "warn", "error"]
