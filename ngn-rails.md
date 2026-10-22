@@ -113,6 +113,7 @@ Wraith-assigned codes (the closed set; see `RAIL_ERROR_CODES` in
 | `provider_timeout` | The provider did not answer in time (504). |
 | `provider_unreachable` | No connection to the provider was made (502). |
 | `not_found` | No route matched (404). |
+| `origin_not_allowed` | The browser's origin is not on `CORS_ALLOWED_ORIGINS` (403). The request never reached the rail. |
 | `internal_error` | An unexpected failure on our side (500). |
 
 **Provider codes pass through verbatim** in the same position —
