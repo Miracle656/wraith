@@ -157,8 +157,8 @@ beforeEach(() => {
   process.env.NETWORKS = "testnet,mainnet";
   process.env.LINQ_WEBHOOK_SECRET = WEBHOOK_SECRET;
   linq = installFakeLinq();
-  jest.spyOn(console, "warn").mockImplementation(() => {});
-  jest.spyOn(console, "error").mockImplementation(() => {});
+  jest.spyOn(console, "warn").mockImplementation(() => { });
+  jest.spyOn(console, "error").mockImplementation(() => { });
 });
 
 afterEach(() => {
@@ -307,7 +307,8 @@ describe("recordNgnOrder", () => {
     walletAddress: WALLET,
     coin: "usdc",
     amountStableCoin: 10,
-    amountNgn: 15000,
+    amountNGN: 1500000,
+    amountNgn: 1500000,
     rate: 1500,
     status: "pending",
   };
@@ -375,17 +376,20 @@ describe("POST /webhooks/linq", () => {
       customerRef: "ref_test_0001",
       walletAddress: WALLET,
       coin: "usdc",
+
       amountStableCoin: 10,
-      amountNgn: 15000,
+      amountNgn: 1500000,
       rate: 1500,
       status: "pending",
     });
+
     const app = makeApp();
     const event = {
       event: "order.completed",
       orderId: "00000000-0000-4000-8000-000000000002",
       status: "completed",
       amountStableCoin: 10,
+      amountNgn: 1500000,
     };
 
     await deliver(app, event);

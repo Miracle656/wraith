@@ -1,32 +1,11 @@
 import express, { Request, Response, Router } from "express";
-
 import { prisma } from "../db";
 import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
-import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { DEFAULT_NETWORK } from "../network";
+import { isNairaAmountPlausible, MIN_NGN, MAX_NGN } from "../amount";
 
 /**
  * Linq's webhook, for every rail.
- *
- * One endpoint carries offramp, onramp and bill events, and the body does not
- * say which rail an event belongs to — only an `orderId`. So reconciliation is
- * "find the order that id belongs to": the offramp table first, then the NGN
- * one. An id in neither is not ours.
- *
- * The bill case is what made this necessary. An onramp delivering XLM shows up
- * on-chain, where the indexer already sees it and the address subscription
- * pushes it; a biller refusing to vend after the user has paid shows up
- * nowhere unless this runs.
- *
- * MUST be mounted before express.json(). Linq signs the raw request body, so
- * any middleware that parses and re-serialises it first destroys the ability
- * to verify - the bytes change even when the value does not. wraith applies
- * express.json() globally in api.ts, which is exactly the trap Linq's own docs
- * warn about, so this router brings its own express.raw() and is mounted ahead
- * of it.
- *
- * The endpoint is public and its events assert that money moved, so an
- * unverified body is rejected before anything is read out of it.
  */
 export function createLinqWebhookRouter(): Router {
   const router = Router();
@@ -40,8 +19,6 @@ export function createLinqWebhookRouter(): Router {
       const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
 
       if (!verifySignature(raw, signature, secret)) {
-        // Deliberately terse. Saying which part failed tells a prober whether
-        // they had the shape right.
         res.status(401).json({ error: "Invalid signature" });
         return;
       }
@@ -52,55 +29,112 @@ export function createLinqWebhookRouter(): Router {
         return;
       }
 
-      // Acknowledge first, reconcile after. Linq times out at 10 seconds and
-      // marks the delivery failed, and a database write on a throttled
-      // instance can outlast that - at which point they retry an event we did
-      // in fact process.
+      // Acknowledge first, reconcile after
       res.status(200).json({ ok: true });
 
       try {
-        // Idempotent per event: the update targets a row keyed on the order
-        // id and writes the settled figures. A redelivery of the SAME event
-        // writes the same values a second time, which is a no-op rather than
-        // a double-count (pinned in __tests__/routes/idempotency.test.ts).
-        // Nothing here creates a row - an event for an order we never placed
-        // is not ours to act on.
-        //
-        // Not order-safe, though: the last delivery wins. A late redelivery
-        // of `order.processing` arriving after `order.completed` sets the
-        // status back to processing. Nothing is counted twice, but the row
-        // reads wrong until the next status poll corrects it.
         const network = DEFAULT_NETWORK;
-        const existing = await prisma.offrampOrder.findFirst({
+
+        // 1. Try finding in offrampOrder first
+        const existingOfframp = await prisma.offrampOrder.findFirst({
           where: { orderId: event.orderId },
         });
-        if (!existing) {
-          // Not an offramp order — try the onramp/bill table before giving up.
-          if (await reconcileNgnOrder(event)) return;
-          console.warn(`[linq] webhook for unknown order ${event.orderId}`);
+
+        if (existingOfframp) {
+          // Validate NGN bounds if present
+          if (event.amountNGN != null) {
+            if (!isNairaAmountPlausible(event.amountNGN)) {
+              console.error(
+                `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} outside plausible band [${MIN_NGN}, ${MAX_NGN}]`
+              );
+              return;
+            }
+            const orderNgn =
+              existingOfframp.amountNGN != null
+                ? Number(existingOfframp.amountNGN)
+                : null;
+            if (orderNgn != null && orderNgn > 0) {
+              const ratio = event.amountNGN / orderNgn;
+              if (ratio > 2 || ratio < 1 / 2) {
+                console.error(
+                  `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} disagrees with order amount ${orderNgn} (ratio ${ratio})`
+                );
+                return;
+              }
+            }
+          }
+
+          await prisma.offrampOrder.update({
+            where: { id: existingOfframp.id },
+            data: {
+              status:
+                event.status ??
+                (event.event === "order.completed" ? "completed" : event.event),
+              ...(event.amountStableCoin != null
+                ? { settledStableCoin: String(event.amountStableCoin) }
+                : {}),
+              ...(event.amountNGN != null
+                ? { settledNGN: String(event.amountNGN) }
+                : {}),
+              ...(event.txHash ? { depositTxHash: event.txHash } : {}),
+            },
+          });
           return;
         }
 
-        await prisma.offrampOrder.update({
-          where: {
-            network_orderId: { network: existing.network ?? network, orderId: event.orderId },
-          },
-          data: {
-            status: event.status ?? event.event,
-            ...(event.amountStableCoin != null
-              ? { settledStableCoin: String(event.amountStableCoin) }
-              : {}),
-            ...(event.amountNGN != null ? { settledNGN: String(event.amountNGN) } : {}),
-            ...(event.txHash ? { depositTxHash: event.txHash } : {}),
-          },
+        // 2. Fallback to ngnOrder (onramp) table
+        const existingNgn = await prisma.ngnOrder.findFirst({
+          where: { orderId: event.orderId },
         });
+
+        if (existingNgn) {
+          // Validate NGN bounds if present
+          if (event.amountNGN != null) {
+            if (!isNairaAmountPlausible(event.amountNGN)) {
+              console.error(
+                `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} outside plausible band [${MIN_NGN}, ${MAX_NGN}]`
+              );
+              return;
+            }
+            const orderNgn =
+              existingNgn.amountNGN != null
+                ? Number(existingNgn.amountNGN)
+                : null;
+            if (orderNgn != null && orderNgn > 0) {
+              const ratio = event.amountNGN / orderNgn;
+              if (ratio > 2 || ratio < 1 / 2) {
+                console.error(
+                  `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} disagrees with order amount ${orderNgn} (ratio ${ratio})`
+                );
+                return;
+              }
+            }
+          }
+
+          await prisma.ngnOrder.update({
+            where: { id: existingNgn.id },
+            data: {
+              status:
+                event.status ??
+                (event.event === "order.completed" ? "completed" : event.event),
+              ...(event.amountStableCoin != null
+                ? { settledStableCoin: String(event.amountStableCoin) }
+                : {}),
+              ...(event.amountNGN != null
+                ? { settledNgn: Number(event.amountNGN) }
+                : {}),
+              ...(event.txHash ? { depositTxHash: event.txHash } : {}),
+            },
+          });
+          return;
+        }
+
+        // 3. Not found in either table
+        console.warn(`[linq] webhook for unknown order ${event.orderId}`);
       } catch (err) {
-        // The response has already gone, so this cannot fail the delivery.
-        // Logged loudly because the reconciliation is now missing and only the
-        // status poll will catch it up.
         console.error("[linq] failed to reconcile webhook:", err);
       }
-    },
+    }
   );
 
   return router;
