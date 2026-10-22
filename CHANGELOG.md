@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI pipeline (`.github/workflows/ci.yml`) running Prisma generate, typecheck, and build on every PR
 - Contributor documentation, issue templates, PR template
 - This changelog
+- `CORS_ALLOWED_ORIGINS` — the comma-separated list of browser origins allowed to call the surfaces that are not public. A new client is an environment change, not a change to the source.
+
+### Changed
+- **CORS is decided per surface instead of one global `Access-Control-Allow-Origin: *`.** The public read API, GraphQL, the fee quote and the offramp quotes stay open to every origin; the offramp orders, the naira rails, webhook subscription management, `/metrics` and any write nobody has classified yet are restricted to `CORS_ALLOWED_ORIGINS`. A request from any other origin is refused with `403` and the code `origin_not_allowed`, before the route runs.
+  - **Breaking for browser clients.** A deployment with no `CORS_ALLOWED_ORIGINS` set lets no browser origin call those surfaces; add your web wallet's origin to it. Requests with no `Origin` header are unaffected, so the mobile app, server-to-server callers and `curl` keep working as they did.
+  - `POST /webhooks/linq` is the payout provider's callback: it gets no CORS headers, and it is never refused by the origin policy, so a payment rail cannot stop working because the list changed.
 
 ## [1.1.0] — PR #6
 

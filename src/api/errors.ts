@@ -37,6 +37,7 @@
 
 import type { Response } from "express";
 import { LinqError } from "../linq/http";
+import { ORIGIN_NOT_ALLOWED } from "../middleware/cors";
 
 /**
  * Every wraith-assigned `code` a rail can answer with.
@@ -67,6 +68,7 @@ import { LinqError } from "../linq/http";
  * | `provider_timeout` | The provider did not answer in time. |
  * | `provider_unreachable` | No connection to the provider was made. |
  * | `not_found` | No route matched (the app-wide 404). |
+ * | `origin_not_allowed` | The browser's origin is not on `CORS_ALLOWED_ORIGINS` (403). |
  * | `internal_error` | An unexpected failure on our side. |
  */
 export const RAIL_ERROR_CODES = [
@@ -90,6 +92,7 @@ export const RAIL_ERROR_CODES = [
   "provider_timeout",
   "provider_unreachable",
   "not_found",
+  ORIGIN_NOT_ALLOWED,
   "internal_error",
 ] as const;
 

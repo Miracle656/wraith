@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
-import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { jsonApiMiddleware } from "./middleware/jsonapi";
+import { createCorsMiddleware } from "./middleware/cors";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
@@ -140,8 +140,6 @@ export function createApp(): express.Application {
   // Render's X-Forwarded-For, nothing further back.
   app.set("trust proxy", 1);
 
-  app.use(cors());
-
   // ─── HTTP metrics middleware ──────────────────────────────────────────────
   // First in the chain, deliberately: mounted below networkMiddleware and the
   // rate limiter it would never see the requests those two reject, so a 429
@@ -182,6 +180,20 @@ export function createApp(): express.Application {
     next();
   });
 
+  // ─── CORS, per surface ─────────────────────────────────────────────────────
+  // One `cors()` for the whole app answered every request with
+  // `Access-Control-Allow-Origin: *`. That is right for the public read API
+  // and was never a decision for the routes that create orders. Each surface
+  // now has its own policy, and `src/middleware/cors.ts` is where that table
+  // lives — it says which surfaces are deliberately open and why, and it
+  // reads the allow-list from `CORS_ALLOWED_ORIGINS`, so a new client is an
+  // environment change rather than a change to this file.
+  //
+  // Below the metrics middleware on purpose: a request refused for its origin
+  // is a request we answered, and it should be counted like any other. Above
+  // every router, so no surface is left uncovered, and above `express.json()`,
+  // so a refused request never has its body parsed.
+  app.use(createCorsMiddleware());
 
   // BEFORE express.json(). Linq signs the raw request body, so a parser that
   // consumes and re-serialises it makes every signature unverifiable - the

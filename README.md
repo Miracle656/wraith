@@ -427,6 +427,38 @@ body starts — so a client can tell a complete export from a partial one withou
 counting. Narrow with `address`, `contractId`, `fromLedger`/`toLedger` or
 `fromDate`/`toDate`, or raise `maxRows` up to 500 000.
 
+### CORS
+
+The read API answers every origin: `Access-Control-Allow-Origin: *`. That is
+deliberate — the data is public chain data, and a browser dashboard on any
+domain is the intended consumer. The same is true of GraphQL (read-only
+schema), the fee quote and the offramp quotes.
+
+The surfaces that are *not* public are restricted to the origins in
+`CORS_ALLOWED_ORIGINS` — a comma-separated list, matched exactly:
+
+| Surface | Routes |
+| ------- | ------ |
+| Offramp | `/offramp/orders*`, `/offramp/verify-bank`, `/offramp/trustline` |
+| Naira rails | `/ngn/*` |
+| Webhook subscriptions | `/webhooks` |
+| Metrics | `/metrics` |
+| Any other write | a route nobody has classified yet |
+
+A request from an origin that is not on that list is refused with `403` and
+the code `origin_not_allowed`, **before the route runs** — so a page on any
+site cannot create an offramp order. A request with **no `Origin` header** is
+always served: the mobile app, a server-to-server caller and `curl` all send
+none, and CORS has nothing to say about them.
+
+`POST /webhooks/linq` is the payout provider calling us. It is authenticated
+by an HMAC signature over the raw body, it gets no CORS headers at all, and it
+is never refused by the origin policy — a payment rail must not stop working
+because the list changed.
+
+`src/middleware/cors.ts` holds the whole table and the reasoning behind each
+row.
+
 ### Selecting a network
 
 Wraith stores testnet and mainnet rows in the same tables, discriminated by a
@@ -742,6 +774,7 @@ run docs:openapi` (and the deployment's network settings).
 | `RETENTION_DAYS`           | `30`          | Delete transfers older than N days (keeps DB within free-tier limits)                         |
 | `NETWORKS`                 | *(`STELLAR_NETWORK`)* | Comma-separated networks to index in one process, e.g. `testnet,mainnet`. Also the set the API's `?network=` selector accepts. |
 | `PORT`                     | `3000`        | REST API port                                                                                 |
+| `CORS_ALLOWED_ORIGINS`    | *(empty)*     | Comma-separated origins allowed to call the restricted surfaces (offramp orders, naira rails, webhook subscriptions, `/metrics`, and any unclassified write). Empty = no browser origin may call them; requests with no `Origin` header are always served. See [CORS](#cors). |
 | `EXPORT_MAX_ROWS`          | `50000`       | Default row cap for `/transfers.csv` and `/transfers.parquet`. Clamped to 500 000; a caller may ask for less with `?maxRows=`. |
 
 ### RPC URL Resolution
