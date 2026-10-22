@@ -423,54 +423,203 @@
             }
           },
           "400": {
-            "description": "Bad Request",
+            "description": "Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
             }
           },
           "404": {
-            "description": "Not Found",
+            "description": "Not Found (code: not_found)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (veil_rate_limited ours / rate_limited the provider's)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
             }
           },
           "500": {
-            "description": "Internal Server Error",
+            "description": "Internal Server Error (code: internal_error)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Naira rails not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5325,11 +5474,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5432,6 +5592,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5458,11 +5647,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5476,11 +5676,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5588,6 +5799,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5614,11 +5854,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5632,11 +5883,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5724,6 +5986,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5750,11 +6041,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5768,11 +6070,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6005,6 +6318,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -6031,11 +6373,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6049,11 +6402,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6161,6 +6525,35 @@
               }
             }
           },
+          "401": {
+            "description": "Order access token required (code: unauthorized)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -6174,6 +6567,35 @@
                   },
                   "required": [
                     "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6205,11 +6627,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6223,11 +6656,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }

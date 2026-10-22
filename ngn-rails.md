@@ -33,7 +33,7 @@ router is gated by default rather than by the author remembering.
 
 ```
 GET /ngn/onramp/rate          (x-network: testnet)
-→ 400  "…only available on mainnet"
+→ 400  { "error": "…only available on mainnet", "code": "mainnet_only" }
 ```
 
 Nothing reaches Linq. `networkMiddleware` also refuses a network the deployment
@@ -45,7 +45,7 @@ all.
 Without `LINQ_API_KEY`, `/ngn` returns **`503`**, not `500`:
 
 ```json
-{ "error": "Naira rails are not configured on this deployment" }
+{ "error": "Naira rails are not configured on this deployment", "code": "not_configured" }
 ```
 
 That is what a client gating a CTA needs to hear, and it is true of any build
@@ -64,15 +64,74 @@ screen made this exact mistake once.
 
 ### Errors
 
-Linq's own message names the real problem — an unverified customer, an unsupported
-coin — far better than anything we would invent, so it is passed through.
+**Every failure on `/ngn` and `/offramp` answers one shape** (#287):
 
-| Linq status | We return |
+```json
+{ "error": "human prose", "code": "stable_machine_readable_code" }
+```
+
+- **`code` is the machine-readable half.** snake_case, never renamed — installed
+  APKs already branch on `coin_not_available` and `rate_out_of_date`, so an
+  existing code keeps its value forever. This is the field to switch on.
+- **`error` is prose for a person.** It changes when the provider rewords an
+  error; never match on it. On `/offramp` the provider's name is scrubbed out
+  of it before it is sent.
+- **Nothing else rides along.** Bodies are written field by field, so a stack,
+  a connection string or a key cannot reach a response. The one exception is
+  `retryAfterSeconds`, present only beside a provider `429` — and the offramp's
+  trustline refusal, which also carries `valid: false, trustsUSDC: false` for
+  the screen that asked.
+
+Linq's own message still reaches the client — their 400s name the real problem
+(an unverified customer, an unsupported coin) far better than anything we would
+invent — but always behind a `code` the client can switch on.
+
+#### The codes
+
+Wraith-assigned codes (the closed set; see `RAIL_ERROR_CODES` in
+`src/api/errors.ts`):
+
+| `code` | Meaning |
 | --- | --- |
-| 4xx | the same status, with Linq's message |
-| 5xx | `502` — the caller did nothing wrong |
-| timeout | `504` |
-| unreachable | `502` |
+| `not_configured` | This deployment has no `LINQ_API_KEY`; the rail is off (503). |
+| `invalid_request` | A required field is missing or malformed (400). |
+| `invalid_coin` | `coin` is present but not one this rail prices (400). |
+| `invalid_address` | Not a classic `G…` account Linq can pay to (400). |
+| `invalid_network` | `?network=` names no known network (400). |
+| `network_not_enabled` | A real network this deployment does not serve (400). |
+| `mainnet_only` | The rails refuse to move money on testnet — Linq has no sandbox (400). |
+| `veil_rate_limited` | **Our** rate limiter refused the request (429). |
+| `rate_limited` | **The provider's** shared rate limit, with `retryAfterSeconds` when sent (429). |
+| `rate_out_of_date` | The submitted rate differs from ours beyond the 15% tolerance (400). |
+| `coin_not_available` | The provider cannot source this coin right now (400). |
+| `invalid_nin_format` | A NIN is not 11 digits — the same code from our check and Linq's (400). |
+| `idempotency_conflict` | The `idempotencyKey` was used for a different request (409). |
+| `unauthorized` | No order access token on `GET /offramp/orders/:orderId` (401). |
+| `order_not_found` | Unknown id, malformed id, or a token that is not its — indistinguishable (404). |
+| `provider_rejected` | The provider refused (4xx) with no usable code of its own. |
+| `provider_error` | The provider failed (5xx) with no usable code of its own (answered as 502). |
+| `provider_timeout` | The provider did not answer in time (504). |
+| `provider_unreachable` | No connection to the provider was made (502). |
+| `not_found` | No route matched (404). |
+| `internal_error` | An unexpected failure on our side (500). |
+
+**Provider codes pass through verbatim** in the same position —
+`nin_already_used`, `customer_not_verified`, `customer_not_found` and the rest.
+They are an open set: a client must default on a `code` it does not recognise.
+They are never remapped onto the codes above; a mapped guess sends a person down
+the wrong branch with confident copy.
+
+**A `code` is never absent.** When the provider fails without one, wraith
+assigns a fallback from the status alone — `rate_limited` for a 429,
+`provider_rejected` for any other 4xx, `provider_error` for a 5xx — because a
+client cannot branch on a shape that sometimes lacks the field.
+
+| Linq status | We return | `code` when Linq sent none |
+| --- | --- | --- |
+| 4xx | the same status, with Linq's message | `provider_rejected` (429 → `rate_limited`) |
+| 5xx | `502` — the caller did nothing wrong | `provider_error` |
+| timeout | `504` | `provider_timeout` |
+| unreachable | `502` | `provider_unreachable` |
 
 Every money-moving response carries `Cache-Control: no-store`.
 
@@ -188,9 +247,11 @@ verbatim; branch on it, never on `error`.
 | `kyc_internal_error` | 500 | 502 (a provider 5xx is ours to own) |
 
 An **undocumented** code is passed through as sent, never mapped onto one of
-these. A body with **no usable code** omits `code` entirely, and `error` says
-only that the request failed and its status — never a cause nobody sent. Every
-case, with the provider's body and wraith's answer side by side, is in
+these. A body with **no usable code** gets wraith's stable fallback rather than
+an absent key (#287): `provider_rejected` for a 4xx, `provider_error` for a
+5xx — and `error` still says only that the request failed and its status,
+never a cause nobody sent. Every case, with the provider's body and wraith's
+answer side by side, is in
 [`fixtures/linq/kyc-errors.json`](../fixtures/linq/kyc-errors.json); the clients
 test against that same file.
 
@@ -413,6 +474,7 @@ on their own.
 ```
 src/__tests__/linq/bills.test.ts     the coin trap, refundAddress, auth header
 src/__tests__/routes/ngn.test.ts     mainnet gate, C-address refusal, NIN absence
+src/__tests__/routes/railErrorShape.test.ts     one { error, code } per rail, and nothing leaking (#287)
 src/__tests__/linq/idempotency.test.ts     what a retry repeats, per provider call
 src/__tests__/routes/idempotency.test.ts   the same request twice, per route
 src/__tests__/fakes/linqProvider.ts        the fake provider those two run against
