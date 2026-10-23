@@ -8,6 +8,7 @@
 
 import { prisma } from "../db";
 import { recordOrderTerminal, terminalStatusOf } from "../metrics";
+import { isFailureStatus, recordMoneyFailure } from "./moneyFailures";
 import { resolveEventNetwork } from "./webhook";
 
 export interface OfframpReconciliationEvent {
@@ -58,6 +59,23 @@ export async function reconcileOfframpOrder(
       ...(event.txHash ? { depositTxHash: event.txHash } : {}),
     },
   });
+
+  // An offramp order that ended failed is the incident this table exists for:
+  // the user's crypto was taken and the naira payout did not complete. Every
+  // path — webhook, status poll and the periodic sweep — goes through this
+  // function, and the (network, kind, orderId) key turns several sightings of
+  // one failed order into one incident rather than several alarms.
+  if (isFailureStatus(status)) {
+    await recordMoneyFailure({
+      network: existing.network,
+      rail: "offramp",
+      kind: "payout_rejected",
+      orderId: event.orderId,
+      publicId: existing.publicId,
+      providerCode: status,
+      message: `Offramp order ended as "${status}" — the naira payout did not complete.`,
+    });
+  }
 
   if (isTerminal && !wasTerminal) recordOrderTerminal("offramp", status);
   return true;

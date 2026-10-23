@@ -270,6 +270,26 @@ export function recordOrderTerminal(rail: OrderRail, status: string): void {
 }
 
 /**
+ * Money-affecting failures: failed orders, rejected payouts, and webhook
+ * events reconciliation gave up on.
+ *
+ * The machine-readable counterpart to the `MoneyFailure` table: the row
+ * answers "what broke" to a human, this answers "is it still happening" to a
+ * scrape. Labels are bounded by construction — `rail` from
+ * MONEY_FAILURE_RAILS, `kind` from MONEY_FAILURE_KINDS, `network` from the
+ * configured chains — and never an order id, a customer reference, an amount
+ * or a provider message: an unbounded label makes /metrics grow until it
+ * cannot be scraped, which is worst exactly when failures are piling up.
+ */
+export const moneyFailuresTotal = new Counter({
+  name: "money_failures_total",
+  help:
+    "Money-affecting failures recorded (failed orders, rejected payouts, reconciliation give-ups)",
+  labelNames: ["network", "rail", "kind"] as const,
+  registers: [registry],
+});
+
+/**
  * The highest ledger the indexer has committed, per network.
  *
  * A gauge, not a counter: it is a position, and comparing it against the chain

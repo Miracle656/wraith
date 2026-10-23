@@ -14,6 +14,7 @@ import { createWebhooksRouter } from "./api/webhooks";
 import { createLinqWebhookRouter } from "./api/linqWebhook";
 import { createOfframpRouter } from "./api/offramp";
 import { createNgnRouter } from "./api/ngn";
+import { createOpsRouter } from "./api/ops";
 import { feesRouter } from "./api/fees";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
@@ -231,7 +232,12 @@ export function createApp(): express.Application {
     // our last known record". Letting this middleware write the same key would
     // have the app tell people the payment provider is down while it is
     // answering perfectly well.
-    if (req.path.startsWith("/ngn") || req.path.startsWith("/offramp")) {
+    //
+    // `/ops` joins them for a simpler reason: it reads failure records, not
+    // chain data. RPC health says nothing about whether its answer is current,
+    // and stamping `stale: true` onto an operator's incident list during an
+    // RPC outage is noise at exactly the wrong moment.
+    if (req.path.startsWith("/ngn") || req.path.startsWith("/offramp") || req.path.startsWith("/ops")) {
       return next();
     }
 
@@ -285,6 +291,9 @@ export function createApp(): express.Application {
   app.use("/offramp", createOfframpRouter());
   // Naira rails: buying with naira, and bills paid out of the wallet.
   app.use("/ngn", createNgnRouter());
+  // Operator surface: what broke, without database access. Token-gated by
+  // OPS_TOKEN; see .env.example.
+  app.use("/ops", createOpsRouter());
   // What the client should charge, and where to send it. Server-held so the
   // amount is never compiled into an APK.
   app.use("/fees", feesRouter());

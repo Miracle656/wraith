@@ -6,8 +6,10 @@ import {
   resolveEventNetwork,
   verifySignature,
 } from "../linq/webhook";
+import { recordMoneyFailure } from "../linq/moneyFailures";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { reconcileOfframpOrder } from "../linq/offrampOrders";
+import { DEFAULT_NETWORK } from "../network";
 
 /**
  * Linq's webhook, for every rail.
@@ -95,6 +97,22 @@ export function createLinqWebhookRouter(): Router {
         // Logged loudly because the reconciliation is now missing and only the
         // status poll will catch it up.
         console.error("[linq] failed to reconcile webhook:", err);
+
+        // "Reconciliation gave up" is its own money-affecting failure: the
+        // event asserts money moved, and our rows no longer describe it. The
+        // rail is unknown here — the event may name an order in either table
+        // and the lookup itself is what failed. The error's name only: a
+        // database error's message is not operator-facing prose.
+        await recordMoneyFailure({
+          network: DEFAULT_NETWORK,
+          rail: "unknown",
+          kind: "reconcile_failed",
+          orderId: event.orderId,
+          providerCode: event.status ?? event.event,
+          message:
+            `Webhook event "${event.event}" for order ${event.orderId} could not be reconciled ` +
+            `(${(err as Error)?.name ?? "unknown error"}); only a status poll can catch it up.`,
+        });
       }
     },
   );
