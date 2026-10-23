@@ -10,7 +10,14 @@
  * prom-client's global default. A global register is process-wide state shared
  * with any dependency that also uses prom-client, and it cannot be cleared
  * between tests without clobbering theirs.
+ *
+ * Access to `GET /metrics` is restricted: see {@link metricsAccessGuard} below
+ * and the README section on metrics access. Scrapers must present the bearer
+ * token configured in METRICS_SCRAPE_TOKEN, and are exempt from rate limiting
+ * on that basis. Anyone else receives 401/403.
  */
+import { timingSafeEqual } from "node:crypto";
+import type { NextFunction, Request, Response } from "express";
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 import type { Network } from "./network";
 
@@ -20,6 +27,64 @@ export const registry = new Registry();
 // loop lag, …). Cheap, and they answer "is the process itself unhealthy?"
 // before any of the counters below can.
 collectDefaultMetrics({ register: registry });
+
+/**
+ * Scrape-access gate for `GET /metrics`.
+ *
+ * Decision: the metrics endpoint is operational telemetry (per-rail order
+ * outcomes, provider latency, failure counts). It is not public. Only holders
+ * of a shared scrape bearer token may read it. The token is read from
+ * METRICS_SCRAPE_TOKEN; if that variable is unset the endpoint refuses every
+ * request (fail closed) rather than falling back to open access.
+ *
+ * The same check decides rate-limit exemption: an authorised scraper bypasses
+ * the limiter (a scrape endpoint that starts 429ing goes blind exactly when it
+ * is needed), while unauthorised requests never reach the handler.
+ */
+export function metricsScrapeTokenFromEnv(): string | undefined {
+  const token = process.env.METRICS_SCRAPE_TOKEN;
+  return token && token.length > 0 ? token : undefined;
+}
+
+function bearerTokenOf(req: Request): string | undefined {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) return undefined;
+  return header.slice("Bearer ".length).trim();
+}
+
+/** True when the request carries the configured scrape bearer token. */
+export function isAuthorisedScraper(req: Request, expected = metricsScrapeTokenFromEnv()): boolean {
+  if (!expected) return false;
+  const presented = bearerTokenOf(req);
+  if (!presented) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Express middleware guarding `GET /metrics`.
+ *
+ * 503 when no scrape token is configured (the endpoint is disabled, not open);
+ * 401 when no credentials are presented; 403 when the presented token is wrong.
+ */
+export function metricsAccessGuard(req: Request, res: Response, next: NextFunction): void {
+  const expected = metricsScrapeTokenFromEnv();
+  if (!expected) {
+    res.status(503).json({ error: "metrics endpoint is not configured" });
+    return;
+  }
+  if (!bearerTokenOf(req)) {
+    res.setHeader("WWW-Authenticate", 'Bearer realm="metrics"');
+    res.status(401).json({ error: "authentication required" });
+    return;
+  }
+  if (!isAuthorisedScraper(req, expected)) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  next();
+}
 
 /**
  * HTTP request count by method, route pattern, and status code.
@@ -182,16 +247,6 @@ export type OrderTerminalStatus =
   | "timeout";
 
 /**
- * Map any provider or webhook status to a bounded terminal status, or null.
- *
- * Statuses arrive from several places and are not one vocabulary: a webhook
- * says `order.completed`, a poll may say `settled`, and the provider can
- * expire, cancel, refund or reverse an order. The metric label must be drawn
- * from a finite set, so every spelling of an ending maps to one of the words
- * below. Anything still in flight, or an ending nobody has taught us yet,
- * returns null and is not counted as terminal.
- */
-/**
  * Segments that mean the order is still moving, whatever ending-word appears
  * beside them. Checked before the endings below because those are substring
  * matches: "refund_pending" contains "refund".
@@ -206,6 +261,16 @@ const STILL_MOVING_SEGMENTS = [
   "not",
 ];
 
+/**
+ * Map any provider or webhook status to a bounded terminal status, or null.
+ *
+ * Statuses arrive from several places and are not one vocabulary: a webhook
+ * says `order.completed`, a poll may say `settled`, and the provider can
+ * expire, cancel, refund or reverse an order. The metric label must be drawn
+ * from a finite set, so every spelling of an ending maps to one of the words
+ * below. Anything still in flight, or an ending nobody has taught us yet,
+ * returns null and is not counted as terminal.
+ */
 export function terminalStatusOf(status: string | null | undefined): OrderTerminalStatus | null {
   if (!status) return null;
   const s = status.toLowerCase();
@@ -242,130 +307,3 @@ export const ordersCreatedTotal = new Counter({
   labelNames: ["rail"] as const,
   registers: [registry],
 });
-
-/**
- * Orders that reached a terminal state, by rail and terminal status.
- *
- * A transition counter, not a poll counter: callers record it only when an
- * order moves from a non-terminal status to a terminal one, so a wallet polling
- * a finished order and a redelivered webhook do not count it twice.
- */
-export const ordersTerminalTotal = new Counter({
-  name: "orders_terminal_total",
-  help: "Orders that reached a terminal state, by rail and terminal status",
-  labelNames: ["rail", "status"] as const,
-  registers: [registry],
-});
-
-/** Record one successfully created order. */
-export function recordOrderCreated(rail: OrderRail): void {
-  ordersCreatedTotal.inc({ rail });
-}
-
-/** Record one non-terminal → terminal transition. */
-export function recordOrderTerminal(rail: OrderRail, status: string): void {
-  const terminal = terminalStatusOf(status);
-  if (!terminal) return;
-  ordersTerminalTotal.inc({ rail, status: terminal });
-}
-
-/**
- * The highest ledger the indexer has committed, per network.
- *
- * A gauge, not a counter: it is a position, and comparing it against the chain
- * tip is how lag is measured.
- */
-export const lastIndexedLedger = new Gauge({
-  name: "last_indexed_ledger",
-  help: "Highest ledger sequence committed by the indexer, per network",
-  labelNames: ["network"] as const,
-  registers: [registry],
-});
-
-/**
- * Wall-clock duration of instrumented database operations.
- *
- * Buckets run from 5ms to 10s: below 5ms nothing here is worth alerting on,
- * and past 10s the request has already failed for whatever is waiting on it.
- */
-export const dbQueryDurationSeconds = new Histogram({
-  name: "db_query_duration_seconds",
-  help: "Duration of database operations, by operation name",
-  labelNames: ["operation"] as const,
-  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
-  registers: [registry],
-});
-
-/**
- * Time `fn` into {@link dbQueryDurationSeconds} under `operation`.
- *
- * Failures are timed too — a query that takes eight seconds and then throws is
- * exactly the one worth seeing, and dropping it would make the histogram
- * describe only the healthy path.
- */
-export async function observeDbQuery<T>(operation: string, fn: () => Promise<T>): Promise<T> {
-  const end = dbQueryDurationSeconds.startTimer({ operation });
-  try {
-    return await fn();
-  } finally {
-    end();
-  }
-}
-
-/** Record one failed RPC attempt. `outcome` distinguishes a retry from a give-up. */
-export function recordRpcError(outcome: "retry" | "exhausted"): void {
-  rpcErrorsTotal.inc({ outcome });
-}
-
-/**
- * Record one ledger abandoned after a genuine XDR decode failure.
- *
- * Called only where a ledger is actually given up on, never for the bisection
- * that looks for it — a bisection is a search, and counting it would inflate the
- * count by the depth of the search.
- */
-export function recordSkippedLedger(network: Network): void {
-  ledgersSkippedTotal.inc({ network });
-}
-
-/**
- * Fee quotes whose fee exceeded `VEIL_FEE_ALARM_PERCENT` of the amount priced.
- *
- * The fee is policy — percent, floor and cap — so a misconfiguration
- * overcharges every user at once, and until now the only way to notice was
- * reading the treasury's history on a block explorer. Alert on any increase.
- * Labelled by asset and network only: never an amount, never an address.
- */
-export const feeQuoteAlarmsTotal = new Counter({
-  name: "veil_fee_quote_alarms_total",
-  help: "Fee quotes whose fee exceeded VEIL_FEE_ALARM_PERCENT of the amount priced",
-  labelNames: ["network", "asset"] as const,
-  registers: [registry],
-});
-
-/**
- * Fee quotes that could not be written to the ledger.
- *
- * The quote itself still succeeds — the user is mid-payment — so a failed
- * write is otherwise silent, and a ledger with gaps reports totals that are
- * quietly too low. Alert on any increase.
- */
-export const feeQuoteRecordFailuresTotal = new Counter({
-  name: "veil_fee_quote_record_failures_total",
-  help: "Fee quotes that could not be written to the fee ledger",
-  labelNames: ["network"] as const,
-  registers: [registry],
-});
-
-/** Serialize the registry in Prometheus text exposition format. */
-export function renderMetrics(): Promise<string> {
-  return registry.metrics();
-}
-
-/** The content type Prometheus expects on a scrape response. */
-export const metricsContentType = registry.contentType;
-
-/** Test-only: clears every recorded sample without unregistering the metrics. */
-export function _resetMetrics(): void {
-  registry.resetMetrics();
-}
