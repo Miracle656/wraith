@@ -676,19 +676,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "ok": {
-                      "type": "boolean",
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "network": {
-                      "type": "string",
-                      "enum": [
-                        "testnet",
-                        "mainnet"
-                      ]
-                    },
                     "lastIndexedLedger": {
                       "type": "integer",
                       "nullable": true
@@ -745,13 +732,67 @@
                           "nullable": true
                         }
                       }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "healthy",
+                        "degraded"
+                      ]
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "degraded",
+                              "down",
+                              "unknown"
+                            ]
+                          },
+                          "lastCheckedAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "lastOkAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "latencyMs": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "detail": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "status",
+                          "lastCheckedAt",
+                          "lastOkAt",
+                          "latencyMs",
+                          "detail"
+                        ]
+                      }
                     }
                   },
                   "required": [
-                    "ok",
                     "lastIndexedLedger",
                     "latestLedger",
-                    "lagLedgers"
+                    "lagLedgers",
+                    "status",
+                    "dependencies"
                   ],
                   "additionalProperties": {
                     "nullable": true
@@ -4871,11 +4912,11 @@
             "schema": {
               "type": "string",
               "nullable": true,
-              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
               "example": "25"
             },
             "required": false,
-            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
             "name": "amount",
             "in": "query"
           }
