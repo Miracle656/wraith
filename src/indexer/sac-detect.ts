@@ -14,6 +14,18 @@
  *   2. Inspect its executable: SACs use `ContractExecutableStellarAsset`, Wasm
  *      tokens use `ContractExecutableWasm(hash)`.
  *
+ * Migration note (stellar-sdk 15 -> 17): the XDR unions are now discriminated
+ * types. Each branch below states the variant it matched before and matches now.
+ *   - ScVal:             before `val.switch().value === ScValType.scvContractInstance().value`
+ *                        now  `val.switch() === xdr.ScValType.scvContractInstance()`
+ *                        (discriminant is compared directly, not via .value)
+ *   - ContractExecutable: before `executable.switch().value === ContractExecutableType.contractExecutableStellarAsset().value`
+ *                        now  `executable.switch() === xdr.ContractExecutableType.contractExecutableStellarAsset()`
+ *   - LedgerEntryData:   before `entry.val.contractData().val()`
+ *                        now  `entry.val.contractData().val()` is unchanged in shape; the
+ *                        instance is reached via the ContractData arm, which is asserted
+ *                        via `.arm() === "contractData"` before access.
+ *
  * Results are immutable for the lifetime of a contract, so they are cached in
  * memory keyed by contract ID.
  */
@@ -38,8 +50,7 @@ const KNOWN_SAC_IDS = new Set<string>([
  */
 export function executableIsSac(executable: xdr.ContractExecutable): boolean {
   return (
-    executable.switch().value ===
-    xdr.ContractExecutableType.contractExecutableStellarAsset().value
+    executable.switch() === xdr.ContractExecutableType.contractExecutableStellarAsset()
   );
 }
 
@@ -48,7 +59,7 @@ export function executableIsSac(executable: xdr.ContractExecutable): boolean {
  * Returns false for any non-instance value.
  */
 export function instanceValIsSac(val: xdr.ScVal): boolean {
-  if (val.switch().value !== xdr.ScValType.scvContractInstance().value) {
+  if (val.switch() !== xdr.ScValType.scvContractInstance()) {
     return false;
   }
   return executableIsSac(val.instance().executable());
@@ -71,6 +82,9 @@ async function fetchInstanceVal(
       contractId,
       xdr.ScVal.scvLedgerKeyContractInstance(),
     );
+    // Only the ContractData arm carries a contract instance; any other arm is
+    // treated as "not determinable" rather than read through the wrong branch.
+    if (entry.val.arm() !== "contractData") return null;
     return entry.val.contractData().val();
   } catch {
     // Missing entry, archived state, or RPC error — treat as "not determinable".

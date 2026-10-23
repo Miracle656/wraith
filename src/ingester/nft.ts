@@ -42,8 +42,8 @@ export function isNftTransferEvent(raw: RawEvent): boolean {
   try {
     const sym = scValToNative(raw.topic[0]);
     if (sym !== "transfer") return false;
-    if (raw.topic[1].switch() !== xdr.ScValType.scvAddress()) return false;
-    if (raw.topic[2].switch() !== xdr.ScValType.scvAddress()) return false;
+    if (raw.topic[1].switch() !== xdr.ScValType.scvAddress) return false;
+    if (raw.topic[2].switch() !== xdr.ScValType.scvAddress) return false;
   } catch {
     return false;
   }

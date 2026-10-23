@@ -1,4 +1,4 @@
-import { xdr, Address, nativeToScVal } from "@stellar/stellar-sdk";
+import { xdr, Address, nativeToScVal, scValToNative } from "@stellar/stellar-sdk";
 import {
   isNftTransferEvent,
   parseNftTransferEvent,
@@ -171,7 +171,7 @@ describe("parseNftEvents", () => {
     const [{ record, tokenIdScVal }] = parseNftEvents([makeNftEvent(99n)]);
     expect(record.tokenId).toBe("99");
     // tokenIdScVal must be the u128 ScVal from topic[3]
-    expect(tokenIdScVal.switch()).toBe(xdr.ScValType.scvU128());
+    expect(tokenIdScVal.arm()).toBe("u128");
   });
 
   it("returns an empty array when the batch has no NFT events", () => {

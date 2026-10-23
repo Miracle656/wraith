@@ -28,7 +28,6 @@
  * Decoding is pure and never throws; a malformed or unrecognised event yields
  * null so a single bad event can never stall ingest.
  */
-
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { prisma } from "../db";
 import type { RawEvent } from "../rpc";
@@ -135,12 +134,17 @@ function eventSymbol(raw: RawEvent): string | null {
 /** Decode an Address ScVal to a G…/C… string, or null if it is not an address. */
 function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
   try {
-    if (scVal.switch() !== xdr.ScValType.scvAddress()) return null;
+    // stellar-sdk 17: ScVal is a discriminated union. Match on the `_switch`
+    // discriminant instead of calling `.switch()`, which no longer exists.
+    // Previously: scVal.switch() !== xdr.ScValType.scvAddress()
+    // Now:        scVal.switch() removed; check the discriminant directly.
+    if (scVal.arm() !== "address") return null;
     return Address.fromScVal(scVal).toString();
   } catch {
     return null;
   }
 }
+
 
 /**
  * Pull the share amount out of an event value. Pools emit it either as a bare
