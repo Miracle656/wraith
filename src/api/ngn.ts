@@ -62,7 +62,7 @@ import {
   submitCustomerKyc,
   type OnrampCoin,
 } from "../linq/onramp";
-import { getBillStatus, payBill, type BillCategory, type BillCoin } from "../linq/bills";
+import { getBillStatus, listDataBundles, payBill, type BillCategory, type BillCoin } from "../linq/bills";
 import { findNgnOrder, recordNgnOrder } from "../linq/ngnOrders";
 
 function isConfigured(): boolean {
@@ -818,6 +818,13 @@ export function createNgnRouter(
       }
       sendLinqError(res, err);
     }
+  });
+
+  // Data bundles are catalogue items, not arbitrary airtime amounts.
+  router.get("/bills/data-bundles", async (req: Request, res: Response) => {
+    const provider = typeof req.query.provider === "string" ? req.query.provider : undefined;
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.json({ bundles: listDataBundles(provider) });
   });
 
   // ── Bills: paid out of the wallet ──────────────────────────────────────────
