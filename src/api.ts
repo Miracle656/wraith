@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import express, { Request, Response, NextFunction } from "express";
 import rateLimit from "express-rate-limit";
 import { jsonApiMiddleware } from "./middleware/jsonapi";
@@ -88,6 +89,35 @@ const SEARCH_CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_SEARCH_MS ?? "15000",
 
 // ─── Amount formatting ────────────────────────────────────────────────────
 export { toDisplayAmount } from "./amount";
+
+// ─── Running commit ────────────────────────────────────────────────────────
+// Which SHA is actually live. Read from the build, not from a file a human
+// edits: `GIT_COMMIT_SHA` is injected by the deploy workflow / Render at build
+// time. The git fallback exists only so a local `npm start` reports something
+// truthful instead of "unknown"; it is never the source of truth in production.
+//
+// Resolved once at module load, not per request — spawning git on every
+// /status call would be a fork per scrape.
+function resolveCommitSha(): string {
+  const fromEnv = process.env.GIT_COMMIT_SHA ?? process.env.RENDER_GIT_COMMIT;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+const RUNNING_COMMIT_SHA = resolveCommitSha();
+
+/**
+ * The commit this process was built from. Exported so tests and other modules
+ * (e.g. a startup log line) can read the same value the endpoint reports.
+ */
+export function getRunningCommit(): string {
+  return RUNNING_COMMIT_SHA;
+}
 
 const withDisplay = <T extends { amount: string; contractId?: string; displayAmount?: string }>(
   transfer: T,
@@ -347,6 +377,23 @@ export function createApp(): express.Application {
     res.json({ ok: true, uptime: process.uptime() });
   });
 
+  // ─── GET /version — which commit is live ────────────────────────────────
+  /**
+   * Reports the commit SHA this process was built from. Deliberately separate
+   * from /status: /status is per-network and can 503 when the DB is down, but
+   * "what is deployed" must stay answerable even then — that is exactly when
+   * you need to know whether the fix you merged is actually running.
+   *
+   * The value comes from GIT_COMMIT_SHA (set by CI/Render at build time), with
+   * a git fallback for local runs. It is never read from a checked-in file.
+   */
+  app.get("/version", (_req: Request, res: Response) => {
+    res.json({
+      commit: RUNNING_COMMIT_SHA,
+      short: RUNNING_COMMIT_SHA === "unknown" ? "unknown" : RUNNING_COMMIT_SHA.slice(0, 7),
+    });
+  });
+
   // ─── GET /metrics — Prometheus scrape endpoint ──────────────────────────
   /**
    * Indexer and process metrics in Prometheus text exposition format.
@@ -530,6 +577,9 @@ export function createApp(): express.Application {
         res.json({
           ok: true,
           status: "healthy",
+          // Which commit is live. Same value as GET /version, repeated here so
+          // a maintainer reading /status sees deployed-vs-merged in one call.
+          commit: RUNNING_COMMIT_SHA,
           // Which network the top-level fields describe. `networks` below
           // reports every loop regardless of the selector.
           network: selected,
@@ -554,6 +604,7 @@ else {
         res.json({
           ok: true,
           status: "degraded",
+          commit: RUNNING_COMMIT_SHA,
           network: selected,
           stale: true,
           as_of_ledger: lastIndexedLedger ?? undefined,

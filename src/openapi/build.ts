@@ -104,6 +104,37 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/version",
+  summary: "Running commit",
+  description:
+    "The git commit SHA this build was produced from, injected at build time from " +
+    "the CI environment (GIT_COMMIT / RENDER_GIT_COMMIT / VERCEL_GIT_COMMIT_SHA). " +
+    "Lets a maintainer tell a deployed instance from a merged-but-undeployed one " +
+    "without shelling into the host. `commit` is `unknown` when the build did not " +
+    "record one.",
+  responses: {
+    200: {
+      description: "OK",
+      content: {
+        "application/json": {
+          schema: {
+            type: "object" as const,
+            properties: {
+              commit: { type: "string" as const },
+              shortCommit: { type: "string" as const },
+              builtAt: { type: "string" as const },
+            },
+            required: ["commit", "shortCommit", "builtAt"],
+          },
+        },
+      },
+    },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/ngn/customers/status",
   summary: "Is this customer reference verified?",
   description:
@@ -427,6 +458,7 @@ registry.registerPath({
   request: { query: feesQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: feesResponseSchema } } },
+    ...commonErrorResponses,
   },
 });
 

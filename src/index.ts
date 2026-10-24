@@ -1,6 +1,7 @@
 import "dotenv/config";
 import http from "http";
 import { execSync } from "child_process";
+import { readFileSync } from "fs";
 import { randomUUID } from "crypto";
 import { createApp } from "./api";
 import { startAllIndexers } from "./indexer";
@@ -21,6 +22,24 @@ import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
+// Resolve the commit that is actually running, from the build rather than from
+// a file someone edits by hand. Order of preference:
+//   1. GIT_COMMIT_SHA — injected by the deploy workflow at build time.
+//   2. The .git/HEAD of the checkout the process was started from (dev/local).
+//   3. "unknown" — never a stale hand-maintained value.
+function resolveRunningCommit(): string {
+  const injected = process.env.GIT_COMMIT_SHA?.trim();
+  if (injected) return injected;
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+const RUNNING_COMMIT = resolveRunningCommit();
+const BUILD_TIME = process.env.BUILD_TIME?.trim() ?? "unknown";
+
 async function main() {
   // First thing in `main`, not at module load. A missing DATABASE_URL should
   // stop the process with the name of what is missing, rather than surface
@@ -28,6 +47,10 @@ async function main() {
   // here rather than top-level because the startup-wiring tests import this
   // module, and a module-load throw would fail them on an env they do not need.
   validateEnv();
+
+  // Log the running commit before anything else so a stale deploy is visible
+  // in the logs even if the process later crashes during startup.
+  logger.info("server.commit", { route: "startup", status: 0, durationMs: 0, requestId: "boot", commit: RUNNING_COMMIT, buildTime: BUILD_TIME });
 
   const bootId = randomUUID();
 
@@ -225,6 +248,7 @@ async function main() {
 
   // ── Start REST API + WebSocket server ─────────────────────────────────────
   const app = createApp();
+  app.set("runningCommit", RUNNING_COMMIT);
   const server = http.createServer(app);
 
   // Attach WebSocket upgrade handler — clients connect to /subscribe/:address

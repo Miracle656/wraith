@@ -1,0 +1,156 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    description: "Deploy the currently selected commit to Render."
+    inputs:
+      ref:
+        description: "Git ref to deploy. Defaults to main."
+        required: false
+        default: "main"
+        type: string
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+environment:
+  name: production
+  url: ${{ vars.PRODUCTION_URL }}
+
+jobs:
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Resolve commit SHA
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+        env:
+          CI:" true
+
+      - name: Trigger Render deploy
+        id: trigger
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY}" ]; then
+            echo "::error::RENDER_API_KEY secret is not set"
+
+            exit 1
+          fi
+          if [ -z "${RENDER_SERVICE_ID}" ]; then
+            echo "::error::RENDER_SERVICE_ID variable is not set"
+            exit 1
+          fi
+
+          echo "Deploying commit ${DEPLOY_SHA} to Render service ${RENDER_SERVICE_ID}"
+
+          response="$(curl -sS -w '\n%${http_code}' -X POST \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"clearCache\":\"clearDoNotRebuild\",\"commitId\":\"${DEPLOY_SHA}\"}" \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys")"
+
+          body="$(echo "$response" | sed '$s/\n.*$//')"
+          http_code="$(echo "$response" | tail -n1)"
+          echo "Render response (HTTP $http_code): $body"
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::Render deploy trigger failed with HTTP $http_code"
+            exit 1
+          fi
+
+          deploy_id="$(echo "$body" | jq -r '.id // empty')"
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deploy to go live
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+          DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_ID}" ]; then
+            echo "::error::Render did not return a deploy id"
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            status="$(curl -sS \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}" | jq -r '.status // empty')"
+            echo "attempt $attempt: deploy status $status"
+            case "$status" in
+              live)
+                echo "Deploy ${DEPLOY_ID} is live for commit ${DEPLOY_SHA}"
+                exit 0
+                ;;
+              deactivated)
+                echo "::error::Deploy ${DEPLOY_ID} failed (deactivated)"
+                exit 1
+                ;;
+              canceled)
+                echo "::error::Deploy ${DEPLOY_ID} was cancelled"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for deploy ${DEPLOY_ID} to go live"
+          exit 1
+
+      - name: Verify running commit
+        env:
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL }}
+          DEPLOY_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PRODUCTION_URL}" ]; then
+            echo "::error::PRODUCTION_URL variable is not set"
+            exit 1
+          fi
+
+          for attempt in $(seq 1 30); do
+            live_sha="$(curl -fsS "${PRODUCTION_URL}/status" | jq -r '.commit // empty')"
+            echo "attempt $attempt: /status reports commit $live_sha"
+            if [ "$live_sha" = "${DEPLOY_SHA}" ]; then
+              echo "Live instance is running ${DEPLOY_SHA}"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::Live instance did not report commit ${DEPLOY_SHA}"
+          exit 1
