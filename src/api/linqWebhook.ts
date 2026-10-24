@@ -5,6 +5,9 @@ import {
   parseEvent,
   resolveEventNetwork,
   verifySignature,
+  isPlausibleNgn,
+  MIN_PLAUSIBLE_NGN,
+  MAX_PLAUSIBLE_NGN,
 } from "../linq/webhook";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { reconcileOfframpOrder } from "../linq/offrampOrders";
@@ -65,6 +68,17 @@ export function createLinqWebhookRouter(): Router {
       res.status(200).json({ ok: true });
 
       try {
+        // Amount/ratio guard: reject nonsense values and scale mismatches before
+        // touching the order store. The floor (MIN_PLAUSIBLE_NGN = 0) only blocks
+        // non-positive amounts so low-value airtime top-ups like ₦50 pass through.
+        // Scale errors (e.g. 100×) are caught by crossCheckAmountNgn.
+        if (event.amountNGN != null && !isPlausibleNgn(event.amountNGN)) {
+          console.error(
+            `[linq] rejecting webhook for order ${event.orderId}: amountNGN ${event.amountNGN} outside plausible band [${MIN_PLAUSIBLE_NGN}, ${MAX_PLAUSIBLE_NGN}]`,
+          );
+          return;
+        }
+
         // Idempotent per event: the update targets a row keyed on
         // (network, orderId) and writes the settled figures. A redelivery of
         // the SAME event writes the same values a second time, which is a
