@@ -92,6 +92,59 @@ export const providerRequestDurationSeconds = new Histogram({
 });
 
 /**
+ * A provider 429, by operation and how far it got.
+ *
+ * All Veil users share one Linq key, and it is rate limited. The retry in
+ * src/linq/http.ts has always recognised a 429 and waited, but a 429 left no
+ * trace of its own: `provider_request_duration_seconds` folds it into the
+ * generic `outcome="error"` pile, so "approaching the shared key's ceiling"
+ * was indistinguishable from "the provider is flaky" — and nobody knew how
+ * often it happened. The ceiling is the kind of thing that degrades slowly and
+ * then fails everyone at once, so its 429s are counted here, separately from
+ * every other failure.
+ *
+ * `disposition` is the difference between a warning and an incident:
+ *
+ *  - `absorbed` — our rate-limit retry waited and the call went on. Nobody
+ *    heard about it; a rising rate is the early warning that the shared key is
+ *    nearing its limit.
+ *  - `surfaced` — no retry was taken (or none was left) and the 429 reached
+ *    the caller. Every one of these is a person who was told the service is
+ *    busy.
+ *
+ * Labels are bounded by construction: `provider` is "linq", `operation` is a
+ * `LinqOperation` constant (the finite endpoint vocabulary), and `disposition`
+ * is one of two words. Never an order id, a customer reference, an amount or
+ * a URL — an unbounded label makes /metrics grow until it cannot be scraped.
+ */
+export const providerRateLimitTotal = new Counter({
+  name: "provider_rate_limit_total",
+  help: "Provider 429 responses, by provider, operation, and whether our retry absorbed them or the caller saw them",
+  labelNames: ["provider", "operation", "disposition"] as const,
+  registers: [registry],
+});
+
+/**
+ * The wait a provider 429 asked us to take, in seconds.
+ *
+ * Recorded only when the provider sends `Retry-After` — a 429 without one is
+ * not counted here. The value is what the provider asked for, not what we
+ * slept: our own wait is capped (`MAX_RETRY_DELAY_MS` in src/linq/http.ts) but
+ * the ask is not, and the gap between the two is how far over its own limit
+ * the provider knows itself to be. A thirty-second ask is not a blip.
+ *
+ * Labelled by provider and operation only. The wait is the datum, and a
+ * histogram keeps it out of the label set.
+ */
+export const providerRateLimitWaitSeconds = new Histogram({
+  name: "provider_rate_limit_wait_seconds",
+  help: "Waits providers asked for on a 429, in seconds, by provider and operation",
+  labelNames: ["provider", "operation"] as const,
+  buckets: [0.5, 1, 2, 5, 10, 30, 60],
+  registers: [registry],
+});
+
+/**
  * Ledgers the indexer has advanced through, per network.
  *
  * The rate of this is the alert that matters: a flat

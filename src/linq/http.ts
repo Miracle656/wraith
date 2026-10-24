@@ -25,7 +25,11 @@
  * back.
  */
 
-import { providerRequestDurationSeconds } from "../metrics";
+import {
+  providerRateLimitTotal,
+  providerRateLimitWaitSeconds,
+  providerRequestDurationSeconds,
+} from "../metrics";
 import { recordDependencyOutcome } from "../dependencies";
 
 const DEFAULT_BASE_URL = "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
@@ -413,11 +417,39 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
         // late in a shared budget gets what is left of it, not a fresh 15s.
         return await attempt<T>(path, options, Math.min(perAttempt, remaining));
       } catch (err) {
-        if (!(err instanceof LinqError) || err.status !== 429 || tried >= retries) throw err;
+        if (!(err instanceof LinqError) || err.status !== 429) throw err;
+
+        // A 429 is counted the moment it arrives, before the retry decision:
+        // the wait the provider asked for is a fact whether or not we can
+        // honour it, and "how often does this happen" was the question nobody
+        // could answer. Recorded only when the provider actually said. (#270)
+        if (err.retryAfterSeconds !== undefined) {
+          providerRateLimitWaitSeconds.observe(
+            { provider: "linq", operation: options.operation },
+            err.retryAfterSeconds,
+          );
+        }
+
         const wait =
           (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (tried + 1), MAX_RETRY_DELAY_MS);
         // A wait that would end after the deadline buys nothing; surface the 429.
-        if (Date.now() + wait >= deadline) throw err;
+        if (tried >= retries || Date.now() + wait >= deadline) {
+          // This 429 reached the caller — an incident, not a warning. (#270)
+          providerRateLimitTotal.inc({
+            provider: "linq",
+            operation: options.operation,
+            disposition: "surfaced",
+          });
+          throw err;
+        }
+        // Our retry is about to absorb it: the caller will never hear of this
+        // 429, which makes the absorbed/surfaced split the warning/incident
+        // split an operator alerts on.
+        providerRateLimitTotal.inc({
+          provider: "linq",
+          operation: options.operation,
+          disposition: "absorbed",
+        });
         await sleep(wait);
       }
     }
