@@ -634,6 +634,81 @@
         }
       }
     },
+    "/ngn/bills/data-bundles": {
+      "get": {
+        "summary": "Data bundle catalogue",
+        "description": "Read-only list of the data bundles a `data` bill can buy, optionally filtered by provider. Data is sold as catalogue items rather than arbitrary amounts, so the client picks one of these. Cached for five minutes.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+              "example": "MTN"
+            },
+            "required": false,
+            "description": "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+            "name": "provider",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bundles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "example": "MTN"
+                          },
+                          "code": {
+                            "type": "string",
+                            "description": "Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.",
+                            "example": "mtn-1gb-30d"
+                          },
+                          "label": {
+                            "type": "string",
+                            "example": "1 GB / 30 days"
+                          },
+                          "megabytes": {
+                            "type": "integer"
+                          },
+                          "validityDays": {
+                            "type": "integer"
+                          },
+                          "amountNgn": {
+                            "type": "number",
+                            "description": "Price in naira."
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "code",
+                          "label",
+                          "megabytes",
+                          "validityDays",
+                          "amountNgn"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "bundles"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "summary": "Prometheus metrics",
