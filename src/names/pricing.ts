@@ -18,24 +18,32 @@
  */
 
 /**
- * The price of a name, in USDC, by exact character count.
+ * What a name costs, in USDC, by how many characters it has.
  *
- * `3 => 10, 4 => 5, 5+ => 2`. The 4-character tier is the one place the
- * instruction was "then do length for 5 usdc" without naming the length, and 4
- * is the only reading that leaves no gap between the 3-character tier and the
- * long tail. If that was meant to be 5 characters, change this table and the
- * tests move with it — nothing else in the system hardcodes a price.
+ * `1-5 => 3, 6-10 => 5, 11+ => 2`.
+ *
+ * Note that this is deliberately NOT monotonic, and a reader who expects a
+ * registry's usual shape will think it is a bug: the dearest band is the
+ * middle one, not the shortest. It prices demand rather than scarcity. Real
+ * first names land in 6-10 characters, so that band is where nearly all of
+ * the asking will be, and it is priced accordingly; very short names are
+ * cheaper and very long ones cheapest.
+ *
+ * Do not "correct" this into a descending curve without being told to. The
+ * tests pin the inversion on purpose.
+ *
+ * Each band is an inclusive upper bound, checked in order.
  */
-export const NAME_PRICE_USDC_BY_LENGTH: ReadonlyMap<number, number> = new Map([
-  [3, 10],
-  [4, 5],
-]);
+export const NAME_PRICE_BANDS: readonly { readonly maxLength: number; readonly priceUsdc: number }[] = [
+  { maxLength: 5, priceUsdc: 3 },
+  { maxLength: 10, priceUsdc: 5 },
+];
 
-/** What every name at or above `LONG_NAME_MIN_LENGTH` costs, in USDC. */
+/** What a name longer than the last band costs — 11 characters and up. */
 export const LONG_NAME_PRICE_USDC = 2;
 
 /** The first length that falls into the flat long-name price. */
-export const LONG_NAME_MIN_LENGTH = 5;
+export const LONG_NAME_MIN_LENGTH = 11;
 
 /**
  * The shortest name that can be bought.
@@ -165,7 +173,10 @@ export function isReserved(name: string): boolean {
  * not validate; `checkName` is the gate.
  */
 export function priceForLength(length: number): number {
-  return NAME_PRICE_USDC_BY_LENGTH.get(length) ?? LONG_NAME_PRICE_USDC;
+  for (const band of NAME_PRICE_BANDS) {
+    if (length <= band.maxLength) return band.priceUsdc;
+  }
+  return LONG_NAME_PRICE_USDC;
 }
 
 /**
