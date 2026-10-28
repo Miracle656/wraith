@@ -18,6 +18,7 @@ import {
   isReserved,
   normalizeName,
   priceForLength,
+  priceRegistration,
 } from "../../names/pricing";
 
 describe("name pricing by length band", () => {
@@ -178,5 +179,54 @@ describe("the figures", () => {
 
   it("is a set of twenty", () => {
     expect(NFT_COLLECTION_SIZE).toBe(20);
+  });
+});
+
+describe("pricing a whole registration", () => {
+  it("multiplies the annual rate by the term", () => {
+    expect(priceRegistration("adebayo", 3)).toEqual({
+      ok: true,
+      registration: { name: "adebayo", years: 3, perYearUsdc: 5, totalUsdc: 15 },
+    });
+    expect(priceRegistration("ade", 1)).toEqual({
+      ok: true,
+      registration: { name: "ade", years: 1, perYearUsdc: 3, totalUsdc: 3 },
+    });
+    expect(priceRegistration("adebayoakinola", 5)).toEqual({
+      ok: true,
+      registration: { name: "adebayoakinola", years: 5, perYearUsdc: 2, totalUsdc: 10 },
+    });
+  });
+
+  it("normalizes the name it prices and returns the canonical spelling", () => {
+    const got = priceRegistration("  AdeBayo  ", 2);
+    expect(got).toEqual({
+      ok: true,
+      registration: { name: "adebayo", years: 2, perYearUsdc: 5, totalUsdc: 10 },
+    });
+  });
+
+  it("refuses a bad name before it ever looks at the term", () => {
+    // Order matters for what the user is told: "that name is reserved" is
+    // more use than "that term is invalid" when both are wrong.
+    expect(priceRegistration("support", 99)).toEqual({ ok: false, reason: "reserved" });
+    expect(priceRegistration("jаck", 0)).toEqual({ ok: false, reason: "bad_charset" });
+  });
+
+  it("refuses a bad term on a good name", () => {
+    expect(priceRegistration("adebayo", 0)).toEqual({ ok: false, reason: "bad_term" });
+    expect(priceRegistration("adebayo", 6)).toEqual({ ok: false, reason: "bad_term" });
+    expect(priceRegistration("adebayo", 1.5)).toEqual({ ok: false, reason: "bad_term" });
+  });
+
+  it("is the only place a total is computed", () => {
+    // A caller that multiplies priceForLength itself is a caller that can get
+    // the term wrong; this pins that the two agree.
+    const r = priceRegistration("jack_ng", 4);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.registration.perYearUsdc).toBe(priceForLength("jack_ng".length));
+      expect(r.registration.totalUsdc).toBe(priceForLength("jack_ng".length) * 4);
+    }
   });
 });

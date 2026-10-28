@@ -1,3 +1,5 @@
+import { checkTerm } from "./term";
+
 /**
  * Veil Names — what a name costs, and what counts as a name at all.
  *
@@ -18,9 +20,12 @@
  */
 
 /**
- * What a name costs, in USDC, by how many characters it has.
+ * What a name costs, in USDC **per year**, by how many characters it has.
  *
  * `1-5 => 3, 6-10 => 5, 11+ => 2`.
+ *
+ * A name is rented by the year (see ./term.ts), so every figure here is an
+ * annual rate and a multi-year purchase is this times the term.
  *
  * Note that this is deliberately NOT monotonic, and a reader who expects a
  * registry's usual shape will think it is a bug: the dearest band is the
@@ -39,7 +44,7 @@ export const NAME_PRICE_BANDS: readonly { readonly maxLength: number; readonly p
   { maxLength: 10, priceUsdc: 5 },
 ];
 
-/** What a name longer than the last band costs — 11 characters and up. */
+/** What a name longer than the last band costs per year — 11 characters up. */
 export const LONG_NAME_PRICE_USDC = 2;
 
 /** The first length that falls into the flat long-name price. */
@@ -147,6 +152,14 @@ export type NameCheck =
   | { ok: true; name: string; priceUsdc: number }
   | { ok: false; reason: NameRejection };
 
+/** A priced registration: the name, the term, and what it comes to. */
+export type Registration = {
+  name: string;
+  years: number;
+  perYearUsdc: number;
+  totalUsdc: number;
+};
+
 /**
  * Fold a candidate to its canonical form.
  *
@@ -182,7 +195,7 @@ export function isReserved(name: string): boolean {
 }
 
 /**
- * What a valid name of this length costs, in USDC.
+ * What a valid name of this length costs per year, in USDC.
  *
  * Exported for the price list a client shows before anything is typed. It does
  * not validate; `checkName` is the gate.
@@ -225,3 +238,32 @@ export const NFT_PRICE_USDC = 5;
 
 /** How many figures exist. There will not be a twenty-first. */
 export const NFT_COLLECTION_SIZE = 20;
+
+/**
+ * Price a whole registration: a name, for a term.
+ *
+ * The one place a total is computed. A caller that multiplies `priceUsdc` by a
+ * term itself is a caller that can get the term wrong, so the term is
+ * validated here rather than trusted — `checkTerm` and the price table are
+ * useless apart.
+ */
+export function priceRegistration(
+  candidate: string,
+  years: number,
+): { ok: true; registration: Registration } | { ok: false; reason: NameRejection | "bad_term" } {
+  const name = checkName(candidate);
+  if (!name.ok) return { ok: false, reason: name.reason };
+
+  const term = checkTerm(years);
+  if (!term.ok) return { ok: false, reason: term.reason };
+
+  return {
+    ok: true,
+    registration: {
+      name: name.name,
+      years: term.years,
+      perYearUsdc: name.priceUsdc,
+      totalUsdc: name.priceUsdc * term.years,
+    },
+  };
+}
