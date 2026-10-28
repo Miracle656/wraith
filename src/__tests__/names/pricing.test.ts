@@ -64,6 +64,9 @@ describe("name pricing by length band", () => {
       name: "adebayoakinola",
       priceUsdc: 2,
     });
+    // The design tells the user "3 to 20 characters", so 20 is the ceiling a
+    // client will already have promised before anything reaches the module.
+    expect(MAX_NAME_LENGTH).toBe(20);
   });
 });
 
@@ -87,7 +90,7 @@ describe("normalization — two spellings must not be two names", () => {
   });
 
   it("refuses other non-ASCII and punctuation outright", () => {
-    for (const bad of ["jack!", "ja ck", "jack.", "ja_ck", "jack​", "émile", "ja/ck", "ja*ck"]) {
+    for (const bad of ["jack!", "ja ck", "jack.", "ja-ck", "jack​", "émile", "ja/ck", "ja*ck"]) {
       expect(checkName(bad)).toEqual({ ok: false, reason: "bad_charset" });
     }
   });
@@ -121,17 +124,23 @@ describe("length bounds", () => {
   });
 });
 
-describe("hyphens", () => {
-  it("allows an interior hyphen", () => {
-    expect(checkName("jack-ng")).toEqual({ ok: true, name: "jack-ng", priceUsdc: 5 });
+describe("separators", () => {
+  it("allows an interior underscore", () => {
+    expect(checkName("jack_ng")).toEqual({ ok: true, name: "jack_ng", priceUsdc: 5 });
   });
 
-  it("refuses a leading, trailing or doubled hyphen", () => {
-    for (const bad of ["-jack", "jack-", "ja--ck", "-", "--"]) {
+  it("refuses a leading, trailing or doubled underscore", () => {
+    for (const bad of ["_jack", "jack_", "ja__ck", "_", "__"]) {
       const got = checkName(bad);
       expect(got.ok).toBe(false);
-      if (!got.ok) expect(["bad_hyphen", "too_short"]).toContain(got.reason);
+      if (!got.ok) expect(["bad_separator", "too_short"]).toContain(got.reason);
     }
+  });
+
+  it("refuses a hyphen, so there is exactly one separator", () => {
+    // `jack_ng` and `jack-ng` would be indistinguishable read aloud, which is
+    // the confusable problem the charset rule exists to prevent.
+    expect(checkName("jack-ng")).toEqual({ ok: false, reason: "bad_charset" });
   });
 });
 
@@ -142,12 +151,12 @@ describe("reserved names", () => {
     }
   });
 
-  it("refuses a reserved name hyphenated to sneak past the list", () => {
-    // Without hyphen-stripping, `s-u-p-p-o-r-t` is a 13-character name at the
-    // cheapest tier that reads as support in every screen that renders it.
-    expect(isReserved("s-u-p-p-o-r-t")).toBe(true);
-    expect(checkName("s-u-p-p-o-r-t")).toEqual({ ok: false, reason: "reserved" });
-    expect(checkName("ve-il")).toEqual({ ok: false, reason: "reserved" });
+  it("refuses a reserved name padded with underscores to sneak past the list", () => {
+    // Without separator-stripping, `s_u_p_p_o_r_t` is a 13-character name at
+    // the cheapest tier that reads as support in every screen that renders it.
+    expect(isReserved("s_u_p_p_o_r_t")).toBe(true);
+    expect(checkName("s_u_p_p_o_r_t")).toEqual({ ok: false, reason: "reserved" });
+    expect(checkName("ve_il")).toEqual({ ok: false, reason: "reserved" });
   });
 
   it("refuses a reserved name in mixed case", () => {

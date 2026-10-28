@@ -62,8 +62,12 @@ export const MIN_SELLABLE_LENGTH = 3;
  * A bound is required rather than tidy: the name is rendered in a send screen,
  * an activity row and a push notification, and an unbounded string at the
  * cheapest tier is a layout bug somebody can buy for 2 USDC.
+ *
+ * 20 is the number the Veil Names design states to the user in so many words —
+ * "3 to 20 characters" — so it is the number a client will have already
+ * promised by the time anything reaches this module.
  */
-export const MAX_NAME_LENGTH = 32;
+export const MAX_NAME_LENGTH = 20;
 
 /**
  * Names nobody may buy, because holding one would let the holder be mistaken
@@ -102,7 +106,7 @@ export const RESERVED_NAMES: readonly string[] = [
   "root",
   "system",
   "noreply",
-  "no-reply",
+  "no_reply",
   "postmaster",
   "abuse",
   "legal",
@@ -127,13 +131,13 @@ export const NAME_REJECTIONS = [
   /** Longer than `MAX_NAME_LENGTH`. */
   "too_long",
   /**
-   * Contains a character outside `[a-z0-9-]` after normalization. This is the
+   * Contains a character outside `[a-z0-9_]` after normalization. This is the
    * homoglyph rule: a Cyrillic "а" is not an "a", and a name that reads as
    * somebody else's is a payment redirect.
    */
   "bad_charset",
-  /** A hyphen at the start or end, or two in a row. */
-  "bad_hyphen",
+  /** An underscore at the start or end, or two in a row. */
+  "bad_separator",
   /** On the reserved list, including once hyphens are stripped. */
   "reserved",
 ] as const;
@@ -155,14 +159,25 @@ export type NameCheck =
  *
  * Surrounding whitespace is stripped because it comes from paste and keyboards,
  * never from intent.
+ *
+ * Underscore is the only separator, per the design's stated rule. Allowing a
+ * hyphen as well would make `jack_ng` and `jack-ng` two different names that
+ * no one can tell apart when read aloud — the same confusable problem the
+ * charset rule exists to prevent, reintroduced by a convenience.
  */
 export function normalizeName(candidate: string): string {
   return candidate.trim().toLowerCase();
 }
 
-/** True if `name` is reserved, ignoring hyphens used to sneak past the list. */
+/**
+ * True if `name` is reserved, ignoring separators used to sneak past the list.
+ *
+ * The design promises the user that "names that could be used to pose as Veil
+ * or its team are reserved", and `s_u_p_p_o_r_t` poses exactly as well as
+ * `support` does in a screen that renders it.
+ */
 export function isReserved(name: string): boolean {
-  const bare = name.replace(/-/g, "");
+  const bare = name.replace(/_/g, "");
   return RESERVED_NAMES.includes(name) || RESERVED_NAMES.includes(bare);
 }
 
@@ -190,9 +205,9 @@ export function checkName(candidate: string): NameCheck {
   if (name.length === 0) return { ok: false, reason: "empty" };
   if (name.length < MIN_SELLABLE_LENGTH) return { ok: false, reason: "too_short" };
   if (name.length > MAX_NAME_LENGTH) return { ok: false, reason: "too_long" };
-  if (!/^[a-z0-9-]+$/.test(name)) return { ok: false, reason: "bad_charset" };
-  if (name.startsWith("-") || name.endsWith("-") || name.includes("--")) {
-    return { ok: false, reason: "bad_hyphen" };
+  if (!/^[a-z0-9_]+$/.test(name)) return { ok: false, reason: "bad_charset" };
+  if (name.startsWith("_") || name.endsWith("_") || name.includes("__")) {
+    return { ok: false, reason: "bad_separator" };
   }
   if (isReserved(name)) return { ok: false, reason: "reserved" };
 
