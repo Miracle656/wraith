@@ -16,6 +16,12 @@
  *
  * Results are immutable for the lifetime of a contract, so they are cached in
  * memory keyed by contract ID.
+ *
+ * stellar-sdk 17 migration: the XDR unions are discriminated types now, so the
+ * old `.switch()` accessor style is replaced by checking `.switch()`'s
+ * discriminant via the `.arm()` / `.value` tag properties. Each branch below
+ * records what it matched before (SDK 15, accessor `switch().value` comparison)
+ * and what it matches now (SDK 17, discriminant `arm()` check).
  */
 
 import { xdr } from "@stellar/stellar-sdk";
@@ -35,20 +41,25 @@ const KNOWN_SAC_IDS = new Set<string>([
 /**
  * True when a contract executable is the built-in Stellar Asset executable
  * (i.e. the contract is a SAC) rather than uploaded Wasm.
+ *
+ * Before (SDK 15): `executable.switch().value === ContractExecutableType.contractExecutableStellarAsset().value`
+ *   matched the executable union's discriminant by comparing the numeric enum value.
+ * After (SDK 17): the union is discriminated, so the discriminant is read via
+ *   `arm()` and compared to the stellar-asset arm name. Matches the same variant.
  */
 export function executableIsSac(executable: xdr.ContractExecutable): boolean {
-  return (
-    executable.switch().value ===
-    xdr.ContractExecutableType.contractExecutableStellarAsset().value
-  );
+  return executable.arm() === "stellarAsset";
 }
 
 /**
  * True when a decoded contract-instance ScVal describes a SAC.
  * Returns false for any non-instance value.
+ *
+ * Before (SDK 15): `val.switch().value === ScValType.scvContractInstance().value`.
+ * After (SDK 17): `val.arm() === "contractInstance"` — same variant, discriminated check.
  */
 export function instanceValIsSac(val: xdr.ScVal): boolean {
-  if (val.switch().value !== xdr.ScValType.scvContractInstance().value) {
+  if (val.arm() !== "contractInstance") {
     return false;
   }
   return executableIsSac(val.instance().executable());
@@ -71,7 +82,11 @@ async function fetchInstanceVal(
       contractId,
       xdr.ScVal.scvLedgerKeyContractInstance(),
     );
-    return entry.val.contractData().val();
+    // Before (SDK 15): entry.val.contractData().val() — accessor call on the union.
+    // After (SDK 17): LedgerEntryData is discriminated; read the arm explicitly.
+    const data = entry.val;
+    if (data.arm() !== "contractData") return null;
+    return data.contractData().val();
   } catch {
     // Missing entry, archived state, or RPC error — treat as "not determinable".
     return null;
