@@ -326,27 +326,57 @@ export async function clearBackfillCursor(network?: Network): Promise<void> {
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS ?? "30", 10);
 
 /**
- * Delete transfers older than RETENTION_DAYS to keep the DB within free-tier limits.
- * Returns the number of rows deleted.
+ * Delete indexed events older than RETENTION_DAYS to keep the DB within
+ * free-tier limits. Returns the number of rows deleted across all tables.
+ *
+ * **Every indexed table, not just transfers.** This pruned `TokenTransfer`
+ * alone for a long time while the indexer wrote to four tables, and on
+ * 2026-10-27 that filled the shared Supabase disk and put the whole project
+ * into read-only mode: `HostFnLog` had reached 1,776 MB over 3.64 million rows
+ * — more than every other table in the database combined — while `TokenTransfer`
+ * sat at 80 kB precisely because this function was keeping it trimmed. Writes
+ * stopped for wraith and Lens together, and recovery meant truncating the table
+ * by hand.
+ *
+ * So the rule, and the reason the list is spelled out rather than defaulted:
+ * **a new table the indexer writes to must be added here.** `rollbackToLedger`
+ * already enumerates the same four, and the two lists are meant to agree.
+ *
+ * Scoped to one network, like every other bulk delete here: pruning testnet
+ * must never delete mainnet history, which is the more expensive of the two to
+ * re-index.
  */
 export async function pruneOldTransfers(network?: Network): Promise<number> {
   const net = resolveNetwork(network);
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
+  const where = { network: net, ledgerClosedAt: { lt: cutoff } };
 
-  // Scoped to one network: pruning testnet must never delete mainnet history,
-  // which is the more expensive of the two to re-index.
-  const result = await prisma.tokenTransfer.deleteMany({
-    where: { network: net, ledgerClosedAt: { lt: cutoff } },
-  });
+  // Separate statements rather than one transaction: these are independent
+  // deletes of millions of rows, and holding them open together is what makes a
+  // prune block the indexer that scheduled it.
+  const deleted: Record<string, number> = {};
+  for (const [label, run] of [
+    ["transfers", () => prisma.tokenTransfer.deleteMany({ where })],
+    ["nftTransfers", () => prisma.nftTransfer.deleteMany({ where })],
+    ["hostFnLogs", () => prisma.hostFnLog.deleteMany({ where })],
+    ["lpShareTransfers", () => prisma.lpShareTransfer.deleteMany({ where })],
+  ] as const) {
+    deleted[label] = (await run()).count;
+  }
 
-  if (result.count > 0) {
+  const total = Object.values(deleted).reduce((sum, n) => sum + n, 0);
+  if (total > 0) {
+    const detail = Object.entries(deleted)
+      .filter(([, n]) => n > 0)
+      .map(([label, n]) => `${label}=${n}`)
+      .join(" ");
     console.log(
-      `[prune] Deleted ${result.count} ${net} transfers older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()})`
+      `[prune] Deleted ${total} ${net} rows older than ${RETENTION_DAYS} days (before ${cutoff.toISOString()}): ${detail}`
     );
   }
 
-  return result.count;
+  return total;
 }
 
 // ─── Query helpers ─────────────────────────────────────────────────────────

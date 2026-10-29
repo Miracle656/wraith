@@ -886,6 +886,64 @@ export const feesResponseSchema = z.object({
   }),
 });
 
+// ─── GET /ops/failures ─────────────────────────────────────────────────────
+
+export const opsFailuresQuerySchema = z.object({
+  rail: optionalQueryString(
+    "Only failures on this rail. A bounded vocabulary, so an unknown value is a " +
+      "400 rather than a silent empty page.",
+  ).openapi({ example: "offramp" }),
+  kind: optionalQueryString(
+    "Only failures of this kind. Likewise bounded — an unknown value is a 400.",
+  ).openapi({ example: "payout_rejected" }),
+  limit: optionalQueryInt({
+    min: 1,
+    max: 200,
+    description: "Page size. Defaults to 50 and is capped at 200; this is a page, not an export.",
+  }),
+});
+
+/** One money-affecting failure, as an operator reads it. */
+const moneyFailureSchema = z.object({
+  network: z.string().openapi({ example: "testnet" }),
+  rail: z.string().openapi({
+    description: "Which rail failed: offramp, onramp, bill, or unknown.",
+    example: "offramp",
+  }),
+  kind: z.string().openapi({
+    description: "What kind of failure: payout_rejected, order_failed, or reconcile_failed.",
+    example: "payout_rejected",
+  }),
+  orderId: z.string().nullable().openapi({
+    description: "The provider's order id. Null only when no order had been identified yet.",
+  }),
+  publicId: z.string().nullable().openapi({
+    description: "Our client-facing order id, when the order had one (cash-out orders do).",
+  }),
+  providerCode: z.string().nullable().openapi({
+    description:
+      "The provider's status or error code, verbatim. Never a raw provider message: " +
+      "that is unbounded prose and may carry personal data.",
+  }),
+  message: z.string().openapi({
+    description:
+      "What failed, in operator-facing words. Fixed strings or the provider's status " +
+      "vocabulary; never a NIN, bank details or an amount.",
+  }),
+  occurrences: z.number().int().openapi({
+    description:
+      "How many times this failure has been observed. A webhook redelivery or status " +
+      "poll of the same failed order increments this instead of adding a row.",
+  }),
+  firstSeenAt: z.string().datetime({ offset: true }),
+  lastSeenAt: z.string().datetime({ offset: true }),
+});
+
+export const opsFailuresResponseSchema = z.object({
+  failures: z.array(moneyFailureSchema).openapi({ description: "Recent failures, newest first." }),
+  limit: z.number().int().openapi({ description: "The page size actually applied, after capping." }),
+});
+
 export const ngnCustomerStatusQuerySchema = z.object({
   customerRef: z.string().openapi({
     description:
@@ -906,6 +964,26 @@ export const ngnCustomerStatusResponseSchema = z.object({
   status: z.string().optional(),
 });
 
+export const ngnDataBundlesQuerySchema = z.object({
+  provider: z.string().optional().openapi({
+    description: "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+    example: "MTN",
+  }),
+});
 
+export const ngnDataBundleSchema = z.object({
+  provider: z.string().openapi({ example: "MTN" }),
+  code: z.string().openapi({
+    description:
+      "Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.",
+    example: "mtn-1gb-30d",
+  }),
+  label: z.string().openapi({ example: "1 GB / 30 days" }),
+  megabytes: z.number().int(),
+  validityDays: z.number().int(),
+  amountNgn: z.number().openapi({ description: "Price in naira." }),
+});
 
-
+export const ngnDataBundlesResponseSchema = z.object({
+  bundles: z.array(ngnDataBundleSchema),
+});

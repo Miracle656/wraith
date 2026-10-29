@@ -9,7 +9,7 @@
  * hand, so the arithmetic is asserted instead.
  */
 
-import { LinqError, retryOnProviderFailure } from "../http";
+import { LinqError, retryOnProviderFailure, TOTAL_BUDGET_MS } from "../http";
 
 describe("retryOnProviderFailure", () => {
   const serverError = () => new LinqError("Wallet generation failed", 500);
@@ -60,6 +60,43 @@ describe("retryOnProviderFailure", () => {
       retryOnProviderFailure(request, 1, Date.now() + 30_000),
     ).resolves.toBe("created");
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("proves that retry plus wait cannot exceed the deadline", async () => {
+    const request = jest.fn(async () => {
+      throw serverError();
+    });
+
+    const now = Date.now();
+    const delayMs = 1_500;
+    // Exactly at or beyond the deadline after delayMs: skips retry
+    await expect(retryOnProviderFailure(request, delayMs, now + delayMs)).rejects.toThrow(
+      "Wallet generation failed",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // If wait finishes strictly before the deadline, it is allowed to retry
+    let attempt = 0;
+    const allowedRequest = jest.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw serverError();
+      return "created";
+    });
+    await expect(
+      retryOnProviderFailure(allowedRequest, delayMs, now + delayMs + 500),
+    ).resolves.toBe("created");
+    expect(allowedRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("pins the default budget, which bounds a call made without a deadline", () => {
+    // linqCall does `options.deadline ?? Date.now() + TOTAL_BUDGET_MS`, so this
+    // constant is what stops a call with no deadline retrying open-endedly.
+    //
+    // This asserts the value, not the wiring — it catches the number being
+    // edited, not the `??` being removed. The behaviour itself is covered by
+    // the deadline tests above, which drive retryOnProviderFailure directly.
+    expect(TOTAL_BUDGET_MS).toBe(35_000);
+    expect(Number.isFinite(TOTAL_BUDGET_MS)).toBe(true);
   });
 
   it("surfaces a non-Linq error untouched", async () => {

@@ -634,6 +634,81 @@
         }
       }
     },
+    "/ngn/bills/data-bundles": {
+      "get": {
+        "summary": "Data bundle catalogue",
+        "description": "Read-only list of the data bundles a `data` bill can buy, optionally filtered by provider. Data is sold as catalogue items rather than arbitrary amounts, so the client picks one of these. Cached for five minutes.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+              "example": "MTN"
+            },
+            "required": false,
+            "description": "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+            "name": "provider",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bundles": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "provider": {
+                            "type": "string",
+                            "example": "MTN"
+                          },
+                          "code": {
+                            "type": "string",
+                            "description": "Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.",
+                            "example": "mtn-1gb-30d"
+                          },
+                          "label": {
+                            "type": "string",
+                            "example": "1 GB / 30 days"
+                          },
+                          "megabytes": {
+                            "type": "integer"
+                          },
+                          "validityDays": {
+                            "type": "integer"
+                          },
+                          "amountNgn": {
+                            "type": "number",
+                            "description": "Price in naira."
+                          }
+                        },
+                        "required": [
+                          "provider",
+                          "code",
+                          "label",
+                          "megabytes",
+                          "validityDays",
+                          "amountNgn"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "bundles"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "summary": "Prometheus metrics",
@@ -4988,6 +5063,228 @@
                   "required": [
                     "enabled",
                     "fees"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ops/failures": {
+      "get": {
+        "summary": "Recent money-affecting failures (operator view)",
+        "description": "Internal operator endpoint, not part of the public data API. Lists the durable records of money-affecting failures — a rejected payout, an order that ended failed after the user paid, a webhook reconciliation that gave up — so an operator can answer \"what broke today\" without a log search or database access. Ordinary validation errors are never recorded here. Requires `Authorization: Bearer <OPS_TOKEN>`; answers 503 when the deployment has no token configured, and 401 for a missing or wrong one. Rows name the rail, the order and what failed, and never carry a NIN.",
+        "x-internal": true,
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Only failures on this rail. A bounded vocabulary, so an unknown value is a 400 rather than a silent empty page.",
+              "example": "offramp"
+            },
+            "required": false,
+            "description": "Only failures on this rail. A bounded vocabulary, so an unknown value is a 400 rather than a silent empty page.",
+            "name": "rail",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Only failures of this kind. Likewise bounded — an unknown value is a 400.",
+              "example": "payout_rejected"
+            },
+            "required": false,
+            "description": "Only failures of this kind. Likewise bounded — an unknown value is a 400.",
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "description": "Page size. Defaults to 50 and is capped at 200; this is a page, not an export."
+            },
+            "required": false,
+            "description": "Page size. Defaults to 50 and is capped at 200; this is a page, not an export.",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "failures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "network": {
+                            "type": "string",
+                            "example": "testnet"
+                          },
+                          "rail": {
+                            "type": "string",
+                            "description": "Which rail failed: offramp, onramp, bill, or unknown.",
+                            "example": "offramp"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "description": "What kind of failure: payout_rejected, order_failed, or reconcile_failed.",
+                            "example": "payout_rejected"
+                          },
+                          "orderId": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "The provider's order id. Null only when no order had been identified yet."
+                          },
+                          "publicId": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "Our client-facing order id, when the order had one (cash-out orders do)."
+                          },
+                          "providerCode": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "The provider's status or error code, verbatim. Never a raw provider message: that is unbounded prose and may carry personal data."
+                          },
+                          "message": {
+                            "type": "string",
+                            "description": "What failed, in operator-facing words. Fixed strings or the provider's status vocabulary; never a NIN, bank details or an amount."
+                          },
+                          "occurrences": {
+                            "type": "integer",
+                            "description": "How many times this failure has been observed. A webhook redelivery or status poll of the same failed order increments this instead of adding a row."
+                          },
+                          "firstSeenAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "lastSeenAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "network",
+                          "rail",
+                          "kind",
+                          "orderId",
+                          "publicId",
+                          "providerCode",
+                          "message",
+                          "occurrences",
+                          "firstSeenAt",
+                          "lastSeenAt"
+                        ]
+                      },
+                      "description": "Recent failures, newest first."
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "The page size actually applied, after capping."
+                    }
+                  },
+                  "required": [
+                    "failures",
+                    "limit"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong operator token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Ops endpoints are not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
                   ]
                 }
               }

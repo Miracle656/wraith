@@ -132,6 +132,23 @@ export const httpRequestDurationSeconds = new Histogram({
 });
 
 /**
+ * Total payment-provider calls by endpoint path and outcome.
+ *
+ * Every naira operation is an HTTP call to Linq through src/linq/http.ts.
+ * This counter is incremented inside `linqCall` so no rail can forget to do it.
+ *
+ * Labels are bounded:
+ *  - `endpoint`: the normalized endpoint path (e.g. "/b2b/offramp", "/b2b/status")
+ *  - `outcome`: one of "success", "4xx", "5xx", "429", or "timeout"
+ */
+export const providerCallsTotal = new Counter({
+  name: "provider_calls_total",
+  help: "Total payment-provider calls by endpoint path and outcome",
+  labelNames: ["endpoint", "outcome"] as const,
+  registers: [registry],
+});
+
+/**
  * Time spent inside a payment-provider call, separately from the request.
  *
  * `http_request_duration_seconds` says a request took twelve seconds; this
@@ -153,6 +170,59 @@ export const providerRequestDurationSeconds = new Histogram({
   help: "Time spent inside payment-provider calls, by provider, operation and outcome",
   labelNames: ["provider", "operation", "outcome"] as const,
   buckets: LATENCY_BUCKETS_SECONDS,
+  registers: [registry],
+});
+
+/**
+ * A provider 429, by operation and how far it got.
+ *
+ * All Veil users share one Linq key, and it is rate limited. The retry in
+ * src/linq/http.ts has always recognised a 429 and waited, but a 429 left no
+ * trace of its own: `provider_request_duration_seconds` folds it into the
+ * generic `outcome="error"` pile, so "approaching the shared key's ceiling"
+ * was indistinguishable from "the provider is flaky" — and nobody knew how
+ * often it happened. The ceiling is the kind of thing that degrades slowly and
+ * then fails everyone at once, so its 429s are counted here, separately from
+ * every other failure.
+ *
+ * `disposition` is the difference between a warning and an incident:
+ *
+ *  - `absorbed` — our rate-limit retry waited and the call went on. Nobody
+ *    heard about it; a rising rate is the early warning that the shared key is
+ *    nearing its limit.
+ *  - `surfaced` — no retry was taken (or none was left) and the 429 reached
+ *    the caller. Every one of these is a person who was told the service is
+ *    busy.
+ *
+ * Labels are bounded by construction: `provider` is "linq", `operation` is a
+ * `LinqOperation` constant (the finite endpoint vocabulary), and `disposition`
+ * is one of two words. Never an order id, a customer reference, an amount or
+ * a URL — an unbounded label makes /metrics grow until it cannot be scraped.
+ */
+export const providerRateLimitTotal = new Counter({
+  name: "provider_rate_limit_total",
+  help: "Provider 429 responses, by provider, operation, and whether our retry absorbed them or the caller saw them",
+  labelNames: ["provider", "operation", "disposition"] as const,
+  registers: [registry],
+});
+
+/**
+ * The wait a provider 429 asked us to take, in seconds.
+ *
+ * Recorded only when the provider sends `Retry-After` — a 429 without one is
+ * not counted here. The value is what the provider asked for, not what we
+ * slept: our own wait is capped (`MAX_RETRY_DELAY_MS` in src/linq/http.ts) but
+ * the ask is not, and the gap between the two is how far over its own limit
+ * the provider knows itself to be. A thirty-second ask is not a blip.
+ *
+ * Labelled by provider and operation only. The wait is the datum, and a
+ * histogram keeps it out of the label set.
+ */
+export const providerRateLimitWaitSeconds = new Histogram({
+  name: "provider_rate_limit_wait_seconds",
+  help: "Waits providers asked for on a 429, in seconds, by provider and operation",
+  labelNames: ["provider", "operation"] as const,
+  buckets: [0.5, 1, 2, 5, 10, 30, 60],
   registers: [registry],
 });
 
@@ -307,3 +377,150 @@ export const ordersCreatedTotal = new Counter({
   labelNames: ["rail"] as const,
   registers: [registry],
 });
+
+/**
+ * Orders that reached a terminal state, by rail and terminal status.
+ *
+ * A transition counter, not a poll counter: callers record it only when an
+ * order moves from a non-terminal status to a terminal one, so a wallet polling
+ * a finished order and a redelivered webhook do not count it twice.
+ */
+export const ordersTerminalTotal = new Counter({
+  name: "orders_terminal_total",
+  help: "Orders that reached a terminal state, by rail and terminal status",
+  labelNames: ["rail", "status"] as const,
+  registers: [registry],
+});
+
+/** Record one successfully created order. */
+export function recordOrderCreated(rail: OrderRail): void {
+  ordersCreatedTotal.inc({ rail });
+}
+
+/** Record one non-terminal → terminal transition. */
+export function recordOrderTerminal(rail: OrderRail, status: string): void {
+  const terminal = terminalStatusOf(status);
+  if (!terminal) return;
+  ordersTerminalTotal.inc({ rail, status: terminal });
+}
+
+/**
+ * Money-affecting failures: failed orders, rejected payouts, and webhook
+ * events reconciliation gave up on.
+ *
+ * The machine-readable counterpart to the `MoneyFailure` table: the row
+ * answers "what broke" to a human, this answers "is it still happening" to a
+ * scrape. Labels are bounded by construction — `rail` from
+ * MONEY_FAILURE_RAILS, `kind` from MONEY_FAILURE_KINDS, `network` from the
+ * configured chains — and never an order id, a customer reference, an amount
+ * or a provider message: an unbounded label makes /metrics grow until it
+ * cannot be scraped, which is worst exactly when failures are piling up.
+ */
+export const moneyFailuresTotal = new Counter({
+  name: "money_failures_total",
+  help:
+    "Money-affecting failures recorded (failed orders, rejected payouts, reconciliation give-ups)",
+  labelNames: ["network", "rail", "kind"] as const,
+  registers: [registry],
+});
+
+/**
+ * The highest ledger the indexer has committed, per network.
+ *
+ * A gauge, not a counter: it is a position, and comparing it against the chain
+ * tip is how lag is measured.
+ */
+export const lastIndexedLedger = new Gauge({
+  name: "last_indexed_ledger",
+  help: "Highest ledger sequence committed by the indexer, per network",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
+/**
+ * Wall-clock duration of instrumented database operations.
+ *
+ * Buckets run from 5ms to 10s: below 5ms nothing here is worth alerting on,
+ * and past 10s the request has already failed for whatever is waiting on it.
+ */
+export const dbQueryDurationSeconds = new Histogram({
+  name: "db_query_duration_seconds",
+  help: "Duration of database operations, by operation name",
+  labelNames: ["operation"] as const,
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  registers: [registry],
+});
+
+/**
+ * Time `fn` into {@link dbQueryDurationSeconds} under `operation`.
+ *
+ * Failures are timed too — a query that takes eight seconds and then throws is
+ * exactly the one worth seeing, and dropping it would make the histogram
+ * describe only the healthy path.
+ */
+export async function observeDbQuery<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+  const end = dbQueryDurationSeconds.startTimer({ operation });
+  try {
+    return await fn();
+  } finally {
+    end();
+  }
+}
+
+/** Record one failed RPC attempt. `outcome` distinguishes a retry from a give-up. */
+export function recordRpcError(outcome: "retry" | "exhausted"): void {
+  rpcErrorsTotal.inc({ outcome });
+}
+
+/**
+ * Record one ledger abandoned after a genuine XDR decode failure.
+ *
+ * Called only where a ledger is actually given up on, never for the bisection
+ * that looks for it — a bisection is a search, and counting it would inflate the
+ * count by the depth of the search.
+ */
+export function recordSkippedLedger(network: Network): void {
+  ledgersSkippedTotal.inc({ network });
+}
+
+/**
+ * Fee quotes whose fee exceeded `VEIL_FEE_ALARM_PERCENT` of the amount priced.
+ *
+ * The fee is policy — percent, floor and cap — so a misconfiguration
+ * overcharges every user at once, and until now the only way to notice was
+ * reading the treasury's history on a block explorer. Alert on any increase.
+ * Labelled by asset and network only: never an amount, never an address.
+ */
+export const feeQuoteAlarmsTotal = new Counter({
+  name: "veil_fee_quote_alarms_total",
+  help: "Fee quotes whose fee exceeded VEIL_FEE_ALARM_PERCENT of the amount priced",
+  labelNames: ["network", "asset"] as const,
+  registers: [registry],
+});
+
+/**
+ * Fee quotes that could not be written to the ledger.
+ *
+ * The quote itself still succeeds — the user is mid-payment — so a failed
+ * write is otherwise silent, and a ledger with gaps reports totals that are
+ * quietly too low. Alert on any increase.
+ */
+export const feeQuoteRecordFailuresTotal = new Counter({
+  name: "veil_fee_quote_record_failures_total",
+  help: "Fee quotes that could not be written to the fee ledger",
+  labelNames: ["network"] as const,
+  registers: [registry],
+});
+
+/** Serialize the registry in Prometheus text exposition format. */
+export function renderMetrics(): Promise<string> {
+  return registry.metrics();
+}
+
+/** The content type Prometheus expects on a scrape response. */
+export const metricsContentType = registry.contentType;
+
+/** Test-only: clears every recorded sample without unregistering the metrics. */
+export function _resetMetrics(): void {
+  registry.resetMetrics();
+}

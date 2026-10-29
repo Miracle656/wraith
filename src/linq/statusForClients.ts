@@ -25,3 +25,32 @@ export function statusForClients(status: string): string {
   }
   return status;
 }
+
+/**
+ * The same translation for the **bills** rail, which speaks a second dialect.
+ *
+ * The onramp and offramp screens end on "settled", "disbursed", "failed" or
+ * "timeout" (above). The airtime/electricity screens do not: they end on
+ * `/complete|success|delivered/` for a win and `/fail|refund|revers|cancel/`
+ * for a loss. Linq ends a vend as "settled" or "disbursed" — a word the bills
+ * screen has no case for — so a top-up that was delivered and paid for left the
+ * app on "Waiting for the top-up…" forever, with no reference on screen and the
+ * poll's only record of its own failure a `console.warn` nobody can read.
+ *
+ * So a successful ending is sent carrying both dialects: the provider's own
+ * word first, then "(completed)", which the bills screen recognises. The loss
+ * cases already work — `statusForClients` appends "(failed)" for a refund,
+ * cancel or reversal, and "fail" is in the bills screen's vocabulary too.
+ *
+ * Installed APKs cannot be rebuilt on demand, which is why this lives on the
+ * server. `src/api/ngn.ts` also returns the raw provider value as
+ * `providerStatus`, so nothing is lost for a newer client or a human reading it.
+ */
+export function billStatusForClients(status: string): string {
+  const s = status.toLowerCase();
+  const alreadyUnderstood = /complete|success|deliver/.test(s);
+  if (!alreadyUnderstood && /settled|disbursed/.test(s)) {
+    return `${status} (completed)`;
+  }
+  return statusForClients(status);
+}

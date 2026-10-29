@@ -240,6 +240,24 @@ describe("destructive operations cannot cross networks", () => {
     await db.pruneOldTransfers("testnet");
     expect(lastWhere("tokenTransfer", "deleteMany").network).toBe("testnet");
   });
+
+  // The outage this guards: retention pruned `tokenTransfer` alone while the
+  // indexer wrote to four tables, so `HostFnLog` grew to 1,776 MB across 3.64
+  // million rows and filled the shared Supabase disk. The project went
+  // read-only, which stopped writes for wraith and Lens together, and clearing
+  // it meant truncating by hand. The same four tables `rollbackToLedger`
+  // enumerates must be pruned, or an unpruned one silently becomes the next
+  // 1.7 GB.
+  it("pruneOldTransfers prunes every indexed table, not just transfers", async () => {
+    await db.pruneOldTransfers("testnet");
+    for (const model of ["tokenTransfer", "nftTransfer", "hostFnLog", "lpShareTransfer"]) {
+      const where = lastWhere(model, "deleteMany");
+      expect(where.network).toBe("testnet");
+      // Pruning is by age, never by ledger: a quiet network's sequence number
+      // says nothing about how old a row is.
+      expect(where.ledgerClosedAt).toHaveProperty("lt");
+    }
+  });
 });
 
 describe("writes stamp the network explicitly", () => {

@@ -382,6 +382,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ngn/bills/data-bundles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data bundle catalogue
+         * @description Read-only list of the data bundles a `data` bill can buy, optionally filtered by provider. Data is sold as catalogue items rather than arbitrary amounts, so the client picks one of these. Cached for five minutes.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Network to filter by, case-insensitive. Omit it to list every provider's bundles. */
+                    provider?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            bundles: {
+                                /** @example MTN */
+                                provider: string;
+                                /**
+                                 * @description Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.
+                                 * @example mtn-1gb-30d
+                                 */
+                                code: string;
+                                /** @example 1 GB / 30 days */
+                                label: string;
+                                megabytes: number;
+                                validityDays: number;
+                                /** @description Price in naira. */
+                                amountNgn: number;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -2468,6 +2526,139 @@ export interface paths {
                                     max?: string;
                                 };
                             };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent money-affecting failures (operator view)
+         * @description Internal operator endpoint, not part of the public data API. Lists the durable records of money-affecting failures — a rejected payout, an order that ended failed after the user paid, a webhook reconciliation that gave up — so an operator can answer "what broke today" without a log search or database access. Ordinary validation errors are never recorded here. Requires `Authorization: Bearer <OPS_TOKEN>`; answers 503 when the deployment has no token configured, and 401 for a missing or wrong one. Rows name the rail, the order and what failed, and never carry a NIN.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Only failures on this rail. A bounded vocabulary, so an unknown value is a 400 rather than a silent empty page. */
+                    rail?: string | null;
+                    /** @description Only failures of this kind. Likewise bounded — an unknown value is a 400. */
+                    kind?: string | null;
+                    /** @description Page size. Defaults to 50 and is capped at 200; this is a page, not an export. */
+                    limit?: number | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Recent failures, newest first. */
+                            failures: {
+                                /** @example testnet */
+                                network: string;
+                                /**
+                                 * @description Which rail failed: offramp, onramp, bill, or unknown.
+                                 * @example offramp
+                                 */
+                                rail: string;
+                                /**
+                                 * @description What kind of failure: payout_rejected, order_failed, or reconcile_failed.
+                                 * @example payout_rejected
+                                 */
+                                kind: string;
+                                /** @description The provider's order id. Null only when no order had been identified yet. */
+                                orderId: string | null;
+                                /** @description Our client-facing order id, when the order had one (cash-out orders do). */
+                                publicId: string | null;
+                                /** @description The provider's status or error code, verbatim. Never a raw provider message: that is unbounded prose and may carry personal data. */
+                                providerCode: string | null;
+                                /** @description What failed, in operator-facing words. Fixed strings or the provider's status vocabulary; never a NIN, bank details or an amount. */
+                                message: string;
+                                /** @description How many times this failure has been observed. A webhook redelivery or status poll of the same failed order increments this instead of adding a row. */
+                                occurrences: number;
+                                /** Format: date-time */
+                                firstSeenAt: string;
+                                /** Format: date-time */
+                                lastSeenAt: string;
+                            }[];
+                            /** @description The page size actually applied, after capping. */
+                            limit: number;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Missing or wrong operator token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Ops endpoints are not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };

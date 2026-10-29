@@ -58,10 +58,14 @@ import {
   railErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
+  ngnDataBundlesQuerySchema,
+  ngnDataBundlesResponseSchema,
   feeReportQuerySchema,
   feeReportResponseSchema,
   feesQuerySchema,
   feesResponseSchema,
+  opsFailuresQuerySchema,
+  opsFailuresResponseSchema,
 } from "./schemas";
 
 const registry = new OpenAPIRegistry();
@@ -126,6 +130,23 @@ registry.registerPath({
     502: { description: "Provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
     503: { description: "Naira rails not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
     504: { description: "Provider did not respond in time", content: { "application/json": { schema: railErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/ngn/bills/data-bundles",
+  summary: "Data bundle catalogue",
+  description:
+    "Read-only list of the data bundles a `data` bill can buy, optionally filtered by " +
+    "provider. Data is sold as catalogue items rather than arbitrary amounts, so the " +
+    "client picks one of these. Cached for five minutes.",
+  request: { query: ngnDataBundlesQuerySchema },
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: ngnDataBundlesResponseSchema } },
+    },
   },
 });
 
@@ -427,6 +448,38 @@ registry.registerPath({
   request: { query: feesQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: feesResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/ops/failures",
+  summary: "Recent money-affecting failures (operator view)",
+  description:
+    "Internal operator endpoint, not part of the public data API. Lists the durable " +
+    "records of money-affecting failures — a rejected payout, an order that ended " +
+    "failed after the user paid, a webhook reconciliation that gave up — so an " +
+    "operator can answer \"what broke today\" without a log search or database " +
+    "access. Ordinary validation errors are never recorded here. Requires " +
+    "`Authorization: Bearer <OPS_TOKEN>`; answers 503 when the deployment has no " +
+    "token configured, and 401 for a missing or wrong one. Rows name the rail, the " +
+    "order and what failed, and never carry a NIN.",
+  "x-internal": true,
+  request: { query: opsFailuresQuerySchema },
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: opsFailuresResponseSchema } },
+    },
+    401: {
+      description: "Missing or wrong operator token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    503: {
+      description: "Ops endpoints are not configured on this deployment",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    ...commonErrorResponses,
   },
 });
 

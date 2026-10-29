@@ -38,6 +38,7 @@
  * before anything else.
  */
 
+import { billStatusForClients } from "../linq/statusForClients";
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
@@ -48,7 +49,7 @@ import {
   terminalStatusOf,
   type OrderRail,
 } from "../metrics";
-import { LinqError } from "../linq/client";
+import { LinqError, getRate as getOfframpNgnPerUsd } from "../linq/client";
 import { sendError, sendLinqError } from "./errors";
 import { usdPerCoin } from "../linq/coinPrice";
 import {
@@ -61,7 +62,7 @@ import {
   submitCustomerKyc,
   type OnrampCoin,
 } from "../linq/onramp";
-import { getBillStatus, payBill, type BillCategory, type BillCoin } from "../linq/bills";
+import { getBillStatus, listDataBundles, payBill, type BillCategory, type BillCoin } from "../linq/bills";
 import { findNgnOrder, recordNgnOrder } from "../linq/ngnOrders";
 
 function isConfigured(): boolean {
@@ -192,7 +193,7 @@ async function rejectMispricedRate(
 
   let expected: number;
   try {
-    expected = await ngnPerCoin(coin);
+    expected = await ngnPerCoin(coin, "onramp");
   } catch (err) {
     sendLinqError(res, err);
     return true;
@@ -234,37 +235,75 @@ async function rejectMispricedRate(
  */
 const NGN_RATE_CACHE_MS = 120_000;
 
-let ngnRateCache: { rate: number; at: number } | null = null;
-let ngnRateInFlight: Promise<number> | null = null;
+/**
+ * Which side of the provider's book a quote comes from.
+ *
+ * Linq prices the two rails separately and the gap is real money: measured on
+ * 2026-10-27, `/onramprate` said 1,478.55 naira to the dollar while a cash-out
+ * that settled the same day paid 1,371.58 — 7.2% apart. Buying naira and
+ * selling into naira are opposite trades, so there is no single "the rate".
+ *
+ * This is a required argument rather than one with a default because a default
+ * here is the bug it exists to prevent: the offramp quoted the onramp's number
+ * for weeks without anything looking wrong, since a plausible rate for the
+ * wrong side of the book is indistinguishable from the right one until a payout
+ * lands short.
+ */
+export type RateRail = "onramp" | "offramp";
 
-async function ngnPerUsdCached(): Promise<number> {
+/** Naira per dollar, straight from the provider, for one side of the book. */
+const ngnPerUsdSource: Record<RateRail, () => Promise<number>> = {
+  onramp: getOnrampRate,
+  // `/b2b/rate` answers with an object; `/onramprate` answers with a bare
+  // number. Both are naira per dollar.
+  offramp: async () => (await getOfframpNgnPerUsd()).rate,
+};
+
+interface NgnRateSlot {
+  cache: { rate: number; at: number } | null;
+  inFlight: Promise<number> | null;
+}
+
+/**
+ * One cache per rail. Shared slots would let a buy quote answer a sell request
+ * for up to two minutes, which is the same wrong-side error with a timer on it.
+ */
+const ngnRateSlots: Record<RateRail, NgnRateSlot> = {
+  onramp: { cache: null, inFlight: null },
+  offramp: { cache: null, inFlight: null },
+};
+
+async function ngnPerUsdCached(rail: RateRail): Promise<number> {
+  const slot = ngnRateSlots[rail];
   const now = Date.now();
-  if (ngnRateCache && now - ngnRateCache.at < NGN_RATE_CACHE_MS) return ngnRateCache.rate;
+  if (slot.cache && now - slot.cache.at < NGN_RATE_CACHE_MS) return slot.cache.rate;
 
   // One fetch for a burst, not one per request. Without this a cold cache and
   // five testers opening the app together is five calls to an endpoint that
   // allows one — the exact moment the cache is most needed is the moment it
   // would otherwise be empty for all of them.
-  if (ngnRateInFlight) return ngnRateInFlight;
+  if (slot.inFlight) return slot.inFlight;
 
-  ngnRateInFlight = getOnrampRate()
+  slot.inFlight = ngnPerUsdSource[rail]()
     .then((rate) => {
-      ngnRateCache = { rate, at: Date.now() };
+      slot.cache = { rate, at: Date.now() };
       return rate;
     })
     .finally(() => {
       // Failures are not cached: the next caller should try again rather than
       // inherit an error for two minutes.
-      ngnRateInFlight = null;
+      slot.inFlight = null;
     });
 
-  return ngnRateInFlight;
+  return slot.inFlight;
 }
 
-/** Test seam. Production never clears this; the TTL does. */
+/** Test seam. Production never clears these; the TTL does. */
 export function __clearNgnRateCache(): void {
-  ngnRateCache = null;
-  ngnRateInFlight = null;
+  for (const slot of Object.values(ngnRateSlots)) {
+    slot.cache = null;
+    slot.inFlight = null;
+  }
 }
 
 /**
@@ -274,11 +313,17 @@ export function __clearNgnRateCache(): void {
  * amount on both rails is denominated this way, so the conversion happens in
  * exactly one place and the rate we quote is the rate we send Linq.
  *
+ * `rail` picks the side of the book and has no default. Getting the *units*
+ * right is not the same as getting the *side* right, and the two failures look
+ * identical on screen: an earlier fix here correctly stopped dividing naira by
+ * a dollar rate for XLM, but routed the offramp through the onramp's price
+ * while doing it, so cash-out quoted about 7% above what it paid.
+ *
  * Exported so the offramp rate endpoint can reuse the same price path rather
  * than opening a second route to the provider.
  */
-export async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
-  const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
+export async function ngnPerCoin(coin: OnrampCoin, rail: RateRail): Promise<number> {
+  const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(rail), usdPerCoin(coin)]);
   const rate = ngnPerUsd * usd;
   if (!Number.isFinite(rate) || rate <= 0) {
     throw new LinqError("Could not price that asset right now", 502, "provider_error");
@@ -724,7 +769,7 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin) });
+      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin, "onramp") });
     } catch (err) {
       sendLinqError(res, err);
     }
@@ -817,6 +862,13 @@ export function createNgnRouter(
       }
       sendLinqError(res, err);
     }
+  });
+
+  // Data bundles are catalogue items, not arbitrary airtime amounts.
+  router.get("/bills/data-bundles", async (req: Request, res: Response) => {
+    const provider = typeof req.query.provider === "string" ? req.query.provider : undefined;
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.json({ bundles: listDataBundles(provider) });
   });
 
   // ── Bills: paid out of the wallet ──────────────────────────────────────────
@@ -919,9 +971,15 @@ export function createNgnRouter(
         customerRef,
         rail: "bills",
         kind: "bill",
+        // Reconcile on the provider's own word, never the translated one: the
+        // ledger and the metrics record what Linq said.
         status: live.status,
       });
-      res.json(live);
+      // Translated for the client, raw value kept alongside it. The bills
+      // screen ends on /complete|success|delivered/ and Linq ends a vend as
+      // "settled"/"disbursed", so the untranslated value left a delivered
+      // top-up spinning forever. See billStatusForClients.
+      res.json({ ...live, status: billStatusForClients(live.status), providerStatus: live.status });
     } catch (err) {
       if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;

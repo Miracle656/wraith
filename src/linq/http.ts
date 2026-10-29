@@ -25,7 +25,12 @@
  * back.
  */
 
-import { providerRequestDurationSeconds } from "../metrics";
+import {
+  providerCallsTotal,
+  providerRateLimitTotal,
+  providerRateLimitWaitSeconds,
+  providerRequestDurationSeconds,
+} from "../metrics";
 import { recordDependencyOutcome } from "../dependencies";
 
 const DEFAULT_BASE_URL = "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
@@ -148,8 +153,53 @@ export type LinqOperation =
   | "bill_pay"
   | "bill_status";
 
-/** How a provider call ended, for the latency histogram's `outcome` label. */
-export type ProviderCallOutcome = "success" | "error" | "timeout";
+/** How a provider call ended, for `provider_calls_total` and latency metrics. */
+export type ProviderCallOutcome = "success" | "4xx" | "5xx" | "429" | "timeout";
+
+/**
+ * Normalise a provider path into a bounded endpoint path label.
+ *
+ * Drops query strings (e.g. `/b2b/status?id=...` -> `/b2b/status`) and ensures
+ * leading slash, so metrics labels stay strictly bounded.
+ */
+export function normalizeEndpointPath(path: string): string {
+  const queryIndex = path.indexOf("?");
+  const clean = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  const withSlash = clean.startsWith("/") ? clean : `/${clean}`;
+
+  // Collapse anything that looks like an identifier. Every Linq path today is
+  // a static literal ("/b2b/onramp", "/b2b/bills/status"), so this changes
+  // nothing now — it is here so that the first path carrying an order id or a
+  // customer reference cannot quietly turn this label into one series per
+  // request. An unbounded label does not skew /metrics, it grows it until the
+  // scrape fails, which takes monitoring down at the worst possible moment.
+  return withSlash
+    .split("/")
+    .map(segment =>
+      segment.length > 0 &&
+      (/^\d+$/.test(segment) || /^[0-9a-f-]{16,}$/i.test(segment) || segment.length > 24)
+        ? ":id"
+        : segment,
+    )
+    .join("/");
+}
+
+/**
+ * Classify a failure into one of the bounded outcome categories:
+ * - "timeout": timeout or abort
+ * - "429": rate limited
+ * - "4xx": client-caused 4xx error (e.g. 400 bad request)
+ * - "5xx": provider-caused 5xx error or connection failure
+ */
+export function classifyFailureOutcome(err: unknown): "4xx" | "5xx" | "429" | "timeout" {
+  if (linqTransport(err) === "timeout") return "timeout";
+  if (err instanceof LinqError) {
+    if (err.status === 429) return "429";
+    if (err.status >= 400 && err.status < 500) return "4xx";
+    if (err.status >= 500) return "5xx";
+  }
+  return "5xx";
+}
 
 export interface LinqCallOptions {
   /**
@@ -413,18 +463,49 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
         // late in a shared budget gets what is left of it, not a fresh 15s.
         return await attempt<T>(path, options, Math.min(perAttempt, remaining));
       } catch (err) {
-        if (!(err instanceof LinqError) || err.status !== 429 || tried >= retries) throw err;
+        if (!(err instanceof LinqError) || err.status !== 429) throw err;
+
+        // A 429 is counted the moment it arrives, before the retry decision:
+        // the wait the provider asked for is a fact whether or not we can
+        // honour it, and "how often does this happen" was the question nobody
+        // could answer. Recorded only when the provider actually said. (#270)
+        if (err.retryAfterSeconds !== undefined) {
+          providerRateLimitWaitSeconds.observe(
+            { provider: "linq", operation: options.operation },
+            err.retryAfterSeconds,
+          );
+        }
+
         const wait =
           (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (tried + 1), MAX_RETRY_DELAY_MS);
         // A wait that would end after the deadline buys nothing; surface the 429.
-        if (Date.now() + wait >= deadline) throw err;
+        if (tried >= retries || Date.now() + wait >= deadline) {
+          // This 429 reached the caller — an incident, not a warning. (#270)
+          providerRateLimitTotal.inc({
+            provider: "linq",
+            operation: options.operation,
+            disposition: "surfaced",
+          });
+          throw err;
+        }
+        // Our retry is about to absorb it: the caller will never hear of this
+        // 429, which makes the absorbed/surfaced split the warning/incident
+        // split an operator alerts on.
+        providerRateLimitTotal.inc({
+          provider: "linq",
+          operation: options.operation,
+          disposition: "absorbed",
+        });
         await sleep(wait);
       }
     }
   } catch (err) {
-    outcome = linqTransport(err) === "timeout" ? "timeout" : "error";
+    outcome = classifyFailureOutcome(err);
     throw err;
   } finally {
+    const endpoint = normalizeEndpointPath(path);
+    providerCallsTotal.inc({ endpoint, outcome });
+
     // Observed on failure too. A call that spent the full 35 seconds and then
     // failed is the one an operator most needs to see, and dropping it would
     // make this histogram describe only the healthy path.
@@ -442,7 +523,7 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
       "linq",
       outcome === "success",
       Math.round(elapsedMs),
-      outcome === "success" ? undefined : outcome,
+      outcome === "timeout" ? "timeout" : outcome === "success" ? undefined : "error",
     );
   }
 }

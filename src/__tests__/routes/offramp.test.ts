@@ -518,7 +518,7 @@ describe("GET /offramp/rate — naira per coin, not naira per dollar", () => {
     expect(res.body.coin).toBe("xlm");
     expect(res.body.rate).toBeCloseTo(290, 6);
     expect(res.body.indicative).toBe(true);
-    expect(mockNgnPerCoin).toHaveBeenCalledWith("xlm");
+    expect(mockNgnPerCoin).toHaveBeenCalledWith("xlm", "offramp");
   });
 
   it("returns naira per USDC for coin=usdc", async () => {
@@ -527,7 +527,7 @@ describe("GET /offramp/rate — naira per coin, not naira per dollar", () => {
     expect(res.body.coin).toBe("usdc");
     expect(res.body.rate).toBeCloseTo(1655, 6);
     expect(res.body.indicative).toBe(true);
-    expect(mockNgnPerCoin).toHaveBeenCalledWith("usdc");
+    expect(mockNgnPerCoin).toHaveBeenCalledWith("usdc", "offramp");
   });
 
   it("XLM and USDC rates differ — pins that the old dollar rate is gone", async () => {
@@ -540,7 +540,7 @@ describe("GET /offramp/rate — naira per coin, not naira per dollar", () => {
     const res = await rateUrl();
     expect(res.status).toBe(200);
     expect(res.body.rate).toBeCloseTo(1655, 6);
-    expect(mockNgnPerCoin).toHaveBeenCalledWith("usdc");
+    expect(mockNgnPerCoin).toHaveBeenCalledWith("usdc", "offramp");
   });
 
   it("names the coin a coin-less answer is priced for", async () => {

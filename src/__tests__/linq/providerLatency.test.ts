@@ -99,8 +99,8 @@ describe("provider_request_duration_seconds", () => {
     await expect(createOfframpOrder(order("idem-fail-1"))).rejects.toMatchObject({ status: 400 });
 
     const text = await renderMetrics();
-    expect(sample(text, "count", { ...OFFRAMP_ORDER, outcome: "error" })).toBe(1);
-    expect(sample(text, "sum", { ...OFFRAMP_ORDER, outcome: "error" })).toBeGreaterThan(0);
+    expect(sample(text, "count", { ...OFFRAMP_ORDER, outcome: "4xx" })).toBe(1);
+    expect(sample(text, "sum", { ...OFFRAMP_ORDER, outcome: "4xx" })).toBeGreaterThan(0);
   });
 
   it("uses buckets that cover the 35-second provider budget", () => {

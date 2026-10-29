@@ -570,3 +570,61 @@ model FeeQuote {
   @@index([network, alarm, quotedAt])
   @@schema("wraith")
 }
+
+// ─── Money Failures ──────────────────────────────────────────────────────────
+// A durable record of every money-affecting failure: an offramp order that
+// ended failed (the naira payout did not complete), an onramp or bill order
+// that failed after the user paid, or a webhook event asserting money moved
+// that reconciliation gave up on.
+//
+// Deliberately separate from ordinary request errors. A 400 for a malformed
+// bank code is not an incident — nothing moved — and must never land here.
+// This table exists so "what broke today" is answerable by an operator
+// without a log search and without database access (GET /ops/failures).
+//
+// What is deliberately NOT stored: bank details, amounts, wallet addresses,
+// customer references — and never a NIN. The row names the rail, the order
+// and what failed; anything more is personal data this surface does not need.
+model MoneyFailure {
+  id      Int    @id @default(autoincrement())
+  network String @default("testnet")
+
+  // Which rail failed: "offramp" | "onramp" | "bill" | "unknown" (a webhook
+  // event that could not be applied, before any order was identified). A
+  // finite set — it is a metrics label as well as a column.
+  rail String
+  // What kind of failure: "payout_rejected" (offramp order ended failed),
+  // "order_failed" (onramp/bill order ended failed), "reconcile_failed"
+  // (webhook reconciliation gave up). Also a finite set, and also a metrics
+  // label — see moneyFailuresTotal in src/metrics.ts.
+  kind String
+  // The provider's order id. Null only for a failure observed before any
+  // order was identified.
+  orderId String?
+  // Our client-facing order id, when the failure is about an offramp order we
+  // minted one for — an operator can hand it to a support thread without
+  // learning the provider's id vocabulary.
+  publicId String?
+  // The provider's status string or error code, when one came with the
+  // failure. Their vocabulary, stored verbatim like OfframpOrder.status —
+  // never a raw provider message, which is unbounded prose.
+  providerCode String?
+  // What failed, in operator-facing words. Fixed strings written by us or the
+  // provider's own status vocabulary; never personal data.
+  message String
+  // How many times this failure has been observed. A webhook redelivery and a
+  // status poll describing the same failed order increment this rather than
+  // adding a second row: one failed payout is one incident.
+  occurrences Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per (network, kind, order). The webhook path and the status-poll
+  // fallback both describe the same failure, and three rows for one failed
+  // payout is three times the alarm and none of the clarity.
+  @@unique([network, kind, orderId])
+  // "Recent failures", newest first — the only access path.
+  @@index([network, createdAt])
+  @@schema("wraith")
+}

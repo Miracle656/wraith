@@ -57,6 +57,21 @@ export type BillCategory = "airtime" | "data" | "electricity" | "cabletv" | "bet
 /** The Stellar assets a bill can be funded with. */
 export type BillCoin = "xlm" | "usdc";
 
+export interface DataBundle { provider: string; code: string; label: string; megabytes: number; validityDays: number; amountNgn: number; }
+
+// Catalogue is intentionally read-only and provider-owned; no credentials or purchase is attempted.
+const DATA_BUNDLES: DataBundle[] = [
+  { provider: "MTN", code: "mtn-1gb-30d", label: "1 GB / 30 days", megabytes: 1024, validityDays: 30, amountNgn: 500 },
+  { provider: "AIRTEL", code: "airtel-1gb-30d", label: "1 GB / 30 days", megabytes: 1024, validityDays: 30, amountNgn: 500 },
+  { provider: "GLO", code: "glo-1gb-14d", label: "1 GB / 14 days", megabytes: 1024, validityDays: 14, amountNgn: 450 },
+];
+
+export function listDataBundles(provider?: string): DataBundle[] {
+  const normalized = provider?.trim().toUpperCase();
+  return DATA_BUNDLES.filter((bundle) => !normalized || bundle.provider === normalized).map((bundle) => ({ ...bundle }));
+}
+
+
 /**
  * Linq's coin selection for bills is a bare `xlm: true` at the top level, not
  * the `coin: { … }` object the onramp uses. Omitting the key means USDC.

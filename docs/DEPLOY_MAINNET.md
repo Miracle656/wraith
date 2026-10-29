@@ -2,7 +2,7 @@
 
 Deploying Wraith on mainnet requires a more robust infrastructure setup than testnet due to the lack of free public resources and the need for high availability. 
 
-When running both testnet and mainnet indexers, it is recommended to run them side-by-side as separate deployments (with separate databases) rather than combining them, ensuring one network's issues don't impact the other. A single process *can* index both by setting `NETWORKS=testnet,mainnet` — see [DUAL_NETWORK.md](./DUAL_NETWORK.md) for the trade-offs.
+When running both testnet and mainnet indexers, it is recommended to run them side-by-side as separate deployments (with separate databases) rather than combining them, ensuring one network's issues don't impact the other. A single process *can* index both by setting `NETWORKS=testnet,mainnet` — see [DUAL_NETWORK.md](./DUAL_NETWORK.md) for the trade-offs, and [DEPLOYMENT_CONFIGURATIONS.md](./DEPLOYMENT_CONFIGURATIONS.md) for end-to-end documentation of live and standard deployment topologies.
 
 ## 1. Database (Managed Postgres)
 

@@ -31,7 +31,8 @@
 
 import { prisma } from "../db";
 import { recordOrderTerminal, terminalStatusOf } from "../metrics";
-import { resolveEventNetwork } from "./webhook";
+import { isFailureStatus, recordMoneyFailure } from "./moneyFailures";
+import { crossCheckAmountNgn, NGN_SCALE_FACTOR, resolveEventNetwork } from "./webhook";
 
 export type NgnOrderKind = "onramp" | "bill";
 
@@ -196,6 +197,33 @@ export async function reconcileNgnOrder(event: {
   const wasTerminal = terminalStatusOf(existing.status);
   const isTerminal = terminalStatusOf(status);
 
+  // Cross-check the provider's naira figure against the one we created the
+  // order with. This is the only place both numbers exist: the router has the
+  // webhook but not the row, so its band check cannot see a scale error at all
+  // — a 100x drift on a 1,000 naira order lands at 100,000, comfortably inside
+  // the plausible band.
+  //
+  // `amountNGN` is a String column, so it has to be widened before comparison;
+  // handing the raw field over would make the check report "non-numeric" on
+  // every webhook rather than on a real disagreement.
+  //
+  // A disagreement is logged but still persisted, because `settledNGN` records
+  // what the provider says happened and that can legitimately differ from the
+  // quote — an onramp depositor can transfer a little under or over. The one
+  // exception is the exact 100x factor from the 2026-10-14 incident, which no
+  // depositor produces by hand: that figure is refused rather than written,
+  // leaving the quoted amount in place instead of a corrupt settled one.
+  let persistSettledNgn = event.amountNGN != null;
+  if (event.amountNGN != null) {
+    const check = crossCheckAmountNgn(event.amountNGN, Number(existing.amountNGN));
+    if (!check.ok) {
+      console.error(
+        `[linq] amountNGN cross-check failed for order ${event.orderId}: ${check.reason}`,
+      );
+      if (check.factor === NGN_SCALE_FACTOR) persistSettledNgn = false;
+    }
+  }
+
   await prisma.ngnOrder.update({
     where: { network_orderId: { network, orderId: event.orderId } },
     data: {
@@ -203,10 +231,29 @@ export async function reconcileNgnOrder(event: {
       ...(event.amountStableCoin != null
         ? { settledStableCoin: String(event.amountStableCoin) }
         : {}),
-      ...(event.amountNGN != null ? { settledNGN: String(event.amountNGN) } : {}),
+      ...(persistSettledNgn ? { settledNGN: String(event.amountNGN) } : {}),
       ...(event.txHash ? { txHash: event.txHash } : {}),
     },
   });
+
+  // An order that ended failed after the user paid is a money-affecting
+  // failure and is written down as one. This is the case the table exists
+  // for: a biller refusing to vend is invisible to the chain, so without
+  // this record the only thing that ever learns about the failure is a
+  // client that happens to poll. A poll recording the same order hits the
+  // same (network, kind, orderId) row, so webhook plus poll is one incident.
+  if (isFailureStatus(status)) {
+    await recordMoneyFailure({
+      network: existing.network,
+      rail: existing.kind === "bill" ? "bill" : "onramp",
+      kind: "order_failed",
+      orderId: event.orderId,
+      providerCode: status,
+      message:
+        `${existing.kind === "bill" ? "Bill" : "Onramp"} order ended as "${status}" ` +
+        `— the order the user paid for did not complete.`,
+    });
+  }
 
   if (isTerminal && !wasTerminal) {
     recordOrderTerminal(existing.kind === "bill" ? "bills" : "onramp", status);
