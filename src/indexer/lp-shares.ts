@@ -135,7 +135,7 @@ function eventSymbol(raw: RawEvent): string | null {
 /** Decode an Address ScVal to a G…/C… string, or null if it is not an address. */
 function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
   try {
-    if (scVal.switch() !== xdr.ScValType.scvAddress()) return null;
+    if (scVal.arm() !== "address") return null;
     return Address.fromScVal(scVal).toString();
   } catch {
     return null;

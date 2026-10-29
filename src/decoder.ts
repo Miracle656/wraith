@@ -22,7 +22,7 @@ function decode(scVal: StellarSdk.xdr.ScVal): unknown {
  * Returns null if the ScVal is not an address type.
  */
 function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
-  if (scVal.switch() !== StellarSdk.xdr.ScValType.scvAddress()) return null;
+  if (scVal.switch() !== StellarSdk.xdr.ScValType.scvAddress) return null;
   const addr = StellarSdk.Address.fromScVal(scVal);
   return addr.toString();
 }

@@ -27,6 +27,16 @@ function sacInstanceVal(): xdr.ScVal {
   );
 }
 
+// Guard: the SAC fixture must actually round-trip as a SAC executable, so a
+// wrong discriminant in the SDK migration fails here rather than silently
+// mislabelling assets downstream.
+function assertSacFixtureRoundTrips(): void {
+  const decoded = xdr.ScVal.fromXDR(sacInstanceVal().toXDR());
+  if (!instanceValIsSac(decoded)) {
+    throw new Error("SAC fixture did not round-trip as a SAC instance");
+  }
+}
+
 function wasmInstanceVal(): xdr.ScVal {
   return xdr.ScVal.scvContractInstance(
     new xdr.ScContractInstance({
@@ -38,6 +48,12 @@ function wasmInstanceVal(): xdr.ScVal {
 
 beforeEach(() => {
   _clearSacCache();
+});
+
+describe("SAC fixture integrity", () => {
+  it("round-trips the SAC instance through XDR as a SAC", () => {
+    expect(() => assertSacFixtureRoundTrips()).not.toThrow();
+  });
 });
 
 describe("executableIsSac", () => {

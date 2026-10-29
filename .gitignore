@@ -4,8 +4,8 @@ dist/
 # there); only the generated artefacts inside it are ignored.
 docs/openapi.json
 docs/api/
-.env
 *.env.local
 bench/results.json
 .aider*
 coverage/
+config.bat
