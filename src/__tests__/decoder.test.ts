@@ -1,5 +1,6 @@
-import { xdr } from "@stellar/stellar-sdk";
+import { StrKey, xdr } from "@stellar/stellar-sdk";
 import { parseEvent, parseEvents } from "../decoder";
+import { eventsSkippedTotal } from "../metrics";
 import * as fixtures from "./fixtures/events.json";
 
 describe("Soroban XDR Decoder", () => {
@@ -105,6 +106,38 @@ describe("Soroban XDR Decoder", () => {
 
     const result = parseEvent(raw);
     expect(result).toBeNull();
+  });
+
+  it("decodes a transfer to a CAP-84 muxed contract (W-address) from XDR without skipping", () => {
+    const destContractId = "CCV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XMCW";
+    const contractIdBytes = StrKey.decodeContract(destContractId);
+    const maxUint64Str = "18446744073709551615";
+    const muxedContractScAddr = xdr.ScAddress.scAddressTypeMuxedContract(
+      new xdr.MuxedContract({
+        contractId: contractIdBytes as unknown as xdr.Hash,
+        id: xdr.Uint64.fromString(maxUint64Str),
+      })
+    );
+    // Round-trip through raw base64 XDR bytes rather than mocking
+    const toTopicXdrBase64 = xdr.ScVal.scvAddress(muxedContractScAddr).toXDR("base64");
+    const raw = {
+      ...common,
+      topic: [
+        xdr.ScVal.fromXDR(fixtures.transfer.topic[0], "base64"),
+        xdr.ScVal.fromXDR(fixtures.transfer.topic[1], "base64"),
+        xdr.ScVal.fromXDR(toTopicXdrBase64, "base64"),
+      ],
+      value: xdr.ScVal.fromXDR(fixtures.transfer.value, "base64"),
+    };
+
+    const incSpy = jest.spyOn(eventsSkippedTotal, "inc");
+    const records = parseEvents([raw]);
+
+    expect(records).toHaveLength(1);
+    expect(records[0].toAddress).toBe(destContractId);
+    expect(records[0].toMuxedId).toBe(maxUint64Str);
+    expect(incSpy).not.toHaveBeenCalled();
+    incSpy.mockRestore();
   });
 });
 

@@ -48,9 +48,10 @@ const ALICE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const BOB   = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBWWHF";
 const CAROL = "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCWWHF";
 
-type TransferOverrides = Partial<Omit<ReturnType<typeof baseTransfer>, "fromAddress" | "toAddress">> & {
+type TransferOverrides = Partial<Omit<ReturnType<typeof baseTransfer>, "fromAddress" | "toAddress" | "toMuxedId">> & {
   fromAddress?: string | null;
   toAddress?: string | null;
+  toMuxedId?: string | null;
 };
 
 function makeTransfer(overrides: TransferOverrides = {}) {
@@ -65,6 +66,7 @@ function baseTransfer() {
     eventType: "transfer",
     fromAddress: BOB,
     toAddress: ALICE,
+    toMuxedId: null as string | null,
     amount: "10000000000",        // 1000.0000000 tokens
     ledger: 1000,
     ledgerClosedAt: new Date("2025-01-01T00:00:00Z"),

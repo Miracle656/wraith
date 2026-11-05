@@ -35,6 +35,7 @@ export const typeDefs = `#graphql
     eventType: String!
     fromAddress: String
     toAddress: String
+    toMuxedId: String
     amount: String!
     displayAmount: String
     ledger: Int!

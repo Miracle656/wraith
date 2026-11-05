@@ -40,6 +40,8 @@ model TokenTransfer {
   eventType      String
   fromAddress    String?
   toAddress      String?
+  // CAP-84 muxed contract destination sub-account ID (uint64 stored as decimal string, #351).
+  toMuxedId      String?
   amount         String
   ledger         Int
   ledgerClosedAt DateTime
@@ -52,6 +54,7 @@ model TokenTransfer {
 
   @@unique([network, eventId])
   @@index([network, toAddress])
+  @@index([network, toAddress, toMuxedId])
   @@index([network, fromAddress])
   @@index([network, contractId])
   @@index([network, ledger])
