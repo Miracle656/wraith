@@ -16,6 +16,7 @@ import { createOfframpRouter } from "./api/offramp";
 import { createNgnRouter } from "./api/ngn";
 import { createOpsRouter } from "./api/ops";
 import { feesRouter } from "./api/fees";
+import { namesRouter } from "./api/names";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
@@ -297,6 +298,9 @@ export function createApp(): express.Application {
   // What the client should charge, and where to send it. Server-held so the
   // amount is never compiled into an APK.
   app.use("/fees", feesRouter());
+  // Veil Names: what a name may be, and what it costs. Availability needs the
+  // registry contract and answers 503 until it is deployed — see api/names.ts.
+  app.use("/names", namesRouter());
   app.use("/graphql", createGraphQLMiddleware());
 
   // ─── Assets routes ───────────────────────────────────────────────────────

@@ -987,3 +987,64 @@ export const ngnDataBundleSchema = z.object({
 export const ngnDataBundlesResponseSchema = z.object({
   bundles: z.array(ngnDataBundleSchema),
 });
+
+// ───────────────────────── Veil Names ─────────────────────────
+//
+// The registry is `contracts/veil-names` in the veil repo and is not deployed,
+// so availability is answered with 503 rather than guessed. The price and the
+// rules are answerable without a ledger and are served today.
+
+/** Why a candidate name was refused. Mirrors `NAME_REJECTIONS` in names/pricing.ts. */
+export const nameRejectionSchema = z.enum([
+  "empty",
+  "too_short",
+  "too_long",
+  "bad_charset",
+  "bad_separator",
+  "reserved",
+]);
+
+export const namePathSchema = z.object({
+  name: z.string().openapi({ example: "adebayo" }),
+}).passthrough();
+
+export const nameQuoteQuerySchema = z.object({
+  years: z.coerce.number().int().min(1).max(5).optional().openapi({
+    description: "Term in years. Defaults to the minimum rather than guessing a longer one.",
+    example: 1,
+  }),
+}).passthrough();
+
+export const nameAvailabilityResponseSchema = z.object({
+  name: z.string(),
+  status: z.enum(["available", "taken", "yours", "reserved", "unknown"]),
+  priceUsdc: z.number().optional(),
+  reason: nameRejectionSchema.optional(),
+  detail: z.string().optional(),
+});
+
+export const nameQuoteResponseSchema = z.object({
+  name: z.string(),
+  years: z.number(),
+  perYearUsdc: z.number(),
+  totalUsdc: z.number(),
+  registryLive: z.boolean(),
+});
+
+export const namePriceTableResponseSchema = z.object({
+  bands: z.array(
+    z.object({
+      minLength: z.number(),
+      maxLength: z.number(),
+      perYearUsdc: z.number(),
+    }),
+  ),
+  term: z.object({
+    minYears: z.number(),
+    maxYears: z.number(),
+    recoveryWindowDays: z.number(),
+    renewalReminderDays: z.number(),
+  }),
+  figure: z.object({ priceUsdc: z.number() }),
+  registryLive: z.boolean(),
+});
