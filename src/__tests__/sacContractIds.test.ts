@@ -75,10 +75,17 @@ describe('resolveSacContractIds — default XLM SAC when no env var is set', () 
   it.each([
     ['mainnet', Networks.PUBLIC, DEFAULT_XLM_SAC_MAINNET],
     ['testnet', Networks.TESTNET, DEFAULT_XLM_SAC_TESTNET],
-  ] as const)('uses the SDK-derived native SAC for %s', (network, passphrase, defaultId) => {
-    const derivedId = Asset.native().contractId(passphrase);
-    expect(defaultId).toBe(derivedId);
-    expect(resolveSacContractIds(network)).toEqual([derivedId]);
+  ] as const)('knows the SDK-derived native SAC for %s', (_network, passphrase, defaultId) => {
+    expect(defaultId).toBe(Asset.native().contractId(passphrase));
+  });
+
+  it('defaults testnet to its native SAC', () => {
+    expect(resolveSacContractIds('testnet')).toEqual([DEFAULT_XLM_SAC_TESTNET]);
+  });
+
+  it('gives mainnet no default: its XLM SAC is opt-in', () => {
+    // ~720,000 events an hour; see resolveSacContractIds.
+    expect(resolveSacContractIds('mainnet')).toEqual([]);
   });
 
   it('defaults to the testnet XLM SAC when STELLAR_NETWORK is unset', () => {
@@ -92,8 +99,14 @@ describe('resolveSacContractIds — default XLM SAC when no env var is set', () 
     expect(resolveSacContractIds()).toEqual([DEFAULT_XLM_SAC_TESTNET]);
   });
 
-  it('defaults to the mainnet XLM SAC when STELLAR_NETWORK=mainnet', () => {
+  it('has no default when STELLAR_NETWORK=mainnet', () => {
     process.env.STELLAR_NETWORK = 'mainnet';
+    expect(resolveSacContractIds()).toEqual([]);
+  });
+
+  it('indexes the mainnet XLM SAC when it is named explicitly', () => {
+    process.env.STELLAR_NETWORK = 'mainnet';
+    process.env.SAC_CONTRACT_IDS = DEFAULT_XLM_SAC_MAINNET;
     expect(resolveSacContractIds()).toEqual([DEFAULT_XLM_SAC_MAINNET]);
   });
 

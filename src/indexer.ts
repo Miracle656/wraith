@@ -44,10 +44,19 @@ export const DEFAULT_XLM_SAC_TESTNET =
  * Priority order:
  *  1. SAC_CONTRACT_IDS env var (comma-separated, new canonical name)
  *  2. CONTRACT_IDS env var (legacy alias — retained for backwards-compatibility)
- *  3. Default: native XLM SAC for the configured network
+ *  3. Default: the native XLM SAC on **testnet only**. Mainnet has no default.
  *
- * The native XLM SAC default depends on STELLAR_NETWORK ("mainnet" | "testnet").
  * Any unset / empty value falls through to the next tier.
+ *
+ * Mainnet returns an empty list rather than its XLM SAC, on purpose. The
+ * native SAC is the busiest contract on the public network: measured on
+ * 2026-11-10 it emitted about 1,100 events per ledger, roughly 720,000 an hour,
+ * some 440 times what the testnet loop handles. Every one becomes a host-fn log
+ * row. Setting only SOROBAN_RPC_URL_MAINNET therefore turned on a firehose
+ * nobody asked for: it held the single pooled database connection, exhausted
+ * the database's disk IO budget, and took every other query down with it,
+ * cash-out included. Indexing mainnet XLM is a decision with a cost, so it has
+ * to be written down: name the contract in SAC_CONTRACT_IDS_MAINNET.
  */
 export function resolveSacContractIds(network?: Network): string[] {
   const net = resolveNetwork(network);
@@ -68,10 +77,22 @@ export function resolveSacContractIds(network?: Network): string[] {
     return ids;
   }
 
-  // Fall back to the native XLM SAC for *this* network, not the process-wide
-  // one — with a loop per network, reading STELLAR_NETWORK here would point
-  // both loops at the same chain's SAC.
-  return [net === "mainnet" ? DEFAULT_XLM_SAC_MAINNET : DEFAULT_XLM_SAC_TESTNET];
+  // The default belongs to *this* network, not the process-wide one — with a
+  // loop per network, reading STELLAR_NETWORK here would point both loops at
+  // the same chain's SAC. And only testnet has one: see the note above.
+  return net === "mainnet" ? [] : [DEFAULT_XLM_SAC_TESTNET];
+}
+
+/**
+ * Every contract a network's loop would ask the RPC for.
+ *
+ * Exists so the "is there anything to watch" question has one answer. An empty
+ * list is not "watch nothing": `fetchEvents` drops the contract filter when it
+ * is handed none, so an empty watch list means *every contract event on the
+ * chain*. A loop must never be started with one.
+ */
+export function resolveWatchedContractIds(network?: Network): string[] {
+  return [...new Set([...resolveSacContractIds(network), ...resolveNftContractIds(network)])];
 }
 import { initTokenCache } from "./tokenCache";
 
@@ -640,6 +661,15 @@ export function planNetworks(networks: Network[] = enabledNetworks()): Network[]
   for (const net of networks) {
     try {
       validateNetworkConfig([net]);
+      if (resolveWatchedContractIds(net).length === 0) {
+        // Skipped, never thrown: an unconfigured watch list is a reason not to
+        // index one network, not a reason to stop the API or the other loop.
+        throw new Error(
+          `no contracts to watch on ${net}. Set NFT_CONTRACT_IDS_${net.toUpperCase()} ` +
+            `and/or SAC_CONTRACT_IDS_${net.toUpperCase()}. An empty watch list is not ` +
+            `started because it would request every contract event on the chain.`,
+        );
+      }
       runnable.push(net);
     } catch (err) {
       const message = (err as Error).message;
