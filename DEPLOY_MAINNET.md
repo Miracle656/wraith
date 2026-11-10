@@ -33,11 +33,20 @@ Wraith can run on Render's free web services, but with two important caveats:
 
 Below is the environment configuration matrix for running Testnet vs. Mainnet side-by-side. Set these as secrets in your hosting provider.
 
-> **Set `SAC_CONTRACT_IDS` explicitly on mainnet — do not rely on the built-in default.**
+> **Mainnet has no default watch list. Name every contract you want indexed.**
+> Testnet falls back to its native XLM SAC when `SAC_CONTRACT_IDS` is unset; mainnet
+> falls back to nothing, and a mainnet loop with no `SAC_CONTRACT_IDS` and no
+> `NFT_CONTRACT_IDS` is not started (`/status` reports why).
+>
+> This is deliberate. The mainnet XLM SAC emits roughly 1,100 events per ledger
+> (about 720,000 an hour, measured 2026-11-10), and each one is written to the
+> database. On a small Postgres plan that exhausts the disk IO budget within hours and
+> starves every other query. Only add it to `SAC_CONTRACT_IDS` if the database is
+> sized for it. To index just your own contracts (names, an NFT collection), set
+> `NFT_CONTRACT_IDS` and leave `SAC_CONTRACT_IDS` empty.
+>
 > The native XLM SAC address is derived from the network passphrase, so it differs per
-> network, and the value the code falls back to when `SAC_CONTRACT_IDS` is unset is not
-> currently correct for mainnet (tracked separately). Derive the address yourself and
-> paste the result:
+> network. If you do want it, derive the address yourself and paste the result:
 >
 > ```js
 > import { Asset, Networks } from '@stellar/stellar-sdk';
@@ -53,9 +62,12 @@ STELLAR_NETWORK=mainnet
 # RPC Provider (Required for mainnet - use your actual provider URL with API key)
 SOROBAN_RPC_URL=https://mainnet.stellar.validationcloud.io/v1/<API_KEY>
 
-# Mainnet Native XLM SAC Contract ID
+# Mainnet Native XLM SAC Contract ID (OPTIONAL, ~720,000 events/hour: see the note above)
 #   = Asset.native().contractId(Networks.PUBLIC)
-SAC_CONTRACT_IDS=CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA
+# SAC_CONTRACT_IDS=CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA
+
+# Your own contracts (names registry, NFT collections), comma-separated
+NFT_CONTRACT_IDS=
 
 # External Durable Database (e.g., Neon)
 DATABASE_URL=postgresql://[user]:[password]@[host]/[dbname]?sslmode=require
