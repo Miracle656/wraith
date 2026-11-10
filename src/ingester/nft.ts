@@ -50,6 +50,45 @@ export function isNftTransferEvent(raw: RawEvent): boolean {
   return true;
 }
 
+/**
+ * A mint or a burn of a non-fungible token.
+ *
+ * These are not transfers and do not look like them. `stellar-tokens` emits
+ *
+ *     mint: topics = (Symbol("mint"), Address(to)),   data = u32(token_id)
+ *     burn: topics = (Symbol("burn"), Address(from)), data = u32(token_id)
+ *
+ * — two topics, where a transfer has four, and the token id in the DATA rather
+ * than a topic. `isNftTransferEvent` requires four topics and `"transfer"`, so
+ * for a long time a minted NFT was invisible to this indexer until somebody
+ * sent it on. Both Veil Names and Veil-ians mint straight to the buyer and are
+ * usually never transferred at all, so their holders were shown an empty
+ * gallery over a token the chain had recorded.
+ *
+ * The discriminator against a FUNGIBLE burn — which is also two topics,
+ * `(Symbol("burn"), Address(from))` — is the data type: a token id is `u32`,
+ * an amount is `i128`. Matching on the symbol alone would file every fungible
+ * burn in the chain as an NFT.
+ */
+export function isNftMintOrBurnEvent(raw: RawEvent): boolean {
+  if (!raw.topic || raw.topic.length !== 2) return false;
+  try {
+    const sym = scValToNative(raw.topic[0]);
+    if (sym !== "mint" && sym !== "burn") return false;
+    if (raw.topic[1].switch() !== xdr.ScValType.scvAddress()) return false;
+    // A token id, not an amount.
+    if (raw.value.switch() !== xdr.ScValType.scvU32()) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** Any event this module can turn into a holding change. */
+export function isNftEvent(raw: RawEvent): boolean {
+  return isNftTransferEvent(raw) || isNftMintOrBurnEvent(raw);
+}
+
 // ─── Decoding ─────────────────────────────────────────────────────────────────
 
 function decodeTokenId(scVal: xdr.ScVal): string {
@@ -71,8 +110,32 @@ function decodeTokenId(scVal: xdr.ScVal): string {
  * Returns null for non-NFT events; never throws.
  */
 export function parseNftTransferEvent(raw: RawEvent): NftTransferRecord | null {
-  if (!isNftTransferEvent(raw)) return null;
   const { topic, contractId, ledger, ledgerClosedAt, txHash, id: eventId } = raw;
+
+  // A mint has no sender and a burn has no recipient; the record type has
+  // always allowed both to be null, and `currentHoldings` already reads
+  // ownership off `toAddress`, so a mint lands as a holding with nothing else
+  // to change.
+  if (isNftMintOrBurnEvent(raw)) {
+    try {
+      const party = Address.fromScVal(topic[1]).toString();
+      const minting = scValToNative(topic[0]) === "mint";
+      return {
+        contractId,
+        tokenId: decodeTokenId(raw.value),
+        fromAddress: minting ? null : party,
+        toAddress: minting ? party : null,
+        ledger,
+        ledgerClosedAt: new Date(ledgerClosedAt),
+        txHash,
+        eventId,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  if (!isNftTransferEvent(raw)) return null;
   try {
     const fromAddress = Address.fromScVal(topic[1]).toString();
     const toAddress = Address.fromScVal(topic[2]).toString();
@@ -100,10 +163,11 @@ export function parseNftEvents(
 ): Array<{ record: NftTransferRecord; tokenIdScVal: xdr.ScVal }> {
   const results: Array<{ record: NftTransferRecord; tokenIdScVal: xdr.ScVal }> = [];
   for (const raw of rawEvents) {
-    if (!isNftTransferEvent(raw)) continue;
+    if (!isNftEvent(raw)) continue;
     const record = parseNftTransferEvent(raw);
     if (record) {
-      results.push({ record, tokenIdScVal: raw.topic[3] });
+      // The token id is a topic on a transfer and the data on a mint or burn.
+      results.push({ record, tokenIdScVal: isNftTransferEvent(raw) ? raw.topic[3] : raw.value });
     }
   }
   return results;
