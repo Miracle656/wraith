@@ -33,7 +33,7 @@ import { parseHostFnEvent, upsertHostFnLogs, type HostFnRecord } from "./host-fn
 import { tagSacTransfers } from "./sac-detect";
 import { parseLpShareEvents, upsertLpShareTransfers } from "./lp-shares";
 import { enrichNftMetadata } from "./nft-metadata";
-import { isNftTransferEvent, parseNftEvents, fetchNftMetadata } from "../ingester/nft";
+import { isNftEvent, parseNftEvents, fetchNftMetadata } from "../ingester/nft";
 import { getTokenMetadata } from "../tokenCache";
 import { transfersStoredTotal } from "../metrics";
 import type { RawEvent } from "../rpc";
@@ -68,9 +68,11 @@ export async function processEventBatch(
   const net = ctx.network;
   const { knownLpPools } = ctx;
 
-  // Split events by type: NFT (4 topics) vs fungible (3 topics)
-  const fungibleEvents = events.filter((e) => !isNftTransferEvent(e));
-  const nftRawEvents   = events.filter((e) => isNftTransferEvent(e));
+  // Split events by type. An NFT event is a 4-topic `transfer`, or a 2-topic
+  // `mint`/`burn` whose data is a u32 token id — the last of which the
+  // fungible path must not also claim, hence one predicate used both ways.
+  const fungibleEvents = events.filter((e) => !isNftEvent(e));
+  const nftRawEvents   = events.filter((e) => isNftEvent(e));
 
   // ── Fungible path ────────────────────────────────────────────────────────────
   const records  = parseEvents(fungibleEvents);
