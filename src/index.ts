@@ -12,7 +12,7 @@ import { startPartitionRetentionJob } from "./jobs/retention";
 import { startOrderReconciliationJob } from "./jobs/orderReconciliation";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
-import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { isDatabaseUnreachable, onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
 import { auditMigrationHistory, missingSchemaObjects } from "./schemaState";
 import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
 import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
@@ -20,6 +20,11 @@ import { validateEnv } from "./validateEnv";
 import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
+// How long startup waits for an unreachable database before giving up: eight
+// tries, fifteen seconds apart, about two minutes on top of each attempt's own
+// connection timeout. Short enough that a deploy still fails visibly.
+const CONVERGE_RETRIES = 8;
+const CONVERGE_RETRY_DELAY_MS = 15_000;
 
 async function main() {
   // First thing in `main`, not at module load. A missing DATABASE_URL should
@@ -156,7 +161,30 @@ async function main() {
   // Additive changes — a new table, a new nullable column — still apply on
   // their own. Anything destructive now fails loudly here instead.
   logger.info("schema.converge.start", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
-  const first = pushSchema();
+  let first = pushSchema();
+  // Wait out a database that cannot be reached instead of exiting on the first
+  // refused connection. Bounded: after the last attempt this still exits, with
+  // a log line that says what actually happened. See `isDatabaseUnreachable`.
+  for (
+    let attempt = 1;
+    !first.ok && isDatabaseUnreachable(first.output) && attempt <= CONVERGE_RETRIES;
+    attempt++
+  ) {
+    logger.warn("schema.converge.database_unreachable_retrying", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      attempt,
+      of: CONVERGE_RETRIES,
+    });
+    await new Promise((resolve) => setTimeout(resolve, CONVERGE_RETRY_DELAY_MS));
+    first = pushSchema();
+  }
+  if (!first.ok && isDatabaseUnreachable(first.output)) {
+    logger.error("schema.converge.database_unreachable", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
+    process.exit(1);
+  }
   if (!first.ok) {
     // `--accept-data-loss` consents to two very different things at once, and
     // Prisma gives no way to agree to one without the other.

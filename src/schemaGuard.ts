@@ -48,3 +48,23 @@ export function onlyAddsUniqueConstraints(output: string): boolean {
   return warnings.every((line) => /unique constraint .* will be added/i.test(line));
 }
 
+/**
+ * True when `prisma db push` failed because it could not reach the database,
+ * as opposed to reaching it and being refused.
+ *
+ * The two used to be indistinguishable to the caller, and both were logged as
+ * `refused_destructive`. They need opposite responses. A refusal is permanent
+ * until someone changes the schema, so exiting is right. An unreachable
+ * database is usually temporary, and exiting is what turned one into a trap on
+ * 2026-11-10: the running instance was starving the database, so every deploy
+ * carrying the fix failed its first connection, exited, and left the starving
+ * instance in place.
+ *
+ *   P1001  Can't reach database server
+ *   P1002  The database server was reached but timed out
+ *   P1008  Operations timed out
+ *   P1017  Server has closed the connection
+ */
+export function isDatabaseUnreachable(output: string): boolean {
+  return /\bP10(01|02|08|17)\b/.test(output) || /can't reach database server/i.test(output);
+}

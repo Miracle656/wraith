@@ -7,7 +7,7 @@
  * column of offramp orders — records of real naira paid to real bank accounts —
  * disappears during a routine deploy.
  */
-import { onlyAddsUniqueConstraints } from "../schemaGuard";
+import { isDatabaseUnreachable, onlyAddsUniqueConstraints } from "../schemaGuard";
 
 /** Verbatim from the Render deploy that put wraith in a crash loop. */
 const ADDED_UNIQUE_CONSTRAINT = `
@@ -74,5 +74,37 @@ describe("onlyAddsUniqueConstraints", () => {
     expect(
       onlyAddsUniqueConstraints("Error: P1001: Can't reach database server at `db:5432`"),
     ).toBe(false);
+  });
+});
+
+describe("isDatabaseUnreachable", () => {
+  /** Verbatim from the Render deploy of 2026-11-10, host elided. */
+  const UNREACHABLE = `
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "postgres", schema "wraith" at "db.example.invalid:5432"
+
+Error: P1001: Can't reach database server at \`db.example.invalid:5432\`
+
+Please make sure your database server is running at \`db.example.invalid:5432\`.
+`;
+
+  it("recognises a database that could not be reached", () => {
+    expect(isDatabaseUnreachable(UNREACHABLE)).toBe(true);
+  });
+
+  it("recognises the timeout and closed-connection codes", () => {
+    expect(isDatabaseUnreachable("Error: P1002: The database server was reached but timed out")).toBe(true);
+    expect(isDatabaseUnreachable("Error: P1008: Operations timed out")).toBe(true);
+    expect(isDatabaseUnreachable("Error: P1017: Server has closed the connection")).toBe(true);
+  });
+
+  it("does not mistake a refused schema change for an unreachable database", () => {
+    // Retrying this would loop on a change that will never apply by itself.
+    expect(isDatabaseUnreachable(ADDED_UNIQUE_CONSTRAINT)).toBe(false);
+    expect(isDatabaseUnreachable("")).toBe(false);
+  });
+
+  it("is never something onlyAddsUniqueConstraints consents to", () => {
+    expect(onlyAddsUniqueConstraints(UNREACHABLE)).toBe(false);
   });
 });
