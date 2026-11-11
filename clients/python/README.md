@@ -38,20 +38,43 @@ popular = client.popular_assets(window="24h", by="volume")
 for asset in popular.assets:
     print(asset.contract_id, asset.transfer_count, asset.volume)
 
+# Indexer status & ledger lag
+status = client.status()
+print(status.ok, status.last_indexed_ledger, status.lag_ledgers)
+
+# NFT transfer events & current ownership
+nft_page = client.nft_transfers(contract="CNFT...", limit=25)
+for nft_tx in nft_page.transfers:
+    print(nft_tx.contract_id, nft_tx.token_id, nft_tx.to_address)
+
+owner = client.nft_owner("CNFT...", "42")
+print(owner.owner, owner.burned)
+
+# Webhook subscriptions & delivery logs
+subs = client.webhooks()
+for sub in subs.subscriptions:
+    deliveries = client.webhook_deliveries(sub.id, status="failed", limit=10)
+    print(sub.id, sub.url, len(deliveries.deliveries))
+
 client.close()  # or use the client as a context manager
 ```
 
 ## Coverage
 
-| Area      | Methods                                                                                |
-| --------- | -------------------------------------------------------------------------------------- |
+| Area      | Methods                                                                                  |
+| --------- | ---------------------------------------------------------------------------------------- |
 | Transfers | `incoming_transfers`, `outgoing_transfers`, `address_transfers`, `transaction_transfers` |
-| Accounts  | `account_summary`, `account_transfers`                                                  |
-| Assets    | `popular_assets`                                                                        |
+| Accounts  | `account_summary`, `account_transfers`                                                   |
+| Assets    | `popular_assets`                                                                         |
+| Status    | `status`                                                                                 |
+| NFTs      | `nft_transfers`, `nft_owner`                                                             |
+| Webhooks  | `webhooks`, `webhook_deliveries`, `create_webhook`, `delete_webhook`                     |
 
 All responses are returned as typed dataclasses (`Transfer`, `TransferPage`,
-`AccountSummary`, `AssetHolding`, `PopularAssets`, `PopularAsset`). Non-2xx
-responses raise `WraithAPIError`.
+`AccountSummary`, `AssetHolding`, `PopularAssets`, `PopularAsset`, `Status`,
+`NftTransfer`, `NftTransferPage`, `NftOwner`, `NftMetadata`,
+`WebhookSubscription`, `WebhookSubscriptionList`, `WebhookDelivery`,
+`WebhookDeliveryList`). Non-2xx responses raise `WraithAPIError`.
 
 ## Development
 
