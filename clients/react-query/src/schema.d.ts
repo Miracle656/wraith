@@ -77,6 +77,276 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/names/price-table": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a Veil name costs, and the rules behind it
+         * @description Served from the rules alone, with no ledger involved. The middle band is the dearest on purpose: real first names are six to ten characters and that is where the demand is, so it prices demand rather than scarcity. `registryLive` is false until the registry contract is deployed, and while it is false no name can be bought.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            bands: {
+                                minLength: number;
+                                maxLength: number;
+                                perYearUsdc: number;
+                            }[];
+                            term: {
+                                minYears: number;
+                                maxYears: number;
+                                recoveryWindowDays: number;
+                                renewalReminderDays: number;
+                            };
+                            figure: {
+                                priceUsdc: number;
+                            };
+                            registryLive: boolean;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/names/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Can this name be had?
+         * @description Answers `reserved` and the refusal reasons from the naming rules. Whether a valid name is *taken* needs the registry contract, which is not deployed — so that case is a 503 carrying `status: "unknown"`, never a 404. The distinction matters: a 404 reads as "nobody has this name", and a page that believes it would sell a name nobody can deliver.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Answerable without the chain (currently: reserved) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            /** @enum {string} */
+                            status: "available" | "taken" | "yours" | "reserved" | "unknown";
+                            priceUsdc?: number;
+                            /** @enum {string} */
+                            reason?: "empty" | "too_short" | "too_long" | "bad_charset" | "bad_separator" | "reserved";
+                            detail?: string;
+                        };
+                    };
+                };
+                /** @description Not a usable name (too_short / too_long / bad_charset / bad_separator) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Registry not deployed, so availability cannot be determined */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            /** @enum {string} */
+                            status: "available" | "taken" | "yours" | "reserved" | "unknown";
+                            priceUsdc?: number;
+                            /** @enum {string} */
+                            reason?: "empty" | "too_short" | "too_long" | "bad_charset" | "bad_separator" | "reserved";
+                            detail?: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/names/{name}/quote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a registration would cost, for a term
+         * @description The one place a total is computed. A caller that multiplies a per-year price by its own term is a caller that can get the term wrong, so the term is validated here rather than trusted.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Term in years. Defaults to the minimum rather than guessing a longer one. */
+                    years?: number;
+                };
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            years: number;
+                            perYearUsdc: number;
+                            totalUsdc: number;
+                            registryLive: boolean;
+                        };
+                    };
+                };
+                /** @description Unusable name, or a term outside one to five years (bad_term) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;

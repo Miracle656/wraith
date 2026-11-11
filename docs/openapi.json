@@ -112,6 +112,430 @@
         }
       }
     },
+    "/names/price-table": {
+      "get": {
+        "summary": "What a Veil name costs, and the rules behind it",
+        "description": "Served from the rules alone, with no ledger involved. The middle band is the dearest on purpose: real first names are six to ten characters and that is where the demand is, so it prices demand rather than scarcity. `registryLive` is false until the registry contract is deployed, and while it is false no name can be bought.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bands": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "minLength": {
+                            "type": "number"
+                          },
+                          "maxLength": {
+                            "type": "number"
+                          },
+                          "perYearUsdc": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "minLength",
+                          "maxLength",
+                          "perYearUsdc"
+                        ]
+                      }
+                    },
+                    "term": {
+                      "type": "object",
+                      "properties": {
+                        "minYears": {
+                          "type": "number"
+                        },
+                        "maxYears": {
+                          "type": "number"
+                        },
+                        "recoveryWindowDays": {
+                          "type": "number"
+                        },
+                        "renewalReminderDays": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "minYears",
+                        "maxYears",
+                        "recoveryWindowDays",
+                        "renewalReminderDays"
+                      ]
+                    },
+                    "figure": {
+                      "type": "object",
+                      "properties": {
+                        "priceUsdc": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "priceUsdc"
+                      ]
+                    },
+                    "registryLive": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "bands",
+                    "term",
+                    "figure",
+                    "registryLive"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/names/{name}": {
+      "get": {
+        "summary": "Can this name be had?",
+        "description": "Answers `reserved` and the refusal reasons from the naming rules. Whether a valid name is *taken* needs the registry contract, which is not deployed — so that case is a 503 carrying `status: \"unknown\"`, never a 404. The distinction matters: a 404 reads as \"nobody has this name\", and a page that believes it would sell a name nobody can deliver.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "adebayo"
+            },
+            "required": true,
+            "name": "name",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Answerable without the chain (currently: reserved)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "taken",
+                        "yours",
+                        "reserved",
+                        "unknown"
+                      ]
+                    },
+                    "priceUsdc": {
+                      "type": "number"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "empty",
+                        "too_short",
+                        "too_long",
+                        "bad_charset",
+                        "bad_separator",
+                        "reserved"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a usable name (too_short / too_long / bad_charset / bad_separator)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Registry not deployed, so availability cannot be determined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "taken",
+                        "yours",
+                        "reserved",
+                        "unknown"
+                      ]
+                    },
+                    "priceUsdc": {
+                      "type": "number"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "empty",
+                        "too_short",
+                        "too_long",
+                        "bad_charset",
+                        "bad_separator",
+                        "reserved"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/names/{name}/quote": {
+      "get": {
+        "summary": "What a registration would cost, for a term",
+        "description": "The one place a total is computed. A caller that multiplies a per-year price by its own term is a caller that can get the term wrong, so the term is validated here rather than trusted.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "adebayo"
+            },
+            "required": true,
+            "name": "name",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5,
+              "description": "Term in years. Defaults to the minimum rather than guessing a longer one.",
+              "example": 1
+            },
+            "required": false,
+            "description": "Term in years. Defaults to the minimum rather than guessing a longer one.",
+            "name": "years",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "years": {
+                      "type": "number"
+                    },
+                    "perYearUsdc": {
+                      "type": "number"
+                    },
+                    "totalUsdc": {
+                      "type": "number"
+                    },
+                    "registryLive": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "years",
+                    "perYearUsdc",
+                    "totalUsdc",
+                    "registryLive"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unusable name, or a term outside one to five years (bad_term)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/readyz": {
       "get": {
         "summary": "Readiness probe",

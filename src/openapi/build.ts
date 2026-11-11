@@ -66,6 +66,11 @@ import {
   feesResponseSchema,
   opsFailuresQuerySchema,
   opsFailuresResponseSchema,
+  nameAvailabilityResponseSchema,
+  namePathSchema,
+  namePriceTableResponseSchema,
+  nameQuoteQuerySchema,
+  nameQuoteResponseSchema,
 } from "./schemas";
 
 const registry = new OpenAPIRegistry();
@@ -91,6 +96,75 @@ registry.registerPath({
   responses: {
     200: { description: "OK", content: { "application/json": { schema: healthzResponseSchema } } },
     ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/names/price-table",
+  summary: "What a Veil name costs, and the rules behind it",
+  description:
+    "Served from the rules alone, with no ledger involved. The middle band is the " +
+    "dearest on purpose: real first names are six to ten characters and that is where " +
+    "the demand is, so it prices demand rather than scarcity. `registryLive` is false " +
+    "until the registry contract is deployed, and while it is false no name can be " +
+    "bought.",
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: namePriceTableResponseSchema } },
+    },
+    ...commonErrorResponses,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/names/{name}",
+  summary: "Can this name be had?",
+  description:
+    "Answers `reserved` and the refusal reasons from the naming rules. Whether a valid " +
+    "name is *taken* needs the registry contract, which is not deployed — so that case " +
+    "is a 503 carrying `status: \"unknown\"`, never a 404. The distinction matters: a " +
+    "404 reads as \"nobody has this name\", and a page that believes it would sell a " +
+    "name nobody can deliver.",
+  request: { params: namePathSchema },
+  responses: {
+    200: {
+      description: "Answerable without the chain (currently: reserved)",
+      content: { "application/json": { schema: nameAvailabilityResponseSchema } },
+    },
+    ...commonErrorResponses,
+    400: {
+      description: "Not a usable name (too_short / too_long / bad_charset / bad_separator)",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    503: {
+      description: "Registry not deployed, so availability cannot be determined",
+      content: { "application/json": { schema: nameAvailabilityResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/names/{name}/quote",
+  summary: "What a registration would cost, for a term",
+  description:
+    "The one place a total is computed. A caller that multiplies a per-year price by " +
+    "its own term is a caller that can get the term wrong, so the term is validated " +
+    "here rather than trusted.",
+  request: { params: namePathSchema, query: nameQuoteQuerySchema },
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: nameQuoteResponseSchema } },
+    },
+    ...commonErrorResponses,
+    400: {
+      description: "Unusable name, or a term outside one to five years (bad_term)",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
   },
 });
 
