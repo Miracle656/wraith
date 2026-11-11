@@ -138,9 +138,14 @@ implements no KYC endpoint, so this is deliberately not encoded as a belief.
 ## The 429 assumption
 
 `call()` in `src/linq/client.ts` retries a `429` up to twice, order creation
-included. That is safe only if a rate-limited request did no work. This is the
-conventional meaning of 429, but Linq has not stated it. The fake refuses a 429
-before doing anything, and one test relies on it.
+included, and `payBill` in `src/linq/bills.ts` does the same for
+`/b2b/bills/pay`. That is safe only if a rate-limited request did no work. This
+is the conventional meaning of 429, but Linq has not stated it. The fake refuses
+a 429 before doing anything, and one test per rail relies on it.
+
+For the offramp a wrong belief is covered by the idempotency key. A bill has no
+key, so a wrong belief there means a second bill order: unpaid, and never shown
+to the user, exactly like the orphan a retried 5xx can leave.
 
 ## Changing any of this
 

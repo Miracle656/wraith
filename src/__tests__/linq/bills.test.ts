@@ -225,9 +225,41 @@ describe("bills.ts against the fake provider", () => {
       expect(error.status).toBe(422);
     });
 
-    it("forwards a 429 with the rate_limited code", async () => {
-      fakeLinq.seedVerifiedCustomer("veil_bill_rl_shape");
-      fakeLinq.rateLimitNext("POST /b2b/bills/pay", 60);
+    // 2026-11-11: a USDC airtime order was refused with a 429 the provider
+    // answered in 140ms, and the user was told to try again in a few seconds.
+    // The offramp already waited those seconds itself; bills did not.
+    it("waits out a one-off 429 instead of handing it to the user", async () => {
+      fakeLinq.seedVerifiedCustomer("veil_bill_rl_once");
+      fakeLinq.rateLimitNext("POST /b2b/bills/pay", 0);
+      const order = await payBill({
+        customerRef: "veil_bill_rl_once",
+        billCategory: "airtime",
+        provider: "AIRTEL",
+        customerId: "080",
+        amountNgn: 1000,
+        amountStableCoin: 0.68,
+        rate: 1470,
+        coin: "usdc",
+        refundAddress: G_ADDR,
+      });
+
+      expect(typeof order.wallet).toBe("string");
+      // The refused attempt, then the one that made the order. The fake refuses
+      // a 429 before creating anything, so there is exactly one order.
+      expect(fakeLinq.callCount("POST /b2b/bills/pay")).toBe(2);
+      expect(fakeLinq.getBillOrder(order.id)).toBeDefined();
+    });
+
+    it("still forwards a 429 that does not clear, with the rate_limited code", async () => {
+      const limited = {
+        ok: false,
+        status: 429,
+        headers: { get: (h: string) => (h.toLowerCase() === "retry-after" ? "0" : null) },
+        text: async () => JSON.stringify({ message: "Rate limit exceeded", code: "rate_limited" }),
+      };
+      const fetchMock = jest.fn().mockResolvedValue(limited);
+      global.fetch = fetchMock as unknown as typeof fetch;
+
       const error = await payBill({
         customerRef: "veil_bill_rl_shape",
         billCategory: "data",
@@ -241,6 +273,9 @@ describe("bills.ts against the fake provider", () => {
       }).catch((e) => e);
       expect(error).toBeInstanceOf(LinqError);
       expect(error.status).toBe(429);
+      expect(error.code).toBe("rate_limited");
+      // The first attempt plus two retries, then it gives up.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     });
   });
 
