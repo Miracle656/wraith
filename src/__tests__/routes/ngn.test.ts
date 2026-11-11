@@ -30,6 +30,12 @@ jest.mock("../../linq/bills", () => {
   const actual = jest.requireActual("../../linq/bills");
   return { ...actual, payBill: jest.fn(), getBillStatus: jest.fn() };
 });
+// The sell side of the book. Only `getRate` is replaced: the route file takes
+// `LinqError` from the same module, and that has to stay the real class.
+jest.mock("../../linq/client", () => {
+  const actual = jest.requireActual("../../linq/client");
+  return { ...actual, getRate: jest.fn() };
+});
 jest.mock("../../linq/ngnOrders", () => ({
   recordNgnOrder: jest.fn().mockResolvedValue(undefined),
   findNgnOrder: jest.fn().mockResolvedValue(null),
@@ -45,7 +51,7 @@ import {
 } from "../../linq/onramp";
 import { getBillStatus, payBill } from "../../linq/bills";
 import { findNgnOrder, recordNgnOrder } from "../../linq/ngnOrders";
-import { LinqError } from "../../linq/client";
+import { LinqError, getRate as getSellRate } from "../../linq/client";
 import { usdPerCoin } from "../../linq/coinPrice";
 import { __clearNgnRateCache } from "../../api/ngn";
 
@@ -71,6 +77,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Shared across requests by design, so it must not leak across tests.
   __clearNgnRateCache();
+  // Set for every test, not per describe: USDC is quoted from the sell side,
+  // and a test that forgot this would otherwise price it off an undefined.
+  (getSellRate as jest.Mock).mockResolvedValue({ rate: 1350, currency: "NGN", coin: "USDC" });
 });
 
 describe("configuration gate", () => {
@@ -236,7 +245,27 @@ describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
   it("still quotes USDC, because a quote is not an order", async () => {
     const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
     expect(res.status).toBe(200);
-    expect(res.body.rate).toBeCloseTo(1450, 6);
+    expect(res.body.coin).toBe("usdc");
+    expect(res.body.rate).toBeGreaterThan(0);
+  });
+
+  // 2026-11-11: a USDC airtime order priced at the buy rate was refused by the
+  // provider with "AmountStableCoin and rate do not match the current market
+  // rate". The only thing USDC buys on these routes is a bill, a bill is a
+  // sale, and the buy and sell sides were 100 naira apart. The phone works out
+  // how much USDC to send from this number, so this is where it has to be right.
+  it("quotes USDC from the sell side, because a bill is all USDC buys here", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    expect(res.body.rate).toBeCloseTo(1350, 6);
+    expect(getOnrampRate).not.toHaveBeenCalled();
+  });
+
+  // XLM bills priced from the buy side are accepted and vend. Nothing says the
+  // provider wants the other side there, so nothing moves.
+  it("leaves XLM on the buy side", async () => {
+    const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    expect(res.body.rate).toBeCloseTo(290, 6);
+    expect(getSellRate).not.toHaveBeenCalled();
   });
 
 
@@ -534,6 +563,50 @@ describe("bills", () => {
     expect(res.status).toBe(200);
     expect(res.body.wallet).toBe("GDXYZ");
     expect(payBill).toHaveBeenCalledWith(expect.objectContaining({ coin: "xlm", refundAddress: G_ADDRESS }));
+  });
+
+  const usdcBill = (rate: number) => ({
+    customerRef: "u",
+    billCategory: "airtime",
+    provider: "AIRTEL",
+    customerId: "08012345678",
+    amountNgn: 1000,
+    amountStableCoin: Number((1000 / rate).toFixed(7)),
+    rate,
+    coin: "usdc",
+    refundAddress: G_ADDRESS,
+  });
+
+  it("passes on a USDC bill priced at the rate the route quoted", async () => {
+    (payBill as jest.Mock).mockResolvedValue({
+      id: "9e4b1f2a",
+      customerRef: "u",
+      wallet: "GDXYZ",
+      status: "initiated",
+    });
+
+    const quoted = await mainnet(
+      request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }),
+    );
+    const res = await mainnet(
+      request(makeApp()).post("/ngn/bills").send(usdcBill(quoted.body.rate)),
+    );
+
+    expect(res.status).toBe(200);
+    expect(payBill).toHaveBeenCalledWith(
+      expect.objectContaining({ coin: "usdc", rate: 1350, amountStableCoin: 0.7407407 }),
+    );
+  });
+
+  // The guard measures a USDC bill against the side it is quoted from. Against
+  // the buy side (1450) this rate is 13.8% out and would pass; against the sell
+  // side (1350) it is 22% out.
+  it("measures a USDC bill's rate against the sell side", async () => {
+    const res = await mainnet(request(makeApp()).post("/ngn/bills").send(usdcBill(1650)));
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("rate_out_of_date");
+    expect(payBill).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown bill category", async () => {

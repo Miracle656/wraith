@@ -193,7 +193,7 @@ async function rejectMispricedRate(
 
   let expected: number;
   try {
-    expected = await ngnPerCoin(coin, "onramp");
+    expected = await ngnPerCoin(coin, ngnRail(coin));
   } catch (err) {
     sendLinqError(res, err);
     return true;
@@ -329,6 +329,45 @@ export async function ngnPerCoin(coin: OnrampCoin, rail: RateRail): Promise<numb
     throw new LinqError("Could not price that asset right now", 502, "provider_error");
   }
   return rate;
+}
+
+/**
+ * The side of the provider's book a coin is quoted from on the `/ngn` routes.
+ *
+ * **USDC is quoted from the sell side.** The only thing a client can do with
+ * USDC here is pay a bill (the onramp is XLM-only, see `ONRAMP_COINS`), and a
+ * bill is a sale: the user hands over USDC and the provider spends naira, the
+ * same trade as a cash-out. Every USDC bill was priced from the buy side
+ * instead, and on 2026-11-11 the provider refused one with
+ *
+ *   "AmountStableCoin and rate do not match the current market rate"
+ *
+ * The two sides stood at 1,480.71 and 1,380.71 naira to the dollar that
+ * morning, so the order asked for about 7% more airtime than the provider
+ * gives for the money.
+ *
+ * That the sell side is the number they check against is an inference, from
+ * that refusal and from cash-outs settling at it. Linq has not said so. If a
+ * USDC bill is still refused with the same words after this, the inference is
+ * wrong and this function is the thing to revert.
+ *
+ * **XLM stays on the buy side.** It is what the onramp sells, and XLM bills
+ * priced that way have been accepted and vended. Whether the provider checks
+ * an XLM bill's rate at all is not known; moving a path that works on a guess
+ * would charge every XLM user the spread.
+ *
+ * It lives on the existing rate route, not a new bills route, because of who
+ * does the arithmetic. Installed builds read `GET /ngn/onramp/rate?coin=usdc`
+ * to price a bill and compute on the phone how much USDC to send. The server
+ * cannot re-price the order afterwards: the deposit is whatever the phone
+ * decided, and the provider vends whatever that deposit is worth. The only
+ * place to correct the price is the number the phone is given.
+ *
+ * When the onramp takes USDC again this has to split: a purchase is the buy
+ * side, and one route cannot answer both for the same coin.
+ */
+export function ngnRail(coin: OnrampCoin): RateRail {
+  return coin === "usdc" ? "offramp" : "onramp";
 }
 
 function createLookupLimiter(): RateLimitRequestHandler {
@@ -551,7 +590,9 @@ const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
  *   - a bill is funded from the user's own balance, not from Linq's.
  *
  * This is a provider-inventory limit, not a protocol one. When they can source
- * USDC, delete this map and point the order route back at `COINS`.
+ * USDC, delete this map and point the order route back at `COINS` — and give
+ * bills their own rate route first, because `ngnRail` quotes USDC from the
+ * sell side on the strength of this gate.
  */
 const ONRAMP_COINS: Record<string, OnrampCoin> = { xlm: "xlm" };
 const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
@@ -769,7 +810,9 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin, "onramp") });
+      // Not always the onramp's side of the book, despite the path: see
+      // `ngnRail`. USDC is quoted for the one thing it can buy here, a bill.
+      res.json({ coin: resolvedCoin, rate: await ngnPerCoin(resolvedCoin, ngnRail(resolvedCoin)) });
     } catch (err) {
       sendLinqError(res, err);
     }
