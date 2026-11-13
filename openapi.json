@@ -1179,6 +1179,10 @@
                             "minLength": 1,
                             "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
                           },
+                          "toMuxedId": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "amount": {
                             "type": "string"
                           },
@@ -1529,6 +1533,10 @@
                             "minLength": 1,
                             "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
                           },
+                          "toMuxedId": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "amount": {
                             "type": "string"
                           },
@@ -1878,6 +1886,10 @@
                             "nullable": true,
                             "minLength": 1,
                             "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toMuxedId": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "amount": {
                             "type": "string"
@@ -2234,6 +2246,10 @@
                             "nullable": true,
                             "minLength": 1,
                             "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toMuxedId": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "amount": {
                             "type": "string"
@@ -3143,6 +3159,10 @@
                             "nullable": true,
                             "minLength": 1,
                             "example": "GABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          },
+                          "toMuxedId": {
+                            "type": "string",
+                            "nullable": true
                           },
                           "amount": {
                             "type": "string"

@@ -18,13 +18,36 @@ function decode(scVal: StellarSdk.xdr.ScVal): unknown {
 }
 
 /**
- * Decode an Address ScVal to a Stellar/contract address string (G... or C...).
+ * Decode an Address ScVal to a Stellar/contract address string (G... or C...),
+ * plus an optional CAP-84 uint64 muxed contract ID string when the ScAddress
+ * uses the Protocol 30 `scAddressTypeMuxedContract` arm (#351).
  * Returns null if the ScVal is not an address type.
  */
-function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
+function decodeAddressWithMuxedId(scVal: StellarSdk.xdr.ScVal): {
+  address: string;
+  muxedId: string | null;
+} | null {
   if (scVal.switch() !== StellarSdk.xdr.ScValType.scvAddress()) return null;
+  const scAddr = scVal.address();
+  if (
+    scAddr.switch().value ===
+    StellarSdk.xdr.ScAddressType.scAddressTypeMuxedContract().value
+  ) {
+    const muxed = scAddr.muxedContract();
+    return {
+      address: StellarSdk.StrKey.encodeContract(muxed.contractId() as unknown as Buffer),
+      muxedId: muxed.id().toString(),
+    };
+  }
   const addr = StellarSdk.Address.fromScVal(scVal);
-  return addr.toString();
+  return {
+    address: addr.toString(),
+    muxedId: null,
+  };
+}
+
+function decodeAddress(scVal: StellarSdk.xdr.ScVal): string | null {
+  return decodeAddressWithMuxedId(scVal)?.address ?? null;
 }
 
 /**
@@ -92,6 +115,7 @@ export function parseEvent(
   // ── Decode addresses by event type ───────────────────────
   let fromAddress: string | null = null;
   let toAddress: string | null = null;
+  let toMuxedId: string | null = null;
 
   if (eventType === "transfer") {
     // topics[1] = from, topics[2] = to
@@ -99,7 +123,9 @@ export function parseEvent(
       throw new Error(`Malformed transfer event: expected at least 3 topics, got ${topic.length}`);
     }
     fromAddress = decodeAddress(topic[1]);
-    toAddress = decodeAddress(topic[2]);
+    const decodedTo = decodeAddressWithMuxedId(topic[2]);
+    toAddress = decodedTo?.address ?? null;
+    toMuxedId = decodedTo?.muxedId ?? null;
     if (!fromAddress || !toAddress) {
       throw new Error("Malformed transfer event: invalid from/to address");
     }
@@ -109,7 +135,9 @@ export function parseEvent(
     if (topic.length < 3) {
       throw new Error(`Malformed mint event: expected at least 3 topics, got ${topic.length}`);
     }
-    toAddress = decodeAddress(topic[2]);
+    const decodedTo = decodeAddressWithMuxedId(topic[2]);
+    toAddress = decodedTo?.address ?? null;
+    toMuxedId = decodedTo?.muxedId ?? null;
     if (!toAddress) {
       throw new Error("Malformed mint event: invalid to address");
     }
@@ -132,6 +160,7 @@ export function parseEvent(
     eventType,
     fromAddress,
     toAddress,
+    ...(toMuxedId !== null ? { toMuxedId } : {}),
     amount,
     ledger,
     ledgerClosedAt: new Date(ledgerClosedAt),

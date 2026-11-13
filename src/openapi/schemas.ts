@@ -247,6 +247,7 @@ export const transferSchema = z.object({
   eventType: eventTypeEnum,
   fromAddress: stellarAddressSchema.nullable(),
   toAddress: stellarAddressSchema.nullable(),
+  toMuxedId: z.string().nullable().optional(),
   amount: z.string(),
   displayAmount: z.string(),
   ledger: z.number().int(),
