@@ -58,6 +58,7 @@ import { createOfframpRouter, requestFingerprint, __resetCoinlessRateLog } from 
 import { networkMiddleware } from "../../middleware/network";
 import { LinqError, createOfframpOrder, getOfframpStatus } from "../../linq/client";
 import { ngnPerCoin } from "../../api/ngn";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 const mockCreate = createOfframpOrder as jest.Mock;
 const mockStatus = getOfframpStatus as jest.Mock;
@@ -70,7 +71,7 @@ function makeApp() {
   app.use(express.json());
   app.use(networkMiddleware);
   app.use("/offramp", createOfframpRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 const body = (over: Record<string, unknown> = {}) => ({

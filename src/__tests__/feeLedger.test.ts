@@ -43,6 +43,7 @@ import {
   recordFeeQuotes,
 } from "../api/feeLedger";
 import { feeQuoteAlarmsTotal, feeQuoteRecordFailuresTotal, _resetMetrics } from "../metrics";
+import { withOpenApiResponseValidation } from "../openapi/responseValidator";
 
 const db = prisma as unknown as {
   feePolicy: { createMany: jest.Mock; findMany: jest.Mock };
@@ -105,7 +106,7 @@ function makeApp() {
   const app = express();
   app.use(networkMiddleware);
   app.use("/fees", feesRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 /** Let the fire-and-forget write after a response finish. */

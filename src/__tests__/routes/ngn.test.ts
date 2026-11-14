@@ -54,6 +54,7 @@ import { findNgnOrder, recordNgnOrder } from "../../linq/ngnOrders";
 import { LinqError, getRate as getSellRate } from "../../linq/client";
 import { usdPerCoin } from "../../linq/coinPrice";
 import { __clearNgnRateCache } from "../../api/ngn";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 const G_ADDRESS = "GBUO4RL4RTGRFSUDUMRFMC75EWYCRTX5OE3PBIXJVDCZULOXQ2TKDR4Z";
 const C_ADDRESS = "CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF";
@@ -63,7 +64,7 @@ function makeApp() {
   app.use(express.json());
   app.use(networkMiddleware);
   app.use("/ngn", createNgnRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 /** Mainnet is the only network these routes serve. */

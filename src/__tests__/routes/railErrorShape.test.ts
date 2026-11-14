@@ -25,6 +25,7 @@ import { createOfframpRouter } from "../../api/offramp";
 import { networkMiddleware } from "../../middleware/network";
 import { RAIL_ERROR_CODES } from "../../api/errors";
 import { LinqError } from "../../linq/client";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 jest.mock("../../linq/onramp", () => {
   const actual = jest.requireActual("../../linq/onramp");
@@ -75,7 +76,7 @@ function makeApp() {
   app.use(networkMiddleware);
   app.use("/ngn", createNgnRouter());
   app.use("/offramp", createOfframpRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 const mainnet = (r: request.Test) => r.set("x-network", "mainnet");

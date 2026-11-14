@@ -1,6 +1,7 @@
 import request from "supertest";
 import { createApp } from "../../api";
 import { queryBalances } from "../../db";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 // Mock the DB module
 jest.mock("../../db", () => ({
@@ -23,7 +24,7 @@ jest.mock("../../rpc", () => ({
 const mockQueryBalances = queryBalances as jest.MockedFunction<typeof queryBalances>;
 
 describe("Accounts route handlers", () => {
-  const app = createApp();
+  const app = withOpenApiResponseValidation(createApp());
 
   describe("GET /accounts/:address/balance", () => {
     const ALICE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
