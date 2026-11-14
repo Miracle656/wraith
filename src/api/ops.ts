@@ -20,10 +20,12 @@
  *     surface does not need them to answer its question.
  */
 import { timingSafeEqual } from "crypto";
+import { Prisma } from "@prisma/client";
 import { Router, Request, Response, NextFunction } from "express";
 
 import { prisma } from "../db";
 import { isMoneyFailureKind, isMoneyFailureRail } from "../linq/moneyFailures";
+import { when } from "../prismaWhen";
 
 function isConfigured(): boolean {
   return Boolean(process.env.OPS_TOKEN?.trim());
@@ -111,8 +113,8 @@ export function createOpsRouter(): Router {
       // (network, createdAt) index serves the filter.
       const rows = await prisma.moneyFailure.findMany({
         where: {
-          ...(rail ? { rail } : {}),
-          ...(kind ? { kind } : {}),
+          ...when<Prisma.MoneyFailureWhereInput>(Boolean(rail), { rail }),
+          ...when<Prisma.MoneyFailureWhereInput>(Boolean(kind), { kind }),
         },
         orderBy: { id: "desc" },
         take: limit,
