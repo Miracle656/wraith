@@ -25,8 +25,10 @@
  * send. It never throws, and the Prometheus counter is incremented first so a
  * database outage dims the table but never the alert.
  */
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { moneyFailuresTotal } from "../metrics";
+import { when } from "../prismaWhen";
 
 /**
  * The rails a failure can be on. Bounded on purpose — this is a metrics label
@@ -122,8 +124,8 @@ export async function recordMoneyFailure(params: RecordMoneyFailureParams): Prom
       },
       update: {
         message,
-        ...(providerCode != null ? { providerCode } : {}),
-        ...(publicId != null ? { publicId } : {}),
+        ...when<Prisma.MoneyFailureUpdateInput>(providerCode != null, { providerCode }),
+        ...when<Prisma.MoneyFailureUpdateInput>(publicId != null, { publicId }),
         occurrences: { increment: 1 },
       },
     });

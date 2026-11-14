@@ -6,8 +6,10 @@
  * how a webhook and a poll start disagreeing. Both now go through here.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { recordOrderTerminal, terminalStatusOf } from "../metrics";
+import { when } from "../prismaWhen";
 import { isFailureStatus, recordMoneyFailure } from "./moneyFailures";
 import { resolveEventNetwork } from "./webhook";
 
@@ -52,11 +54,15 @@ export async function reconcileOfframpOrder(
     where: { network_orderId: { network, orderId: event.orderId } },
     data: {
       status,
-      ...(event.amountStableCoin != null
-        ? { settledStableCoin: String(event.amountStableCoin) }
-        : {}),
-      ...(event.amountNGN != null ? { settledNGN: String(event.amountNGN) } : {}),
-      ...(event.txHash ? { depositTxHash: event.txHash } : {}),
+      ...when<Prisma.OfframpOrderUpdateInput>(event.amountStableCoin != null, {
+        settledStableCoin: String(event.amountStableCoin),
+      }),
+      ...when<Prisma.OfframpOrderUpdateInput>(event.amountNGN != null, {
+        settledNGN: String(event.amountNGN),
+      }),
+      ...when<Prisma.OfframpOrderUpdateInput>(Boolean(event.txHash), {
+        depositTxHash: event.txHash,
+      }),
     },
   });
 

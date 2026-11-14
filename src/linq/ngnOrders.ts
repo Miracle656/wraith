@@ -29,8 +29,10 @@
  * no function here that takes it without an `orderId`.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { recordOrderTerminal, terminalStatusOf } from "../metrics";
+import { when } from "../prismaWhen";
 import { isFailureStatus, recordMoneyFailure } from "./moneyFailures";
 import { crossCheckAmountNgn, NGN_SCALE_FACTOR, resolveEventNetwork } from "./webhook";
 
@@ -93,10 +95,10 @@ export async function recordNgnOrder(params: RecordNgnOrderParams): Promise<void
     amountStableCoin: String(amountStableCoin),
     amountNGN: String(amountNgn),
     rate: String(rate),
-    ...(status ? { status } : {}),
-    ...(billCategory ? { billCategory } : {}),
-    ...(provider ? { provider } : {}),
-  };
+    ...when<Prisma.NgnOrderUncheckedCreateInput>(Boolean(status), { status }),
+    ...when<Prisma.NgnOrderUncheckedCreateInput>(Boolean(billCategory), { billCategory }),
+    ...when<Prisma.NgnOrderUncheckedCreateInput>(Boolean(provider), { provider }),
+  } satisfies Omit<Prisma.NgnOrderUncheckedCreateInput, "network" | "orderId">;
 
   try {
     await prisma.ngnOrder.upsert({
@@ -228,11 +230,15 @@ export async function reconcileNgnOrder(event: {
     where: { network_orderId: { network, orderId: event.orderId } },
     data: {
       status,
-      ...(event.amountStableCoin != null
-        ? { settledStableCoin: String(event.amountStableCoin) }
-        : {}),
-      ...(persistSettledNgn ? { settledNGN: String(event.amountNGN) } : {}),
-      ...(event.txHash ? { txHash: event.txHash } : {}),
+      ...when<Prisma.NgnOrderUpdateInput>(event.amountStableCoin != null, {
+        settledStableCoin: String(event.amountStableCoin),
+      }),
+      ...when<Prisma.NgnOrderUpdateInput>(persistSettledNgn, {
+        settledNGN: String(event.amountNGN),
+      }),
+      ...when<Prisma.NgnOrderUpdateInput>(Boolean(event.txHash), {
+        txHash: event.txHash,
+      }),
     },
   });
 

@@ -2,6 +2,7 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import type { NftTransferRecord, NftMetadataPayload } from "./ingester/nft";
 import { decodeCursor, encodeCursor, parseODataFilter, parseODataSelect, projectRecord } from "./lib/odata";
 import { resolveNetwork, type Network } from "./network";
+import { when } from "./prismaWhen";
 import { toDisplayAmount } from "./amount";
 
 // Every function below takes an optional trailing `network`. Omitting it means
@@ -425,26 +426,25 @@ export async function queryTransfers(params: TransferQueryParams) {
 
   const baseWhere: Prisma.TokenTransferWhereInput = {
     network: resolvedNetwork,
-    ...(direction === "incoming" ? { toAddress: address } : { fromAddress: address }),
-    ...(contractId ? { contractId } : {}),
-    ...(token ? { contractId: token } : {}),
-    ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
-    ...(fromLedger || toLedger
-      ? {
-          ledger: {
-            ...(fromLedger ? { gte: fromLedger } : {}),
-            ...(toLedger ? { lte: toLedger } : {}),
-          },
-        }
-      : {}),
-    ...(fromDate || toDate
-      ? {
-          ledgerClosedAt: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {}),
-          },
-        }
-      : {}),
+    ...when<Prisma.TokenTransferWhereInput>(direction === "incoming", { toAddress: address }),
+    ...when<Prisma.TokenTransferWhereInput>(direction !== "incoming", { fromAddress: address }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(contractId), { contractId }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(token), { contractId: token }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(eventTypes?.length), {
+      eventType: { in: eventTypes },
+    }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(fromLedger || toLedger), {
+      ledger: {
+        ...when<Prisma.IntFilter>(Boolean(fromLedger), { gte: fromLedger }),
+        ...when<Prisma.IntFilter>(Boolean(toLedger), { lte: toLedger }),
+      },
+    }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(fromDate || toDate), {
+      ledgerClosedAt: {
+        ...when<Prisma.DateTimeFilter>(Boolean(fromDate), { gte: fromDate }),
+        ...when<Prisma.DateTimeFilter>(Boolean(toDate), { lte: toDate }),
+      },
+    }),
   };
 
   const odataWhere = parseODataFilter(filter, TRANSFER_FIELD_TYPES);
@@ -682,17 +682,17 @@ export async function queryNftTransfers(params: NftTransferQueryParams) {
 
   const baseWhere: Prisma.NftTransferWhereInput = {
     network: resolveNetwork(network),
-    ...(contractId ? { contractId } : {}),
-    ...(tokenId ? { tokenId } : {}),
-    ...(address ? { OR: [{ fromAddress: address }, { toAddress: address }] } : {}),
-    ...(fromLedger || toLedger
-      ? {
-          ledger: {
-            ...(fromLedger ? { gte: fromLedger } : {}),
-            ...(toLedger ? { lte: toLedger } : {}),
-          },
-        }
-      : {}),
+    ...when<Prisma.NftTransferWhereInput>(Boolean(contractId), { contractId }),
+    ...when<Prisma.NftTransferWhereInput>(Boolean(tokenId), { tokenId }),
+    ...when<Prisma.NftTransferWhereInput>(Boolean(address), {
+      OR: [{ fromAddress: address }, { toAddress: address }],
+    }),
+    ...when<Prisma.NftTransferWhereInput>(Boolean(fromLedger || toLedger), {
+      ledger: {
+        ...when<Prisma.IntFilter>(Boolean(fromLedger), { gte: fromLedger }),
+        ...when<Prisma.IntFilter>(Boolean(toLedger), { lte: toLedger }),
+      },
+    }),
   };
 
   const odataWhere = parseODataFilter(filter, NFT_TRANSFER_FIELD_TYPES);
@@ -842,7 +842,7 @@ export async function getAccountSummary(
     where: {
       network: resolveNetwork(network),
       address,
-      ...(contractId ? { contractId } : {}),
+      ...when<Prisma.AccountSummaryWhereInput>(Boolean(contractId), { contractId }),
     },
     orderBy: { lastActivityAt: "desc" },
     select: {
@@ -885,7 +885,7 @@ export async function queryAccountSummaries(params: AccountSummaryQueryParams) {
   const baseWhere: Prisma.AccountSummaryWhereInput = {
     network: resolveNetwork(network),
     address,
-    ...(contractId ? { contractId } : {}),
+    ...when<Prisma.AccountSummaryWhereInput>(Boolean(contractId), { contractId }),
   };
 
   const odataWhere = parseODataFilter(filter, ACCOUNT_SUMMARY_FIELD_TYPES);
@@ -980,25 +980,23 @@ export async function queryAllTransfers(params: AllTransfersQueryParams) {
   const baseWhere: Prisma.TokenTransferWhereInput = {
     network: resolvedNetwork,
     OR: [{ toAddress: address }, { fromAddress: address }],
-    ...(contractId ? { contractId } : {}),
-    ...(token ? { contractId: token } : {}),
-    ...(eventTypes?.length ? { eventType: { in: eventTypes } } : {}),
-    ...(fromLedger || toLedger
-      ? {
-          ledger: {
-            ...(fromLedger ? { gte: fromLedger } : {}),
-            ...(toLedger ? { lte: toLedger } : {}),
-          },
-        }
-      : {}),
-    ...(fromDate || toDate
-      ? {
-          ledgerClosedAt: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {}),
-          },
-        }
-      : {}),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(contractId), { contractId }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(token), { contractId: token }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(eventTypes?.length), {
+      eventType: { in: eventTypes },
+    }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(fromLedger || toLedger), {
+      ledger: {
+        ...when<Prisma.IntFilter>(Boolean(fromLedger), { gte: fromLedger }),
+        ...when<Prisma.IntFilter>(Boolean(toLedger), { lte: toLedger }),
+      },
+    }),
+    ...when<Prisma.TokenTransferWhereInput>(Boolean(fromDate || toDate), {
+      ledgerClosedAt: {
+        ...when<Prisma.DateTimeFilter>(Boolean(fromDate), { gte: fromDate }),
+        ...when<Prisma.DateTimeFilter>(Boolean(toDate), { lte: toDate }),
+      },
+    }),
   };
 
   const odataWhere = parseODataFilter(filter, TRANSFER_FIELD_TYPES);

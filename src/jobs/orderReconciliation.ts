@@ -13,7 +13,7 @@
  * database, so both the page and the number of provider calls are capped.
  */
 
-import type { NgnOrder, OfframpOrder } from "@prisma/client";
+import type { NgnOrder, OfframpOrder, Prisma } from "@prisma/client";
 
 import { prisma } from "../db";
 import { getBillStatus } from "../linq/bills";
@@ -21,6 +21,7 @@ import { getOfframpStatus } from "../linq/client";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
 import { reconcileOfframpOrder } from "../linq/offrampOrders";
 import { getOnrampStatus } from "../linq/onramp";
+import { when } from "../prismaWhen";
 
 const DEFAULT_AGE_MS = 5 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 25;
@@ -175,12 +176,6 @@ async function recordAttempt(
   now: Date,
   needsHuman: boolean,
 ): Promise<void> {
-  const data = {
-    reconciliationAttempts: attempts,
-    lastReconciledAt: now,
-    ...(needsHuman ? { needsHuman: true } : {}),
-  };
-
   if (candidate.kind === "ngn") {
     await prisma.ngnOrder.update({
       where: {
@@ -189,7 +184,11 @@ async function recordAttempt(
           orderId: candidate.row.orderId,
         },
       },
-      data,
+      data: {
+        reconciliationAttempts: attempts,
+        lastReconciledAt: now,
+        ...when<Prisma.NgnOrderUpdateInput>(needsHuman, { needsHuman: true }),
+      },
     });
     return;
   }
@@ -201,7 +200,11 @@ async function recordAttempt(
         orderId: candidate.row.orderId,
       },
     },
-    data,
+    data: {
+      reconciliationAttempts: attempts,
+      lastReconciledAt: now,
+      ...when<Prisma.OfframpOrderUpdateInput>(needsHuman, { needsHuman: true }),
+    },
   });
 }
 

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
+import { when } from "../prismaWhen";
 import { parseOr400 } from "../openapi/validation";
 import {
   webhookCreateBodySchema,
@@ -173,7 +174,10 @@ export function createWebhooksRouter(): Router {
         if (!query) return;
         const { status, limit, offset } = query;
 
-        const where = { subscriptionId: id, ...(status ? { status } : {}) };
+        const where: Prisma.WebhookDeliveryWhereInput = {
+          subscriptionId: id,
+          ...when<Prisma.WebhookDeliveryWhereInput>(Boolean(status), { status }),
+        };
 
         const [total, deliveries] = await prisma.$transaction([
           prisma.webhookDelivery.count({ where }),
