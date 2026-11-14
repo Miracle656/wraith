@@ -19,6 +19,7 @@ import {
   type RawAssetHit,
   type RawContractHit,
 } from "../../routes/search";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 const mockAccounts = prisma.accountSummary.findMany as jest.Mock;
 const mockAssets = prisma.tokenTransfer.findMany as jest.Mock;
@@ -37,7 +38,7 @@ function buildApp() {
       res.status(500).json({ error: err.message });
     },
   );
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 beforeEach(() => {

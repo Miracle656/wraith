@@ -128,6 +128,7 @@ import { recordNgnOrder } from "../../linq/ngnOrders";
 import { computeSignature, SIGNATURE_HEADER } from "../../linq/webhook";
 import { moneyFailuresTotal, _resetMetrics } from "../../metrics";
 import { installFakeLinq, type FakeLinq } from "../fakes/linqProvider";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 const mockStatus = getOfframpStatus as jest.Mock;
 
@@ -161,7 +162,7 @@ function makeApp() {
   app.use(networkMiddleware);
   app.use("/offramp", createOfframpRouter());
   app.use("/ops", createOpsRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 /** Signed webhook delivery, as Linq sends it. */

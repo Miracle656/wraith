@@ -42,6 +42,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -53,6 +54,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -64,6 +66,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -137,6 +140,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -148,6 +152,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -159,6 +164,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -550,6 +556,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -561,6 +568,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -572,6 +580,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -675,6 +684,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -686,6 +696,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -697,6 +708,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -800,6 +812,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -811,6 +824,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -822,6 +836,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -925,6 +940,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -936,6 +952,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -947,6 +964,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1012,6 +1030,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1023,6 +1042,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1034,6 +1054,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1105,6 +1126,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1116,6 +1138,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1127,6 +1150,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1211,6 +1235,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1222,6 +1247,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1233,6 +1259,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1317,6 +1344,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1328,6 +1356,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1339,6 +1368,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1405,6 +1435,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1416,6 +1447,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1427,6 +1459,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1530,6 +1563,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1541,6 +1575,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1552,6 +1587,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1615,6 +1651,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1626,6 +1663,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1637,6 +1675,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1707,6 +1746,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1718,6 +1758,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1729,6 +1770,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1782,6 +1824,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1793,6 +1836,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1804,6 +1848,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1874,6 +1919,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1885,6 +1931,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1896,6 +1943,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1973,6 +2021,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1984,6 +2033,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -1995,6 +2045,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2090,6 +2141,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2101,6 +2153,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2112,6 +2165,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2172,6 +2226,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2183,6 +2238,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2194,6 +2250,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2265,6 +2322,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2276,6 +2334,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2287,6 +2346,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2348,6 +2408,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2359,6 +2420,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2370,6 +2432,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2437,6 +2500,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2448,6 +2512,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2459,6 +2524,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2615,6 +2681,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2626,6 +2693,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2637,6 +2705,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2648,6 +2717,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2659,6 +2729,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2725,6 +2796,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2736,6 +2808,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2747,6 +2820,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2813,6 +2887,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2824,6 +2899,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2835,6 +2911,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2890,6 +2967,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2901,6 +2979,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -2951,7 +3030,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2962,7 +3049,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2973,7 +3068,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3055,7 +3158,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3066,7 +3177,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3096,7 +3215,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3200,7 +3327,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3211,7 +3346,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3241,7 +3384,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3333,7 +3484,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3344,7 +3503,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3374,7 +3541,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3472,19 +3647,21 @@ export interface paths {
                     content: {
                         "application/json": {
                             id: string;
+                            /** @description Bearer token required to read this order back via GET /offramp/orders/{orderId}. */
+                            accessToken: string;
                             /** @description Deposit address the stablecoin is sent to. */
                             walletAddress: string;
                             chain: string;
                             coin: string;
+                            coinType?: string;
+                            currency?: string;
+                            depositDigest?: string;
                             amountStableCoin: number;
                             amountNGN: number;
                             rate: number;
-                            /**
-                             * @description Client-facing status mapped from the provider's raw one.
-                             * @enum {string}
-                             */
-                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
-                            /** @description Raw provider status, when the order is not a replay. */
+                            /** @description Client-facing status mapped from the provider's raw one. */
+                            status: string;
+                            /** @description Raw provider status, when the order is a replay. */
                             providerStatus?: string;
                             replayed?: boolean;
                         };
@@ -3498,19 +3675,21 @@ export interface paths {
                     content: {
                         "application/json": {
                             id: string;
+                            /** @description Bearer token required to read this order back via GET /offramp/orders/{orderId}. */
+                            accessToken: string;
                             /** @description Deposit address the stablecoin is sent to. */
                             walletAddress: string;
                             chain: string;
                             coin: string;
+                            coinType?: string;
+                            currency?: string;
+                            depositDigest?: string;
                             amountStableCoin: number;
                             amountNGN: number;
                             rate: number;
-                            /**
-                             * @description Client-facing status mapped from the provider's raw one.
-                             * @enum {string}
-                             */
-                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
-                            /** @description Raw provider status, when the order is not a replay. */
+                            /** @description Client-facing status mapped from the provider's raw one. */
+                            status: string;
+                            /** @description Raw provider status, when the order is a replay. */
                             providerStatus?: string;
                             replayed?: boolean;
                         };
@@ -3523,7 +3702,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3534,7 +3721,34 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Idempotency key conflict or provider rejected order */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3564,7 +3778,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3644,11 +3866,8 @@ export interface paths {
                     content: {
                         "application/json": {
                             id: string;
-                            /**
-                             * @description Client-facing status mapped from the provider's raw one.
-                             * @enum {string}
-                             */
-                            status: "pending" | "waiting_for_deposit" | "processing" | "completed" | "failed" | "expired";
+                            /** @description Client-facing status mapped from the provider's raw one. */
+                            status: string;
                             providerStatus: string;
                             amountStableCoin: number;
                             amountNGN: number;
@@ -3656,6 +3875,9 @@ export interface paths {
                             rate: number;
                             /** Format: date-time */
                             createdAt: string;
+                            currency?: string;
+                            created?: string;
+                            updated?: string;
                             /** @enum {string} */
                             source: "live" | "cache";
                         };
@@ -3668,7 +3890,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3698,7 +3928,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3728,7 +3966,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3861,6 +4107,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3872,6 +4119,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3883,6 +4131,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };
@@ -3894,6 +4143,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                            code?: string;
                         };
                     };
                 };

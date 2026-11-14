@@ -110,6 +110,7 @@ import { networkMiddleware } from "../../middleware/network";
 import { computeSignature, SIGNATURE_HEADER } from "../../linq/webhook";
 import { recordNgnOrder } from "../../linq/ngnOrders";
 import { installFakeLinq, type FakeLinq } from "../fakes/linqProvider";
+import { withOpenApiResponseValidation } from "../../openapi/responseValidator";
 
 const DROP = { kind: "drop-after-work" } as const;
 const WALLET = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -123,7 +124,7 @@ function makeApp() {
   app.use(networkMiddleware);
   app.use("/offramp", createOfframpRouter());
   app.use("/ngn", createNgnRouter());
-  return app;
+  return withOpenApiResponseValidation(app);
 }
 
 const offrampBody = (over: Record<string, unknown> = {}) => ({
