@@ -1,7 +1,8 @@
 # @wraith/react-query
 
 Typed [React Query](https://tanstack.com/query) hooks for the
-[Wraith](https://github.com/Miracle656/wraith) Soroban token-transfer indexer.
+[Wraith](https://github.com/Miracle656/wraith) Soroban token-transfer indexer
+and money rails.
 
 The request/response types are **generated from `openapi.json`** with
 [`openapi-typescript`](https://openapi-ts.dev/), and the network layer is
@@ -55,29 +56,80 @@ function Transfers({ address }: { address: string }) {
 }
 ```
 
+### Cash-Out Order Flow (`/offramp`)
+
+Order creation and bank verification use `useMutation`, and `useOfframpOrderStatus`
+sends the per-order `accessToken` returned by `POST /offramp/orders` as a
+`Bearer` token:
+
+```tsx
+import {
+  useCreateOfframpOrder,
+  useOfframpOrderStatus,
+  useVerifyOfframpBank,
+} from "@wraith/react-query";
+
+const verifyBank = useVerifyOfframpBank();
+const createOrder = useCreateOfframpOrder();
+
+// Poll status once `createOrder.data` returns `{ id, accessToken }`:
+const orderStatus = useOfframpOrderStatus(
+  {
+    orderId: createOrder.data?.id ?? "",
+    accessToken: createOrder.data?.accessToken ?? "",
+  },
+  { enabled: Boolean(createOrder.data?.id && createOrder.data?.accessToken) },
+);
+```
+
 ## Hooks
 
-Every list endpoint of the API has a hook:
+### Queries (`useQuery`)
 
-| Resource  | Hook                                                                            | Endpoint                          |
-| --------- | ------------------------------------------------------------------------------ | --------------------------------- |
-| Transfers | `useIncomingTransfers`                                                          | `GET /transfers/incoming/{address}` |
-| Transfers | `useOutgoingTransfers`                                                          | `GET /transfers/outgoing/{address}` |
-| Transfers | `useAddressTransfers`                                                           | `GET /transfers/address/{address}`  |
-| Transfers | `useTransactionTransfers`                                                       | `GET /transfers/tx/{txHash}`        |
-| Accounts  | `useAccountSummary`                                                             | `GET /accounts/{address}/summary`   |
-| Accounts  | `useAccountTransfers`                                                           | `GET /accounts/{address}/transfers` |
-| Assets    | `usePopularAssets`                                                              | `GET /assets/popular`               |
-| NFTs      | `useNftTransfers`                                                               | `GET /nfts/transfers`               |
-| Webhooks  | `useWebhooks`                                                                   | `GET /webhooks`                     |
-| Webhooks  | `useWebhookDeliveries`                                                          | `GET /webhooks/{id}/deliveries`     |
-| Host fns  | `useHostFunctionLogs`                                                           | `GET /host-fn/{contractId}`         |
-| Status    | `useStatus`                                                                     | `GET /status`                       |
+| Resource  | Hook                       | Endpoint                               |
+| --------- | -------------------------- | -------------------------------------- |
+| Transfers | `useIncomingTransfers`     | `GET /transfers/incoming/{address}`    |
+| Transfers | `useOutgoingTransfers`     | `GET /transfers/outgoing/{address}`    |
+| Transfers | `useAddressTransfers`      | `GET /transfers/address/{address}`     |
+| Transfers | `useTransactionTransfers`  | `GET /transfers/tx/{txHash}`           |
+| Accounts  | `useAccountSummary`        | `GET /accounts/{address}/summary`      |
+| Accounts  | `useAccountTransfers`      | `GET /accounts/{address}/transfers`    |
+| Assets    | `usePopularAssets`         | `GET /assets/popular`                  |
+| NFTs      | `useNftTransfers`          | `GET /nfts/transfers`                  |
+| Webhooks  | `useWebhooks`              | `GET /webhooks`                        |
+| Webhooks  | `useWebhookDeliveries`     | `GET /webhooks/{id}/deliveries`        |
+| Host fns  | `useHostFunctionLogs`      | `GET /host-fn/{contractId}`            |
+| Search    | `useSearch`                | `GET /search`                          |
+| Candles   | `useCandles`               | `GET /candles/{bucket}/{contractId}`   |
+| Fees      | `useFees`                  | `GET /fees`                            |
+| Fees      | `useFeeReport`             | `GET /fees/report`                     |
+| Offramp   | `useOfframpAvailability`   | `GET /offramp/availability`            |
+| Offramp   | `useOfframpRate`           | `GET /offramp/rate`                    |
+| Offramp   | `useOfframpTrustline`      | `GET /offramp/trustline`               |
+| Offramp   | `useOfframpOrderStatus`    | `GET /offramp/orders/{orderId}`        |
+| NGN       | `useNgnCustomerStatus`     | `GET /ngn/customers/status`            |
+| NGN       | `useNgnDataBundles`        | `GET /ngn/bills/data-bundles`          |
+| NGN       | `useNgnOnrampOrderStatus`  | `GET /ngn/onramp/orders/{orderId}`     |
+| NGN       | `useNgnBillStatus`         | `GET /ngn/bills/{orderId}`             |
+| Status    | `useStatus`                | `GET /status`                          |
 
-Each hook takes its path params, an optional typed `query` object, and an
-optional React Query `options` object. Non-2xx responses reject with a
-`WraithError` (`.status`, `.body`). Use the exported `queryKeys` factory to
-invalidate or prefetch:
+### Mutations (`useMutation`)
+
+| Resource | Hook                    | Endpoint                    |
+| -------- | ----------------------- | --------------------------- |
+| Offramp  | `useVerifyOfframpBank`  | `POST /offramp/verify-bank` |
+| Offramp  | `useCreateOfframpOrder` | `POST /offramp/orders`      |
+
+### Coverage Notes (`openapi.json` vs. Undocumented NGN Routes)
+
+- **Covered from `openapi.json`:** All `/offramp/*`, `/fees`, `/fees/report`, `/search`, `/ngn/customers/status`, and `/ngn/bills/data-bundles` endpoints are typed directly from `src/schema.d.ts`.
+- **Single-network OHLC candles (`useCandles`):** `GET /candles/{bucket}/{contractId}` is registered in `src/openapi/build.ts` only when `OHLC_REFRESH_INTERVAL_MS` is set; `useCandles` provides explicit TypeScript types matching `candlesResponseSchema`.
+- **NGN order and bill reads (`useNgnOnrampOrderStatus`, `useNgnBillStatus`):** Both hooks strictly require `{ customerRef, orderId }` (`NgnOrderLookupParams`) with no single-identifier shortcut, matching the server's authorization model.
+- **Remaining NGN write/rate routes (`#291`):** `POST /ngn/customers`, `POST /ngn/customers/kyc`, `GET /ngn/onramp/rate`, `POST /ngn/onramp/orders`, and `POST /ngn/bills` are listed in `KNOWN_UNDOCUMENTED` in `src/__tests__/openapiCoverage.test.ts` pending OpenAPI schema addition under `#291`.
+
+Each query hook takes its path/query params and an optional React Query `options`
+object. Non-2xx responses reject with a `WraithError` (`.status`, `.body`). Use
+the exported `queryKeys` factory to invalidate or prefetch:
 
 ```ts
 queryClient.invalidateQueries({ queryKey: queryKeys.transfers.all });
