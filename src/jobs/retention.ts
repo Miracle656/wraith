@@ -18,7 +18,7 @@ function monthsBetween(start: Date, end: Date): number {
   return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
 }
 
-function inferPartitionRangeEnd(name: string): Date | null {
+export function inferPartitionRangeEnd(name: string): Date | null {
   const match = name.match(/_(\d{4})(\d{2})(\d{2})?$/);
   if (!match) return null;
 
@@ -26,12 +26,32 @@ function inferPartitionRangeEnd(name: string): Date | null {
   return new Date(Date.UTC(parseInt(year, 10), parseInt(month, 10) - 1, day ? parseInt(day, 10) : 1));
 }
 
-function formatQualifiedIdentifier(identifier: string): string {
+export function formatQualifiedIdentifier(identifier: string): string {
   return identifier
     .split(".")
     .filter(Boolean)
     .map((part) => `"${part.replace(/"/g, '""')}"`)
     .join(".");
+}
+
+function qualifyPartitionTarget(schema: string, name: string): string {
+  return formatQualifiedIdentifier(`${schema}.${name}`);
+}
+
+function isMissingRelationError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    (err as { code?: unknown; meta?: { code?: unknown } } | null)?.code ??
+    (err as { meta?: { code?: unknown } } | null)?.meta?.code;
+  return code === "42P01" || /does not exist/i.test(msg);
+}
+
+function isUnrecognizedToastCompressError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    (err as { code?: unknown; meta?: { code?: unknown } } | null)?.code ??
+    (err as { meta?: { code?: unknown } } | null)?.meta?.code;
+  return code === "22023" || /unrecognized parameter "compress"/i.test(msg);
 }
 
 export function planPartitionRetention(
@@ -62,16 +82,27 @@ export function planPartitionRetention(
 export async function runPartitionRetentionJob(options?: {
   compressionWindowMonths?: number;
   retentionWindowMonths?: number;
+  now?: Date;
 }): Promise<{ compressed: number; archived: number; reclaimedBytes: number; skipped: number }> {
   const compressionWindowMonths = options?.compressionWindowMonths ?? 3;
   const retentionWindowMonths = options?.retentionWindowMonths ?? 6;
+  const now = options?.now ?? new Date();
 
-  const partitions = await prisma.$queryRaw<Array<{ name: string; schema: string; parentTable: string; sizeBytes: number }>>`
+  const partitions = await prisma.$queryRaw<
+    Array<{
+      name: string;
+      schema: string;
+      parentTable?: string;
+      parent_table?: string;
+      sizeBytes?: number | bigint;
+      size_bytes?: number | bigint;
+    }>
+  >`
     SELECT
-      c.oid::regclass::text AS name,
+      c.relname AS name,
       n.nspname AS schema,
-      p.relname AS parent_table,
-      pg_total_relation_size(c.oid) AS size_bytes
+      p.relname AS "parentTable",
+      pg_total_relation_size(c.oid) AS "sizeBytes"
     FROM pg_inherits i
     JOIN pg_class c ON c.oid = i.inhrelid
     JOIN pg_class p ON p.oid = i.inhparent
@@ -79,15 +110,18 @@ export async function runPartitionRetentionJob(options?: {
     WHERE n.nspname = 'wraith'
       AND p.relnamespace = n.oid
       AND c.relkind = 'r'
+    ORDER BY c.relname ASC
   `;
 
   const plan = planPartitionRetention(
     partitions.map((partition) => ({
-      ...partition,
+      name: partition.name,
+      schema: partition.schema,
+      parentTable: partition.parentTable ?? partition.parent_table ?? "",
       rangeEnd: inferPartitionRangeEnd(partition.name) ?? new Date(0),
-      sizeBytes: Number(partition.sizeBytes ?? 0),
+      sizeBytes: Number(partition.sizeBytes ?? partition.size_bytes ?? 0),
     })),
-    new Date(),
+    now,
     compressionWindowMonths,
     retentionWindowMonths,
   );
@@ -99,19 +133,47 @@ export async function runPartitionRetentionJob(options?: {
   await prisma.$executeRawUnsafe('CREATE SCHEMA IF NOT EXISTS "wraith_archive"');
 
   for (const partition of plan.compress) {
-    await prisma.$executeRawUnsafe(
-      `ALTER TABLE ${formatQualifiedIdentifier(partition.name)} SET (toast.compress = 'pglz')`
-    );
-    compressed += 1;
-    reclaimedBytes += partition.sizeBytes;
+    const qualified = qualifyPartitionTarget(partition.schema, partition.name);
+    try {
+      try {
+        await prisma.$executeRawUnsafe(
+          `ALTER TABLE ${qualified} SET (toast.compress = 'pglz')`
+        );
+      } catch (innerErr) {
+        if (isUnrecognizedToastCompressError(innerErr)) {
+          await prisma.$executeRawUnsafe(
+            `ALTER TABLE ${qualified} SET (toast_tuple_target = 128)`
+          );
+        } else {
+          throw innerErr;
+        }
+      }
+      compressed += 1;
+      reclaimedBytes += partition.sizeBytes;
+    } catch (err) {
+      if (isMissingRelationError(err)) {
+        console.warn(`[retention] partition ${qualified} disappeared before compression; skipping`);
+        continue;
+      }
+      throw err;
+    }
   }
 
   for (const partition of plan.archive) {
-    await prisma.$executeRawUnsafe(
-      `ALTER TABLE ${formatQualifiedIdentifier(partition.name)} SET SCHEMA "wraith_archive"`
-    );
-    archived += 1;
-    reclaimedBytes += partition.sizeBytes;
+    const qualified = qualifyPartitionTarget(partition.schema, partition.name);
+    try {
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE ${qualified} SET SCHEMA "wraith_archive"`
+      );
+      archived += 1;
+      reclaimedBytes += partition.sizeBytes;
+    } catch (err) {
+      if (isMissingRelationError(err)) {
+        console.warn(`[retention] partition ${qualified} disappeared before archive; skipping`);
+        continue;
+      }
+      throw err;
+    }
   }
 
   await prisma.$executeRawUnsafe(`
